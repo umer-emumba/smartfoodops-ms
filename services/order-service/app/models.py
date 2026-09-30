@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from typing import Literal
 
 from sfo_common import new_id
 from sfo_events import OutboxEventMixin
@@ -21,6 +22,16 @@ from app.db import Base
 # created -> awaiting_restaurant_acceptance -> confirmed -> assigned -> picked_up -> delivered
 # plus: rejected, cancelled
 ORDER_STATUS_CREATED = "created"
+OrderStatus = Literal[
+    "created",
+    "awaiting_restaurant_acceptance",
+    "confirmed",
+    "assigned",
+    "picked_up",
+    "delivered",
+    "rejected",
+    "cancelled",
+]
 
 
 class Order(Base):

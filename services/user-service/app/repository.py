@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Address, RefreshToken, User
@@ -23,6 +23,34 @@ async def get_user_by_phone(session: AsyncSession, phone_number: str) -> User | 
 
 async def get_user_by_id(session: AsyncSession, user_id: str) -> User | None:
     return await session.get(User, user_id)
+
+
+async def list_users(
+    session: AsyncSession,
+    *,
+    role: str | None,
+    is_blocked: bool | None,
+    q: str | None,
+    limit: int,
+) -> list[User]:
+    """system_admin user search. `q` is a case-insensitive substring match on
+    email, full name, or phone number."""
+    stmt = select(User).order_by(User.created_at.desc())
+    if role is not None:
+        stmt = stmt.where(User.role == role)
+    if is_blocked is not None:
+        stmt = stmt.where(User.is_blocked == is_blocked)
+    if q:
+        pattern = f"%{q}%"
+        stmt = stmt.where(
+            or_(
+                User.email.ilike(pattern),
+                User.full_name.ilike(pattern),
+                User.phone_number.ilike(pattern),
+            )
+        )
+    result = await session.execute(stmt.limit(limit))
+    return list(result.scalars().all())
 
 
 async def create_user(session: AsyncSession, *, user: User) -> User:

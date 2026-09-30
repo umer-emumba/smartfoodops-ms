@@ -13,7 +13,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import repository, restaurant_client
 from app.auth_deps import get_current_user, require_roles
 from app.db import get_session
-from app.models import ORDER_STATUS_CREATED, Order, OrderItem, OrderStatusHistory, OutboxEvent
+from app.models import (
+    ORDER_STATUS_CREATED,
+    Order,
+    OrderItem,
+    OrderStatus,
+    OrderStatusHistory,
+    OutboxEvent,
+)
 from app.schemas import OrderCreate, OrderResponse
 
 router = APIRouter(prefix="/v1", tags=["orders"])
@@ -157,6 +164,22 @@ async def create_order(
             raise
         return _replay_or_conflict(existing, request_hash, response)
     return order
+
+
+# Static path — must be registered before "/orders/{order_id}" below.
+@router.get("/orders/admin", response_model=list[OrderResponse])
+async def list_orders_admin(
+    status: OrderStatus | None = Query(default=None),
+    restaurant_id: str | None = Query(default=None),
+    customer_id: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    _: CurrentUser = Depends(require_roles(Role.SYSTEM_ADMIN)),
+    session: AsyncSession = Depends(get_session),
+) -> list[Order]:
+    """system_admin view across all customers and restaurants, newest first."""
+    return await repository.list_orders_admin(
+        session, status=status, restaurant_id=restaurant_id, customer_id=customer_id, limit=limit
+    )
 
 
 @router.get("/orders/{order_id}", response_model=OrderResponse)

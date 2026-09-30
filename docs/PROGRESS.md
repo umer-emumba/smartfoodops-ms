@@ -309,6 +309,23 @@ unknown-role token), restaurant 8 (schema rules + 422-handler regression), user 
 can't log in until their stored email is lowercased (the seed data is already lowercase).
 Reusing an old refresh token now logs that user out everywhere.
 
+### Authorization review (2026-09-30)
+
+Live-tested 24 role/ownership boundaries through the gateway (cross-owner edits of
+restaurants/categories/items/promotions, cross-customer order access, self-approval,
+role escalation at registration, admin-only routes) — all behaved correctly. Fixed:
+
+- [x] `GET /v1/restaurants/{id}/menu/categories` was public in restaurant-service but
+      missing from the gateway's public-route list, so anonymous browsing got a 401
+- [x] Admins had no way to find users to block — added `GET /v1/users` (filter by `role`,
+      `is_blocked`, `q` search over email/name/phone) and `GET /v1/users/{id}`, both
+      `system_admin`-only
+- [x] Block guards: an admin can't block their own account (bootstrap is one-shot, so this
+      could lock the platform out) or another `system_admin`
+- [x] Admins could only open orders by ID — added `GET /v1/orders/admin` (filter by
+      `status`, `restaurant_id`, `customer_id`)
+- [ ] Week 2: restaurant admins need to list their restaurant's orders (for accept/reject)
+
 ### Not bugs — deliberately left for a separate design step
 
 - [ ] Streaming proxy (needed for Week 2 WebSocket/SSE tracking), pure-ASGI middleware

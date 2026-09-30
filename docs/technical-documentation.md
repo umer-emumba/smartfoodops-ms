@@ -19,9 +19,9 @@ is coupled to another's.
 | Service | Responsibility | Key Week 1 endpoints (all under `/v1`) | Added later |
 |---|---|---|---|
 | `api-gateway` | Single entry point: routing, JWT fast-fail, deny-list, rate limiting, CORS, Swagger index | proxies everything below; `/docs` | tracking WebSocket/SSE (W2) |
-| `user-service` | Accounts, roles, auth tokens, saved addresses | `auth/register`, `auth/login`, `auth/refresh`, `auth/logout`, `auth/bootstrap-admin`, `users/me`, `users/me/addresses`, `users/{id}/block`, `users/{id}/unblock` | — |
+| `user-service` | Accounts, roles, auth tokens, saved addresses | `auth/register`, `auth/login`, `auth/refresh`, `auth/logout`, `auth/bootstrap-admin`, `users/me`, `users/me/addresses`, `users` + `users/{id}` (admin search), `users/{id}/block`, `users/{id}/unblock` | — |
 | `restaurant-service` | Restaurant onboarding + approval, menus, categories, availability, promotions | `restaurants` (CRUD, `mine`, `admin`, `approve`, `suspend`, `status-history`), `.../menu`, `.../menu/categories`, `.../menu/items`, `.../promotions` | stock reservation/release activities (W2) |
-| `order-service` | Order creation, pricing, order history, order state machine | `POST orders` (Idempotency-Key), `GET orders`, `GET orders/{id}` | saga worker, `restaurant-response`, cancel (W2) |
+| `order-service` | Order creation, pricing, order history, order state machine | `POST orders` (Idempotency-Key), `GET orders`, `GET orders/{id}`, `GET orders/admin` | saga worker, `restaurant-response`, cancel (W2) |
 | `delivery-service` | Riders, vetting, location, deliveries | `riders`, `riders/me`, `riders/me/status`, `riders/me/location`, `riders/admin`, `approve`, `suspend`, `verification-history` | assignment, ETA, delivery status (W2) |
 | `payment-service` | Payment records, simulated authorize/capture/refund | `GET payments/by-order/{id}` | authorize/capture/refund (W2) |
 | `notification-service` | Customer/restaurant/rider notifications | `GET notifications` (mine) | Kafka consumer + Celery dispatch (W3) |

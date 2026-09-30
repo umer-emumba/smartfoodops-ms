@@ -1,7 +1,7 @@
 import hmac
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, Header, status
+from fastapi import APIRouter, Depends, Header, Query, status
 from sfo_auth import (
     CurrentUser,
     Role,
@@ -207,8 +207,29 @@ async def get_me(
     return user
 
 
-@router.post("/users/{user_id}/block", response_model=UserResponse)
-async def block(
+# Registered after /users/me, so "me" is never captured as a {user_id}.
+@router.get("/users", response_model=list[UserResponse])
+async def list_users(
+    role: Role | None = Query(default=None),
+    is_blocked: bool | None = Query(default=None),
+    q: str | None = Query(default=None, min_length=2, max_length=100),
+    limit: int = Query(default=50, ge=1, le=200),
+    _: CurrentUser = Depends(require_roles(Role.SYSTEM_ADMIN)),
+    session: AsyncSession = Depends(get_session),
+) -> list[User]:
+    """system_admin user management: find users to review or block, by role,
+    blocked state, or a search over email/name/phone."""
+    return await repository.list_users(
+        session,
+        role=role.value if role else None,
+        is_blocked=is_blocked,
+        q=q,
+        limit=limit,
+    )
+
+
+@router.get("/users/{user_id}", response_model=UserResponse)
+async def get_user(
     user_id: str,
     _: CurrentUser = Depends(require_roles(Role.SYSTEM_ADMIN)),
     session: AsyncSession = Depends(get_session),
@@ -216,6 +237,26 @@ async def block(
     user = await repository.get_user_by_id(session, user_id)
     if user is None:
         raise NotFoundError("User not found")
+    return user
+
+
+@router.post("/users/{user_id}/block", response_model=UserResponse)
+async def block(
+    user_id: str,
+    current: CurrentUser = Depends(require_roles(Role.SYSTEM_ADMIN)),
+    session: AsyncSession = Depends(get_session),
+) -> User:
+    user = await repository.get_user_by_id(session, user_id)
+    if user is None:
+        raise NotFoundError("User not found")
+    # An admin blocking themselves would lock the platform out of its only
+    # admin (bootstrap-admin is one-shot). Blocking other admins is refused
+    # too: admin-vs-admin disputes need an out-of-band process, not an
+    # endpoint any single admin can use against the others.
+    if user.id == current.id:
+        raise ForbiddenError("You can't block your own account")
+    if user.role == Role.SYSTEM_ADMIN.value:
+        raise ForbiddenError("system_admin accounts can't be blocked through the API")
     # Deny-list first, then the DB: if Redis is down this fails before anything
     # is committed, instead of committing a block that existing access tokens
     # would ignore for up to their full lifetime. (A DB failure after the

@@ -222,7 +222,7 @@ checks the blocked-user deny-list with the same decoded token, before forwarding
 (`_PUBLIC_ROUTES` in the same file): `POST /v1/auth/{register,login,refresh,logout,
 bootstrap-admin}` (these authenticate via a refresh token, shared secret, or issue the
 token itself — there's no bearer token to check yet) and the read-only restaurant-browsing
-routes (`GET /v1/restaurants`, `/{id}`, `/{id}/menu`, `/{id}/promotions` — public by
+routes (`GET /v1/restaurants`, `/{id}`, `/{id}/menu`, `/{id}/menu/categories`, `/{id}/promotions` — public by
 design). Everything else needs a valid bearer token to even reach a backend service.
 
 This is a **fail-closed allowlist**, deliberately: a newly added private route needs no
