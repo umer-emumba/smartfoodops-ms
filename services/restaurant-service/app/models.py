@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 
 from sfo_common import new_id
 from sfo_events import OutboxEventMixin
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, Numeric, String, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -60,7 +60,7 @@ class MenuItem(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     # Optimistic locking — concurrent stock decrements during the order saga
-    # (docs/architecture.md#consistency--idempotency).
+    # (docs/technical-documentation.md#data-consistency-across-services).
     version: Mapped[int] = mapped_column(Integer, default=1)
 
     __mapper_args__ = {"version_id_col": version}
@@ -74,7 +74,11 @@ class Promotion(Base):
     __tablename__ = "promotions"
     # A code is only unique within its own restaurant, not globally — two
     # different restaurants must each be able to run their own "WELCOME10".
-    __table_args__ = (UniqueConstraint("restaurant_id", "code", name="uq_promotions_restaurant_code"),)
+    # Declared exactly as migration 0001 creates it (a unique index, not a
+    # named constraint), so autogenerate doesn't report drift.
+    __table_args__ = (
+        Index("ux_promotions_restaurant_id_code", "restaurant_id", "code", unique=True),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
     restaurant_id: Mapped[str] = mapped_column(ForeignKey("restaurants.id"), index=True)
@@ -86,6 +90,25 @@ class Promotion(Base):
     max_uses: Mapped[int | None] = mapped_column(Integer, nullable=True)  # None = unlimited
     times_used: Mapped[int] = mapped_column(Integer, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+
+class RestaurantStatusHistory(Base):
+    """Append-only audit trail of restaurant status changes (onboarding,
+    approval, suspension) — who did it, when, and why. Written in the same
+    transaction as the status change itself."""
+
+    __tablename__ = "restaurant_status_history"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
+    restaurant_id: Mapped[str] = mapped_column(ForeignKey("restaurants.id"), index=True)
+    from_status: Mapped[str | None] = mapped_column(String, nullable=True)  # None = onboarding
+    to_status: Mapped[str] = mapped_column(String)
+    actor_id: Mapped[str] = mapped_column(String)
+    actor_role: Mapped[str] = mapped_column(String)
+    reason: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )

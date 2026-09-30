@@ -13,6 +13,7 @@ from sfo_auth import (
 )
 from sfo_auth.denylist import block_user, unblock_user
 from sfo_common.errors import ConflictError, ForbiddenError, NotFoundError, UnauthorizedError
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import repository
@@ -34,6 +35,28 @@ from app.schemas import (
 )
 
 router = APIRouter(prefix="/v1", tags=["auth"])
+
+# Verified against when the email doesn't exist, so an unknown email costs the
+# same argon2 work as a wrong password — response time doesn't reveal which
+# emails have accounts.
+_DUMMY_PASSWORD_HASH = hash_secret("timing-equalizer-not-a-real-password")
+
+
+async def _create_user_or_conflict(session: AsyncSession, user: User) -> User:
+    """Pre-checks give a specific message; the IntegrityError catch covers the
+    race where two signups with the same email/phone pass the pre-check
+    concurrently — a 409 either way, never a raw 500."""
+    if await repository.get_user_by_email(session, user.email) is not None:
+        raise ConflictError("Email is already registered")
+    if await repository.get_user_by_phone(session, user.phone_number) is not None:
+        raise ConflictError("Phone number is already registered")
+    try:
+        user = await repository.create_user(session, user=user)
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise ConflictError("Email or phone number is already registered") from exc
+    return user
 
 
 def _issue_tokens(user: User) -> tuple[str, RefreshToken, str]:
@@ -59,9 +82,6 @@ def _issue_tokens(user: User) -> tuple[str, RefreshToken, str]:
 async def register(body: RegisterRequest, session: AsyncSession = Depends(get_session)) -> User:
     if body.role not in PUBLIC_ROLES:
         raise ForbiddenError(f"Cannot self-register with role '{body.role}'")
-    if await repository.get_user_by_email(session, body.email) is not None:
-        raise ConflictError("Email is already registered")
-
     user = User(
         email=body.email,
         hashed_password=hash_secret(body.password),
@@ -69,9 +89,7 @@ async def register(body: RegisterRequest, session: AsyncSession = Depends(get_se
         full_name=body.full_name,
         phone_number=body.phone_number,
     )
-    user = await repository.create_user(session, user=user)
-    await session.commit()
-    return user
+    return await _create_user_or_conflict(session, user)
 
 
 @router.post(
@@ -83,14 +101,21 @@ async def bootstrap_admin(
     x_bootstrap_secret: str = Header(...),
 ) -> User:
     """The only way a system_admin account is created — self-registration is
-    limited to PUBLIC_ROLES (see docs/PROGRESS.md#known-gaps). Gated by a
+    limited to PUBLIC_ROLES (see docs/architecture.md#restaurant--rider-approval). Gated by a
     shared secret rather than open registration, since this role can block
-    any user and approve/suspend any restaurant or rider."""
-    if not hmac.compare_digest(x_bootstrap_secret, settings.admin_bootstrap_secret):
-        raise UnauthorizedError("Invalid bootstrap secret")
-    if await repository.get_user_by_email(session, body.email) is not None:
-        raise ConflictError("Email is already registered")
+    any user and approve/suspend any restaurant or rider.
 
+    One-shot: once any system_admin exists this endpoint refuses (409), so a
+    leaked secret can't be used to mint further admins later. Further admins
+    are an explicit follow-up (an admin-only "promote user" action), not this
+    endpoint."""
+    # Compared as bytes — compare_digest raises TypeError on non-ASCII str.
+    if not hmac.compare_digest(
+        x_bootstrap_secret.encode(), settings.admin_bootstrap_secret.encode()
+    ):
+        raise UnauthorizedError("Invalid bootstrap secret")
+    if await repository.any_user_with_role(session, Role.SYSTEM_ADMIN.value):
+        raise ConflictError("A system_admin already exists — bootstrap is disabled")
     user = User(
         email=body.email,
         hashed_password=hash_secret(body.password),
@@ -98,15 +123,16 @@ async def bootstrap_admin(
         full_name=body.full_name,
         phone_number=body.phone_number,
     )
-    user = await repository.create_user(session, user=user)
-    await session.commit()
-    return user
+    return await _create_user_or_conflict(session, user)
 
 
 @router.post("/auth/login", response_model=TokenResponse)
 async def login(body: LoginRequest, session: AsyncSession = Depends(get_session)) -> TokenResponse:
     user = await repository.get_user_by_email(session, body.email)
-    if user is None or not verify_secret(body.password, user.hashed_password):
+    if user is None:
+        verify_secret(body.password, _DUMMY_PASSWORD_HASH)
+        raise UnauthorizedError("Invalid email or password")
+    if not verify_secret(body.password, user.hashed_password):
         raise UnauthorizedError("Invalid email or password")
     if user.is_blocked:
         raise ForbiddenError("Account is blocked")
@@ -126,22 +152,29 @@ async def refresh(body: RefreshRequest, session: AsyncSession = Depends(get_sess
 
     record = await repository.get_refresh_token(session, lookup_id)
     now = datetime.now(UTC)
-    if (
-        record is None
-        or record.revoked_at is not None
-        or record.expires_at < now
-        or not verify_secret(raw_secret, record.token_hash)
-    ):
+    if record is None or not verify_secret(raw_secret, record.token_hash):
+        raise UnauthorizedError("Invalid or expired refresh token")
+    if record.revoked_at is not None:
+        # A genuine, already-rotated token being presented again means two
+        # parties hold it — one of them stole it. We can't tell which, so end
+        # every session for this user; the real owner just logs in again.
+        await repository.revoke_all_refresh_tokens(session, record.user_id, at=now)
+        await session.commit()
+        raise UnauthorizedError("Refresh token reuse detected — all sessions revoked")
+    if record.expires_at < now:
         raise UnauthorizedError("Invalid or expired refresh token")
 
     # Authoritative block check — not subject to the deny-list's TTL, see
-    # docs/technical-documentation.md#auth.
+    # docs/technical-documentation.md, "Auth: 15-minute access tokens...".
     user = await repository.get_user_by_id(session, record.user_id)
     if user is None or user.is_blocked:
         raise ForbiddenError("Account is blocked")
 
-    # Rotation: revoke the presented token, issue a fresh pair.
-    await repository.revoke_refresh_token(session, record, at=now)
+    # Rotation: revoke the presented token, issue a fresh pair. Losing the
+    # compare-and-set means a concurrent request already rotated this token.
+    if not await repository.revoke_refresh_token_if_active(session, record.id, at=now):
+        await session.rollback()
+        raise UnauthorizedError("Invalid or expired refresh token")
     access_token, new_refresh_row, refresh_token_str = _issue_tokens(user)
     await repository.create_refresh_token(session, token=new_refresh_row)
     await session.commit()
@@ -151,12 +184,15 @@ async def refresh(body: RefreshRequest, session: AsyncSession = Depends(get_sess
 @router.post("/auth/logout", status_code=status.HTTP_204_NO_CONTENT)
 async def logout(body: RefreshRequest, session: AsyncSession = Depends(get_session)) -> None:
     try:
-        lookup_id, _ = parse_refresh_token(body.refresh_token)
+        lookup_id, raw_secret = parse_refresh_token(body.refresh_token)
     except ValueError:
         return  # already "logged out" as far as the client should know
     record = await repository.get_refresh_token(session, lookup_id)
-    if record is not None and record.revoked_at is None:
-        await repository.revoke_refresh_token(session, record, at=datetime.now(UTC))
+    # The secret must match — knowing a lookup_id alone (e.g. from a log line)
+    # must not let someone end another user's session.
+    if record is None or not verify_secret(raw_secret, record.token_hash):
+        return
+    if await repository.revoke_refresh_token_if_active(session, record.id, at=datetime.now(UTC)):
         await session.commit()
 
 
@@ -180,9 +216,13 @@ async def block(
     user = await repository.get_user_by_id(session, user_id)
     if user is None:
         raise NotFoundError("User not found")
+    # Deny-list first, then the DB: if Redis is down this fails before anything
+    # is committed, instead of committing a block that existing access tokens
+    # would ignore for up to their full lifetime. (A DB failure after the
+    # Redis write just denies the user until the TTL — the safe direction.)
+    await block_user(redis, user_id, ttl_seconds=settings.access_token_ttl_minutes * 60)
     user.is_blocked = True
     await session.commit()
-    await block_user(redis, user_id, ttl_seconds=settings.access_token_ttl_minutes * 60)
     return user
 
 

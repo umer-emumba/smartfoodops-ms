@@ -1,4 +1,7 @@
+import logging
+
 from fastapi import FastAPI, Request, status
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -50,8 +53,31 @@ class TooManyRequestsError(AppError):
     code = "rate_limited"
 
 
+class ServiceUnavailableError(AppError):
+    """A downstream service this request depends on is unreachable or erroring."""
+
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    code = "upstream_unavailable"
+
+
+class BadGatewayError(AppError):
+    """An upstream service answered, but not usefully (connection refused, a
+    malformed response) — raised by api-gateway's proxy."""
+
+    status_code = status.HTTP_502_BAD_GATEWAY
+    code = "bad_gateway"
+
+
+class GatewayTimeoutError(AppError):
+    status_code = status.HTTP_504_GATEWAY_TIMEOUT
+    code = "gateway_timeout"
+
+
 def _envelope(code: str, message: str, details: dict | None = None) -> dict:
     return {"error": {"code": code, "message": message, "details": details or {}}}
+
+
+_logger = logging.getLogger(__name__)
 
 
 def register_exception_handlers(app: FastAPI) -> None:
@@ -79,5 +105,22 @@ def register_exception_handlers(app: FastAPI) -> None:
     ) -> JSONResponse:
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            content=_envelope("validation_error", "Request validation failed", {"errors": exc.errors()}),
+            content=_envelope(
+                "validation_error",
+                "Request validation failed",
+                # A custom validator's error carries the raised exception object
+                # in `ctx`, which isn't JSON-serializable — stringify it, or
+                # every custom-validator 422 would itself crash into a 500.
+                {"errors": jsonable_encoder(exc.errors(), custom_encoder={Exception: str})},
+            ),
+        )
+
+    @app.exception_handler(Exception)
+    async def _handle_unexpected(_: Request, exc: Exception) -> JSONResponse:
+        """Last resort: an unhandled bug still returns the standard envelope
+        (not Starlette's plain-text 500), without leaking internals."""
+        _logger.exception("Unhandled error", exc_info=exc)
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content=_envelope("internal_error", "Internal server error"),
         )

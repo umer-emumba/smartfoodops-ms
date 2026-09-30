@@ -1,12 +1,13 @@
 from fastapi import APIRouter, Depends, Query, status
 from sfo_auth import CurrentUser, Role
 from sfo_common.errors import ConflictError, ForbiddenError, NotFoundError, ValidationAppError
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import repository
 from app.auth_deps import get_current_user_optional, require_roles
 from app.db import get_session
-from app.models import MenuCategory, MenuItem, Promotion, Restaurant
+from app.models import MenuCategory, MenuItem, Promotion, Restaurant, RestaurantStatusHistory
 from app.schemas import (
     MenuCategoryCreate,
     MenuCategoryResponse,
@@ -20,6 +21,9 @@ from app.schemas import (
     RestaurantCreate,
     RestaurantResponse,
     RestaurantUpdate,
+    StatusChangeRequest,
+    StatusHistoryResponse,
+    check_promotion_rules,
 )
 
 router = APIRouter(prefix="/v1", tags=["restaurants"])
@@ -61,14 +65,51 @@ def _ensure_restaurant_visible(restaurant: Restaurant, current: CurrentUser | No
         raise NotFoundError("Restaurant not found")
 
 
+def _record_status_change(
+    session: AsyncSession,
+    restaurant: Restaurant,
+    to_status: str,
+    current: CurrentUser,
+    reason: str | None = None,
+) -> None:
+    """Changes the status and appends the audit row in the same transaction.
+    A no-op transition (e.g. approving an already-active restaurant) records
+    nothing, so the trail only ever shows real changes."""
+    from_status = restaurant.status
+    if from_status == to_status:
+        return
+    restaurant.status = to_status
+    session.add(
+        RestaurantStatusHistory(
+            restaurant_id=restaurant.id,
+            from_status=from_status,
+            to_status=to_status,
+            actor_id=current.id,
+            actor_role=current.role.value,
+            reason=reason,
+        )
+    )
+
+
 @router.post("/restaurants", response_model=RestaurantResponse, status_code=201)
 async def create_restaurant(
     body: RestaurantCreate,
     current: CurrentUser = Depends(require_roles(Role.RESTAURANT_ADMIN)),
     session: AsyncSession = Depends(get_session),
 ) -> Restaurant:
-    restaurant = Restaurant(admin_user_id=current.id, **body.model_dump())
+    restaurant = Restaurant(
+        admin_user_id=current.id, status="pending_approval", **body.model_dump()
+    )
     restaurant = await repository.create_restaurant(session, restaurant)
+    session.add(
+        RestaurantStatusHistory(
+            restaurant_id=restaurant.id,
+            from_status=None,
+            to_status=restaurant.status,
+            actor_id=current.id,
+            actor_role=current.role.value,
+        )
+    )
     await session.commit()
     return restaurant
 
@@ -76,7 +117,7 @@ async def create_restaurant(
 @router.get("/restaurants", response_model=list[RestaurantResponse])
 async def list_restaurants(
     city: str | None = Query(default=None),
-    limit: int = Query(default=20, le=100),
+    limit: int = Query(default=20, ge=1, le=100),
     session: AsyncSession = Depends(get_session),
 ) -> list[Restaurant]:
     return await repository.list_restaurants(session, city=city, limit=limit)
@@ -97,7 +138,7 @@ async def list_my_restaurants(
 @router.get("/restaurants/admin", response_model=list[RestaurantResponse])
 async def list_restaurants_admin(
     status: str | None = Query(default=None),
-    limit: int = Query(default=50, le=200),
+    limit: int = Query(default=50, ge=1, le=200),
     _: CurrentUser = Depends(require_roles(Role.SYSTEM_ADMIN)),
     session: AsyncSession = Depends(get_session),
 ) -> list[Restaurant]:
@@ -134,13 +175,14 @@ async def update_restaurant(
 @router.post("/restaurants/{restaurant_id}/approve", response_model=RestaurantResponse)
 async def approve_restaurant(
     restaurant_id: str,
-    _: CurrentUser = Depends(require_roles(Role.SYSTEM_ADMIN)),
+    body: StatusChangeRequest | None = None,
+    current: CurrentUser = Depends(require_roles(Role.SYSTEM_ADMIN)),
     session: AsyncSession = Depends(get_session),
 ) -> Restaurant:
     restaurant = await repository.get_restaurant(session, restaurant_id)
     if restaurant is None:
         raise NotFoundError("Restaurant not found")
-    restaurant.status = "active"
+    _record_status_change(session, restaurant, "active", current, body.reason if body else None)
     await session.commit()
     return restaurant
 
@@ -148,7 +190,8 @@ async def approve_restaurant(
 @router.post("/restaurants/{restaurant_id}/suspend", response_model=RestaurantResponse)
 async def suspend_restaurant(
     restaurant_id: str,
-    _: CurrentUser = Depends(require_roles(Role.SYSTEM_ADMIN)),
+    body: StatusChangeRequest | None = None,
+    current: CurrentUser = Depends(require_roles(Role.SYSTEM_ADMIN)),
     session: AsyncSession = Depends(get_session),
 ) -> Restaurant:
     """Covers both rejecting a pending restaurant and suspending an already-
@@ -157,9 +200,22 @@ async def suspend_restaurant(
     restaurant = await repository.get_restaurant(session, restaurant_id)
     if restaurant is None:
         raise NotFoundError("Restaurant not found")
-    restaurant.status = "suspended"
+    _record_status_change(session, restaurant, "suspended", current, body.reason if body else None)
     await session.commit()
     return restaurant
+
+
+@router.get(
+    "/restaurants/{restaurant_id}/status-history", response_model=list[StatusHistoryResponse]
+)
+async def get_status_history(
+    restaurant_id: str,
+    current: CurrentUser = Depends(require_roles(Role.RESTAURANT_ADMIN, Role.SYSTEM_ADMIN)),
+    session: AsyncSession = Depends(get_session),
+) -> list[RestaurantStatusHistory]:
+    """Audit trail — visible to the owning restaurant_admin and system_admins."""
+    await _get_owned_restaurant(session, restaurant_id, current)
+    return await repository.list_status_history(session, restaurant_id)
 
 
 @router.post(
@@ -308,8 +364,15 @@ async def create_promotion(
     if await repository.get_promotion_by_code(session, restaurant_id, body.code) is not None:
         raise ConflictError("A promotion with this code already exists for this restaurant")
     promotion = Promotion(restaurant_id=restaurant_id, **body.model_dump())
-    promotion = await repository.create_promotion(session, promotion)
-    await session.commit()
+    try:
+        promotion = await repository.create_promotion(session, promotion)
+        await session.commit()
+    except IntegrityError as exc:
+        # Two concurrent creates with the same code both passed the pre-check.
+        await session.rollback()
+        raise ConflictError(
+            "A promotion with this code already exists for this restaurant"
+        ) from exc
     return promotion
 
 
@@ -329,8 +392,18 @@ async def update_promotion(
         raise NotFoundError("Promotion not found")
     for field, value in body.model_dump(exclude_unset=True).items():
         setattr(promotion, field, value)
-    if promotion.valid_until <= promotion.valid_from:
-        raise ValidationAppError("valid_until must be after valid_from")
+    # Re-checked on the merged row: a PATCH of only valid_until (or only
+    # discount_value) must still be consistent with the stored fields.
+    try:
+        check_promotion_rules(
+            promotion.discount_type,
+            promotion.discount_value,
+            promotion.valid_from,
+            promotion.valid_until,
+        )
+    except ValueError as exc:
+        await session.rollback()
+        raise ValidationAppError(str(exc)) from exc
     await session.commit()
     return promotion
 
@@ -359,8 +432,16 @@ async def list_promotions(
     current: CurrentUser | None = Depends(get_current_user_optional),
     session: AsyncSession = Depends(get_session),
 ) -> list[Promotion]:
+    """Public callers see only promotions that are active and currently within
+    their validity window. The owner and system_admins see all of them,
+    including expired and scheduled ones, so they can manage them."""
     restaurant = await repository.get_restaurant(session, restaurant_id)
     if restaurant is None:
         raise NotFoundError("Restaurant not found")
     _ensure_restaurant_visible(restaurant, current)
+    is_manager = current is not None and (
+        current.id == restaurant.admin_user_id or current.role == Role.SYSTEM_ADMIN
+    )
+    if is_manager:
+        return await repository.list_all_promotions(session, restaurant_id)
     return await repository.list_active_promotions(session, restaurant_id)

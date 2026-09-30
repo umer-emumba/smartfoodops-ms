@@ -2,7 +2,7 @@ import secrets
 from datetime import UTC, datetime, timedelta
 
 import jwt
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from sfo_common import new_id
 
 from sfo_auth.roles import Role
@@ -31,12 +31,19 @@ def create_access_token(
 def decode_access_token(token: str, *, secret: str, algorithm: str) -> TokenPayload:
     """Raises jwt.InvalidTokenError (or a subclass) on bad signature/expiry —
     callers turn that into an UnauthorizedError. Signature + expiry only, no DB
-    call — see docs/technical-documentation.md#auth."""
-    raw = jwt.decode(token, secret, algorithms=[algorithm])
-    return TokenPayload(**raw)
+    call — see docs/technical-documentation.md#auth-15-minute-access-tokens-rotating-refresh-tokens-redis-deny-list."""
+    raw = jwt.decode(
+        token, secret, algorithms=[algorithm], options={"require": ["sub", "role", "exp", "iat"]}
+    )
+    try:
+        return TokenPayload(**raw)
+    except ValidationError as exc:
+        # Correctly signed but malformed claims (e.g. an unknown role) — still
+        # an invalid token to callers, not a 500.
+        raise jwt.InvalidTokenError("Malformed token claims") from exc
 
 
-# --- Refresh tokens: NOT JWTs, tracked server-side (see docs/technical-documentation.md#auth) ---
+# --- Refresh tokens: NOT JWTs, tracked server-side (see docs/technical-documentation.md#auth-15-minute-access-tokens-rotating-refresh-tokens-redis-deny-list) ---
 # A refresh token string is "{lookup_id}.{secret}": lookup_id is stored in
 # plaintext for O(1) DB lookup, secret is hashed (sfo_auth.passwords) before
 # storage so a DB leak alone doesn't hand out usable refresh tokens.

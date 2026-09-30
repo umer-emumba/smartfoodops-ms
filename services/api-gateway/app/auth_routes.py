@@ -4,7 +4,7 @@ from app.config import settings
 from app.proxy import forward_request
 from app.rate_limit import RateLimiter
 
-# Registered before the generic proxy catch-all so these two specific paths
+# Registered before the generic proxy catch-all so these specific paths
 # get a stricter, separate rate limit — resists brute-force/credential-
 # stuffing on login/register specifically. See docs/architecture.md#conventions.
 router = APIRouter()
@@ -22,3 +22,9 @@ async def login(request: Request) -> Response:
 @router.post("/v1/auth/register", dependencies=[_auth_rate_limit])
 async def register(request: Request) -> Response:
     return await forward_request("auth", "register", request)
+
+
+# Shared-secret-gated, so it gets the same brute-force protection as login.
+@router.post("/v1/auth/bootstrap-admin", dependencies=[_auth_rate_limit])
+async def bootstrap_admin(request: Request) -> Response:
+    return await forward_request("auth", "bootstrap-admin", request)

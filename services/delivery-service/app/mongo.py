@@ -5,7 +5,11 @@ from sfo_common import new_id
 
 from app.config import settings
 
-_client: AsyncIOMotorClient = AsyncIOMotorClient(settings.mongo_url)
+# 2s server-selection timeout, not Motor's 30s default: a Mongo outage should
+# cost a location update 2s (the ping is best-effort), not stall it for 30s.
+_client: AsyncIOMotorClient = AsyncIOMotorClient(
+    settings.mongo_url, serverSelectionTimeoutMS=2000
+)
 db: AsyncIOMotorDatabase = _client["delivery_db"]
 
 # High-frequency rider location pings live here, not in Postgres — see
@@ -36,7 +40,7 @@ async def check_mongo_ready() -> bool:
 async def insert_location_ping(rider_id: str, lat: float, lng: float) -> None:
     # _id is sfo_common.new_id() (UUIDv7), not Mongo's default ObjectId — one
     # consistent, time-ordered ID scheme across Postgres rows, Kafka events,
-    # and Mongo documents (docs/technical-documentation.md#primary-keys).
+    # and Mongo documents (docs/technical-documentation.md, "Primary keys: UUIDv7...").
     await db[RIDER_LOCATION_PINGS].insert_one(
         {
             "_id": new_id(),

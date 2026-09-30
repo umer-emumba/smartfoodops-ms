@@ -1,0 +1,13 @@
+# Build context is the repo root (see docker-compose.yml). Keep secrets and
+# local artifacts out of every image — env vars come from env_file at runtime.
+**/.env
+**/.env.*
+**/.venv
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+.git
+docs
+*.md

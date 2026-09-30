@@ -1,20 +1,52 @@
 import httpx
 from fastapi import APIRouter, Depends, Request, Response
-from sfo_common.errors import NotFoundError
+from sfo_common.errors import BadGatewayError, GatewayTimeoutError, NotFoundError
 from sfo_common.middleware import CORRELATION_ID_HEADER, get_correlation_id
 
 from app.config import settings
 from app.rate_limit import RateLimiter
-from app.security import is_public_route, require_valid_bearer_token
+from app.security import authenticate, is_public_route
 
 router = APIRouter()
 
-_client = httpx.AsyncClient(timeout=10.0)
+# One pooled client for every backend call. Connect timeout is short so a
+# dead backend fails fast (502) instead of holding the request for the full
+# read timeout; the read timeout bounds a backend that accepted but hangs (504).
+# Closed on shutdown by app.main's lifespan.
+client = httpx.AsyncClient(
+    timeout=httpx.Timeout(10.0, connect=2.0),
+    limits=httpx.Limits(max_connections=200, max_keepalive_connections=50),
+)
 
-# Hop-by-hop headers must not be forwarded as-is between the client and the
-# backend — see RFC 7230 6.1. Host/content-length are recomputed by httpx.
-_EXCLUDED_REQUEST_HEADERS = {"host", "content-length", "connection"}
-_EXCLUDED_RESPONSE_HEADERS = {"content-length", "connection", "transfer-encoding"}
+# Hop-by-hop headers (RFC 9110 §7.6.1) describe one connection, not the
+# request, so they must not be forwarded — plus any header the Connection
+# header itself names. Host and Content-Length are recomputed by httpx for
+# the new request; X-Request-ID is replaced with the gateway's validated one.
+_HOP_BY_HOP = {
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+}
+_EXCLUDED_REQUEST_HEADERS = _HOP_BY_HOP | {"host", "content-length", CORRELATION_ID_HEADER.lower()}
+# httpx has already decoded the body (e.g. un-gzipped it), so the upstream's
+# Content-Encoding/Length no longer describe what's being sent back.
+_EXCLUDED_RESPONSE_HEADERS = _HOP_BY_HOP | {"content-length", "content-encoding"}
+
+
+def _filter_headers(headers: httpx.Headers | dict, excluded: set[str]) -> dict[str, str]:
+    connection_listed = {
+        h.strip().lower() for h in headers.get("connection", "").split(",") if h.strip()
+    }
+    return {
+        k: v
+        for k, v in headers.items()
+        if k.lower() not in excluded and k.lower() not in connection_listed
+    }
 
 
 async def forward_request(resource: str, rest_of_path: str, request: Request) -> Response:
@@ -26,33 +58,34 @@ async def forward_request(resource: str, rest_of_path: str, request: Request) ->
     base_url = settings.service_registry.get(resource)
     if base_url is None:
         raise NotFoundError(f"No service owns resource '{resource}'")
+    # httpx would collapse ".." segments, letting an authenticated caller
+    # reach a backend path outside /v1/{resource}/ (e.g. /openapi.json).
+    if ".." in rest_of_path.split("/"):
+        raise NotFoundError("Not found")
 
-    if not is_public_route(request.method, resource, rest_of_path):
-        require_valid_bearer_token(request)
+    await authenticate(request, public=is_public_route(request.method, resource, rest_of_path))
 
     target_url = f"{base_url}/v1/{resource}/{rest_of_path}".rstrip("/")
-
-    forward_headers = {
-        k: v for k, v in request.headers.items() if k.lower() not in _EXCLUDED_REQUEST_HEADERS
-    }
+    forward_headers = _filter_headers(request.headers, _EXCLUDED_REQUEST_HEADERS)
     forward_headers[CORRELATION_ID_HEADER] = get_correlation_id()
 
-    body = await request.body()
-    upstream_response = await _client.request(
-        request.method,
-        target_url,
-        params=request.query_params,
-        headers=forward_headers,
-        content=body,
-    )
+    try:
+        upstream_response = await client.request(
+            request.method,
+            target_url,
+            params=request.query_params,
+            headers=forward_headers,
+            content=await request.body(),
+        )
+    except httpx.TimeoutException as exc:
+        raise GatewayTimeoutError(f"'{resource}' service timed out") from exc
+    except httpx.RequestError as exc:
+        raise BadGatewayError(f"'{resource}' service is unavailable") from exc
 
-    response_headers = {
-        k: v for k, v in upstream_response.headers.items() if k.lower() not in _EXCLUDED_RESPONSE_HEADERS
-    }
     return Response(
         content=upstream_response.content,
         status_code=upstream_response.status_code,
-        headers=response_headers,
+        headers=_filter_headers(upstream_response.headers, _EXCLUDED_RESPONSE_HEADERS),
     )
 
 

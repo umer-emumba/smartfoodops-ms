@@ -1,7 +1,7 @@
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Rider
+from app.models import Rider, RiderVerificationHistory
 
 
 async def get_rider_by_user_id(session: AsyncSession, user_id: str) -> Rider | None:
@@ -28,4 +28,15 @@ async def list_riders(
     if verification_status:
         stmt = stmt.where(Rider.verification_status == verification_status)
     result = await session.execute(stmt.limit(limit))
+    return list(result.scalars().all())
+
+
+async def list_verification_history(
+    session: AsyncSession, rider_id: str
+) -> list[RiderVerificationHistory]:
+    result = await session.execute(
+        select(RiderVerificationHistory)
+        .where(RiderVerificationHistory.rider_id == rider_id)
+        .order_by(RiderVerificationHistory.created_at)
+    )
     return list(result.scalars().all())

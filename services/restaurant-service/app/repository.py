@@ -1,7 +1,9 @@
+from datetime import UTC, datetime
+
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import MenuCategory, MenuItem, Promotion, Restaurant
+from app.models import MenuCategory, MenuItem, Promotion, Restaurant, RestaurantStatusHistory
 
 
 async def create_restaurant(session: AsyncSession, restaurant: Restaurant) -> Restaurant:
@@ -122,7 +124,35 @@ async def delete_promotion(session: AsyncSession, promotion: Promotion) -> None:
 
 
 async def list_active_promotions(session: AsyncSession, restaurant_id: str) -> list[Promotion]:
+    """Active *and* currently valid — an expired or not-yet-started code is
+    not something a customer can use."""
+    now = datetime.now(UTC)
     result = await session.execute(
-        select(Promotion).where(Promotion.restaurant_id == restaurant_id, Promotion.is_active)
+        select(Promotion).where(
+            Promotion.restaurant_id == restaurant_id,
+            Promotion.is_active,
+            Promotion.valid_from <= now,
+            Promotion.valid_until > now,
+        )
+    )
+    return list(result.scalars().all())
+
+
+async def list_all_promotions(session: AsyncSession, restaurant_id: str) -> list[Promotion]:
+    result = await session.execute(
+        select(Promotion)
+        .where(Promotion.restaurant_id == restaurant_id)
+        .order_by(Promotion.valid_from.desc())
+    )
+    return list(result.scalars().all())
+
+
+async def list_status_history(
+    session: AsyncSession, restaurant_id: str
+) -> list[RestaurantStatusHistory]:
+    result = await session.execute(
+        select(RestaurantStatusHistory)
+        .where(RestaurantStatusHistory.restaurant_id == restaurant_id)
+        .order_by(RestaurantStatusHistory.created_at)
     )
     return list(result.scalars().all())

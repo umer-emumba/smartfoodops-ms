@@ -71,5 +71,24 @@ class Delivery(Base):
     __mapper_args__ = {"version_id_col": version}
 
 
+class RiderVerificationHistory(Base):
+    """Append-only audit trail of rider vetting decisions (registration,
+    approval, suspension) — who, when, why. Written in the same transaction
+    as the verification_status change."""
+
+    __tablename__ = "rider_verification_history"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
+    rider_id: Mapped[str] = mapped_column(ForeignKey("riders.id"), index=True)
+    from_status: Mapped[str | None] = mapped_column(String, nullable=True)  # None = registration
+    to_status: Mapped[str] = mapped_column(String)
+    actor_id: Mapped[str] = mapped_column(String)
+    actor_role: Mapped[str] = mapped_column(String)
+    reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+
 class OutboxEvent(Base, OutboxEventMixin):
     __tablename__ = "outbox_events"

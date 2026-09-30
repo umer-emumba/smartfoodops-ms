@@ -8,9 +8,8 @@ out of sync with the code the way an exported image would. See
 
 ```mermaid
 graph TD
-    Client[Client apps] --> Traefik[Traefik]
-    Traefik --> GW1[api-gateway]
-    Traefik -.->|scales horizontally, no SPOF| GW2[api-gateway replica N]
+    Client[Client apps] --> GW1[api-gateway]
+    Client -.->|"prod only: Kubernetes Service load-balances replicas"| GW2[api-gateway replica N]
 
     GW1 -->|REST| US[user-service]
     GW1 -->|REST| RS[restaurant-service]
@@ -18,13 +17,13 @@ graph TD
     GW1 -->|REST| DS[delivery-service]
     GW1 -->|REST| PS[payment-service]
     GW1 -->|REST| NS[notification-service]
-    GW1 -.->|WS/SSE tracking - Week 2| DS
-    GW1 -.->|JWT + deny-list check| Redis[(Redis)]
+    GW1 -->|deny-list check + rate limit| Redis[(Redis)]
+    US -->|deny-list write on block| Redis
 
-    OS -->|Temporal saga activities, sync REST - Week 2| RS
-    OS -->|Temporal saga activities, sync REST - Week 2| PS
-    OS -->|Temporal saga activities, sync REST - Week 2| DS
-    OS --> Temporal[(Temporal server)]
+    OS -->|sync REST: live prices + availability at order creation| RS
+    OS -.->|Temporal saga activities - Week 2| PS
+    OS -.->|Temporal saga activities - Week 2| DS
+    OS -.->|saga worker - Week 2| Temporal[(Temporal server)]
 
     US --> UserDB[(user_db)]
     RS --> RestDB[(restaurant_db)]
@@ -34,17 +33,22 @@ graph TD
     PS --> PaymentDB[(payment_db)]
     NS --> NotifDB[(notification_db)]
 
-    RS -.->|outbox relay - Week 3| Kafka[(Kafka: order/delivery/payment-events)]
-    OS -.->|outbox relay - Week 3| Kafka
-    DS -.->|outbox relay - Week 3| Kafka
-    PS -.->|outbox relay - Week 3| Kafka
+    OS -.->|outbox relay via Celery beat - Week 3| Kafka[(Kafka: order/delivery/payment-events)]
+    DS -.->|outbox relay via Celery beat - Week 3| Kafka
+    PS -.->|outbox relay via Celery beat - Week 3| Kafka
+    Kafka -.->|DeliveryStatusUpdated → customer WS/SSE - Week 2/3| GW1
     Kafka -.-> NS
     Kafka -.-> AS[analytics-service - Week 3]
+    NS -.->|dispatch tasks - Week 3| Rabbit[(RabbitMQ / Celery workers)]
 ```
 
-Solid arrows are built (Week 1); dotted arrows are Week 2/3 per
-[PROGRESS.md](./PROGRESS.md). Every database is a separate Postgres container —
-database-per-service, no shared instance.
+Solid arrows are built (Week 1); dotted arrows are either Week 2/3 (per
+[PROGRESS.md](./PROGRESS.md)) or, for the `api-gateway` replica line specifically,
+production-only (Kubernetes `Deployment`/`HPA` + `Service` — never built locally, see
+[technical-documentation.md](./technical-documentation.md#gateway-single-entry-point-not-a-spof)
+for why). `restaurant-service` has no Kafka topic: nothing downstream consumes restaurant
+changes in Part A. Every database is a separate Postgres container — database-per-service, no
+shared instance.
 
 ## Entity-relationship diagrams (one per service database)
 
@@ -74,7 +78,7 @@ erDiagram
     }
     REFRESH_TOKENS {
         string id PK "lookup_id, see sfo_auth.tokens"
-        string user_id FK
+        string user_id "same DB, but not an enforced FK"
         string token_hash
         datetime expires_at
         datetime revoked_at
@@ -102,6 +106,7 @@ erDiagram
     RESTAURANTS ||--o{ MENU_ITEMS : has
     MENU_CATEGORIES ||--o{ MENU_ITEMS : groups
     RESTAURANTS ||--o{ PROMOTIONS : issues
+    RESTAURANTS ||--o{ RESTAURANT_STATUS_HISTORY : "audit trail"
 
     RESTAURANTS {
         string id PK
@@ -149,6 +154,16 @@ erDiagram
         boolean is_active
         datetime created_at
     }
+    RESTAURANT_STATUS_HISTORY {
+        string id PK
+        string restaurant_id FK
+        string from_status "null = onboarding"
+        string to_status
+        string actor_id "opaque -> user_db.users.id"
+        string actor_role
+        string reason
+        datetime created_at
+    }
 ```
 
 ### `order_db`
@@ -156,6 +171,7 @@ erDiagram
 ```mermaid
 erDiagram
     ORDERS ||--o{ ORDER_ITEMS : contains
+    ORDERS ||--o{ ORDER_STATUS_HISTORY : "audit trail"
 
     ORDERS {
         string id PK
@@ -174,6 +190,8 @@ erDiagram
         string promo_code
         decimal total_amount
         string status_reason
+        string idempotency_key "UK with customer_id"
+        string request_hash "detects key reuse with a different body"
         int version "optimistic lock"
         datetime created_at
         datetime updated_at
@@ -187,8 +205,18 @@ erDiagram
         string menu_item_id "opaque -> restaurant_db.menu_items.id"
         string item_name_snapshot "captured at order time"
         int quantity
-        decimal unit_price
+        decimal unit_price "from restaurant-service, never the client"
         string special_instructions
+    }
+    ORDER_STATUS_HISTORY {
+        string id PK
+        string order_id FK
+        string from_status "null = creation"
+        string to_status
+        string actor_id "null = system/saga"
+        string actor_role
+        string reason
+        datetime created_at
     }
 ```
 
@@ -197,6 +225,7 @@ erDiagram
 ```mermaid
 erDiagram
     RIDERS ||--o{ DELIVERIES : "assigned to"
+    RIDERS ||--o{ RIDER_VERIFICATION_HISTORY : "audit trail"
 
     RIDERS {
         string id PK
@@ -213,7 +242,7 @@ erDiagram
         string id PK
         string order_id UK "opaque -> order_db.orders.id"
         string rider_id FK
-        string status
+        string status "pending_assignment | offered | assigned | picked_up | delivered | cancelled (Week 2)"
         float pickup_lat "snapshot at assignment"
         float pickup_lng
         float dropoff_lat
@@ -225,6 +254,16 @@ erDiagram
         datetime delivered_at
         int reassignment_count
         int version "optimistic lock"
+        datetime created_at
+    }
+    RIDER_VERIFICATION_HISTORY {
+        string id PK
+        string rider_id FK
+        string from_status "null = registration"
+        string to_status
+        string actor_id
+        string actor_role
+        string reason
         datetime created_at
     }
 ```

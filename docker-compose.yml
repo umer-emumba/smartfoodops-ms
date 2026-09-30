@@ -91,7 +91,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
-    ports: ["15672:15672"] # management UI
+    ports: ["127.0.0.1:15672:15672"] # management UI (localhost only)
 
   kafka:
     # bitnami/kafka was pulled from the free Docker Hub catalog after this
@@ -150,19 +150,19 @@ services:
     environment:
       TEMPORAL_ADDRESS: temporal:7233
       TEMPORAL_CORS_ORIGINS: http://localhost:3000
-    ports: ["8088:8080"]
+    ports: ["127.0.0.1:8088:8080"] # no auth — localhost only
 
   # ---------- App services ----------
   # No Traefik / reverse proxy in front of api-gateway here, deliberately —
   # gateway HA (multiple replicas + load balancing) is a Kubernetes-deployment
   # concern (Service + Deployment/HPA), not something a single dev laptop can
-  # meaningfully demonstrate. See docs/technical-documentation.md#gateway.
+  # meaningfully demonstrate. See docs/technical-documentation.md#gateway-single-entry-point-not-a-spof.
   api-gateway:
     build: { context: ., dockerfile: services/api-gateway/Dockerfile }
     env_file: [services/api-gateway/.env]
     depends_on:
       redis: { condition: service_healthy }
-    ports: ["8080:8000"]
+    ports: ["127.0.0.1:8080:8000"]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 5s

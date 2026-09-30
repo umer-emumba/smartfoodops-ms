@@ -2,10 +2,9 @@ import re
 
 import jwt
 from fastapi import Request
+from redis.exceptions import RedisError
 from sfo_auth import decode_access_token
-from sfo_common.errors import ForbiddenError, UnauthorizedError
-from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
-from starlette.responses import Response
+from sfo_common.errors import ForbiddenError, ServiceUnavailableError, UnauthorizedError
 
 from app.config import settings
 from app.redis_client import redis
@@ -41,38 +40,38 @@ def is_public_route(method: str, resource: str, rest_of_path: str) -> bool:
     )
 
 
-def require_valid_bearer_token(request: Request) -> None:
-    """Gateway-side rejection for private routes — verifies signature + expiry
-    before the request is forwarded to a backend, instead of relying entirely
-    on the backend to 401 it. Raises UnauthorizedError (401) if missing/bad."""
+async def authenticate(request: Request, *, public: bool) -> None:
+    """The gateway's one auth step: decodes the bearer token once, then
+    checks the Redis deny-list for it.
+
+    - Private route: a missing/invalid/expired token is rejected here (401),
+      before a backend is ever called.
+    - Public route: no token, or a bad one, is fine — the route doesn't need
+      one, and the backend decides for itself (get_current_user_optional).
+    - Any valid token, on any route: a blocked user gets 403. This is the
+      fast path for an already-issued token; see
+      docs/technical-documentation.md, "Auth: 15-minute access tokens...".
+
+    Runs inside the route (not as middleware) so its errors go through the
+    shared exception handlers and get the normal JSON envelope + CORS headers.
+    """
     auth_header = request.headers.get("authorization", "")
     if not auth_header.lower().startswith("bearer "):
+        if public:
+            return
         raise UnauthorizedError("Missing bearer token")
-    token = auth_header[7:]
     try:
-        decode_access_token(token, secret=settings.jwt_secret, algorithm=settings.jwt_algorithm)
+        payload = decode_access_token(
+            auth_header[7:], secret=settings.jwt_secret, algorithm=settings.jwt_algorithm
+        )
     except jwt.InvalidTokenError as exc:
+        if public:
+            return
         raise UnauthorizedError("Invalid or expired token") from exc
-
-
-class DenyListGuardMiddleware(BaseHTTPMiddleware):
-    """The one auth check that's specific to api-gateway rather than every
-    service: fast-path blocking via the Redis deny-list (see
-    docs/technical-documentation.md#auth). If the bearer token is absent,
-    malformed, or fails verification, this middleware does nothing and lets
-    the downstream service's own defense-in-depth check decide — this
-    middleware's only job is the deny-list, not full authorization.
-    """
-
-    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-        auth_header = request.headers.get("authorization", "")
-        if auth_header.lower().startswith("bearer "):
-            token = auth_header[7:]
-            try:
-                payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
-                user_id = payload.get("sub")
-                if user_id and await redis.exists(f"{_DENYLIST_PREFIX}{user_id}"):
-                    raise ForbiddenError("Account is blocked")
-            except jwt.InvalidTokenError:
-                pass  # not this middleware's job — downstream will reject it
-        return await call_next(request)
+    try:
+        blocked = await redis.exists(f"{_DENYLIST_PREFIX}{payload.sub}")
+    except RedisError as exc:
+        # Fail closed: without the deny-list the gateway can't honour a block.
+        raise ServiceUnavailableError("Auth deny-list is unavailable") from exc
+    if blocked:
+        raise ForbiddenError("Account is blocked")

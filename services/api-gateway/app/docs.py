@@ -2,13 +2,12 @@ import httpx
 from fastapi import APIRouter
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import HTMLResponse, JSONResponse
-from sfo_common.errors import NotFoundError
+from sfo_common.errors import BadGatewayError, NotFoundError
 
 from app.config import settings
+from app.proxy import client
 
 router = APIRouter()
-
-_client = httpx.AsyncClient(timeout=10.0)
 
 
 def _services() -> dict[str, str]:
@@ -52,5 +51,10 @@ async def service_openapi(service: str) -> JSONResponse:
     base_url = _services().get(service)
     if base_url is None:
         raise NotFoundError(f"Unknown service '{service}'")
-    upstream = await _client.get(f"{base_url}/openapi.json")
-    return JSONResponse(content=upstream.json(), status_code=upstream.status_code)
+    try:
+        upstream = await client.get(f"{base_url}/openapi.json")
+        upstream.raise_for_status()
+        spec = upstream.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise BadGatewayError(f"Could not load the OpenAPI spec for '{service}'") from exc
+    return JSONResponse(content=spec)

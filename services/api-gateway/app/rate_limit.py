@@ -20,9 +20,8 @@ class RateLimiter:
     """Fixed-window Redis rate limiter, keyed by client IP + a caller-supplied
     bucket name.
 
-    Replaces fastapi-limiter, which broke twice in this project: once across
-    its own 0.1.x/0.2.x API split (see docs/PROGRESS.md), and again against
-    this FastAPI version's newer lazy-router internals — its RateLimiter
+    Replaces fastapi-limiter, which broke against this FastAPI version's newer
+    router internals (see docs/PROGRESS.md, "Docker verification") — its RateLimiter
     dependency inspects `request.app.routes` expecting every entry to be a
     plain APIRoute with a `.path` attribute, which no longer holds now that
     FastAPI wraps included routers in a different object. This implementation

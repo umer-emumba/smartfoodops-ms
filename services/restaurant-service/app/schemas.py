@@ -1,33 +1,62 @@
 from datetime import datetime
-from typing import Self
+from decimal import Decimal
+from typing import Annotated, ClassVar, Literal, Self
 
-from pydantic import BaseModel, model_validator
+from pydantic import AwareDatetime, BaseModel, Field, model_validator
+
+Latitude = Annotated[float, Field(ge=-90, le=90)]
+Longitude = Annotated[float, Field(ge=-180, le=180)]
+# Decimal, not float, for money: Numeric(10,2) in the DB, and a value that
+# doesn't fit (too many digits/decimals) is a 422 here instead of a DB error.
+Money = Annotated[Decimal, Field(ge=0, max_digits=10, decimal_places=2)]
+DiscountType = Literal["percentage", "fixed_amount"]
+
+
+class _PatchModel(BaseModel):
+    """Base for PATCH bodies. `exclude_unset` still keeps an explicit
+    `{"name": null}`, which would write NULL into a NOT NULL column (a 500).
+    Rejects that as a 422 unless the field is genuinely nullable."""
+
+    nullable_fields: ClassVar[frozenset[str]] = frozenset()
+
+    @model_validator(mode="after")
+    def _reject_explicit_nulls(self) -> Self:
+        bad = sorted(
+            f
+            for f in self.model_fields_set
+            if getattr(self, f) is None and f not in self.nullable_fields
+        )
+        if bad:
+            raise ValueError(f"{', '.join(bad)} cannot be null")
+        return self
 
 
 class RestaurantCreate(BaseModel):
-    name: str
-    address: str
-    city: str
-    lat: float
-    lng: float
-    contact_phone: str
+    name: str = Field(min_length=1, max_length=200)
+    address: str = Field(min_length=1)
+    city: str = Field(min_length=1)
+    lat: Latitude
+    lng: Longitude
+    contact_phone: str = Field(min_length=5, max_length=20)
     cuisine_type: str | None = None
 
 
-class RestaurantUpdate(BaseModel):
+class RestaurantUpdate(_PatchModel):
     # No `status` field here, deliberately — it must only change via the
     # system_admin-only /approve and /suspend actions
     # (docs/architecture.md#restaurant--rider-approval). Including it here
     # would let a restaurant_admin PATCH their own way to "active".
-    name: str | None = None
-    address: str | None = None
-    lat: float | None = None
-    lng: float | None = None
-    contact_phone: str | None = None
+    nullable_fields = frozenset({"cuisine_type"})
+
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    address: str | None = Field(default=None, min_length=1)
+    lat: Latitude | None = None
+    lng: Longitude | None = None
+    contact_phone: str | None = Field(default=None, min_length=5, max_length=20)
     cuisine_type: str | None = None
     is_accepting_orders: bool | None = None
-    max_concurrent_orders: int | None = None
-    avg_prep_time_minutes: int | None = None
+    max_concurrent_orders: int | None = Field(default=None, ge=1)
+    avg_prep_time_minutes: int | None = Field(default=None, ge=1, le=240)
 
 
 class RestaurantResponse(BaseModel):
@@ -50,11 +79,11 @@ class RestaurantResponse(BaseModel):
 
 
 class MenuCategoryCreate(BaseModel):
-    name: str
+    name: str = Field(min_length=1, max_length=100)
 
 
-class MenuCategoryUpdate(BaseModel):
-    name: str | None = None
+class MenuCategoryUpdate(_PatchModel):
+    name: str | None = Field(default=None, min_length=1, max_length=100)
 
 
 class MenuCategoryResponse(BaseModel):
@@ -67,18 +96,21 @@ class MenuCategoryResponse(BaseModel):
 
 class MenuItemCreate(BaseModel):
     category_id: str
-    name: str
+    name: str = Field(min_length=1, max_length=200)
     description: str = ""
-    price: float
-    stock_count: int | None = None
+    price: Money
+    stock_count: int | None = Field(default=None, ge=0)  # None = unlimited
 
 
-class MenuItemUpdate(BaseModel):
-    name: str | None = None
+class MenuItemUpdate(_PatchModel):
+    # stock_count: explicit null is meaningful — it switches to unlimited stock.
+    nullable_fields = frozenset({"stock_count"})
+
+    name: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = None
-    price: float | None = None
+    price: Money | None = None
     is_available: bool | None = None
-    stock_count: int | None = None
+    stock_count: int | None = Field(default=None, ge=0)
 
 
 class MenuItemResponse(BaseModel):
@@ -95,30 +127,46 @@ class MenuItemResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+def check_promotion_rules(
+    discount_type: str, discount_value: Decimal, valid_from: datetime, valid_until: datetime
+) -> None:
+    """Shared by PromotionCreate and the PATCH route (which re-checks after
+    merging a partial update onto the stored row). Raises ValueError."""
+    if valid_until <= valid_from:
+        raise ValueError("valid_until must be after valid_from")
+    if discount_type == "percentage" and discount_value > 100:
+        raise ValueError("a percentage discount cannot exceed 100")
+
+
 class PromotionCreate(BaseModel):
-    code: str
-    discount_type: str  # percentage | fixed_amount
-    discount_value: float
-    valid_from: datetime
-    valid_until: datetime
-    max_uses: int | None = None
+    code: str = Field(min_length=1, max_length=50)
+    discount_type: DiscountType
+    discount_value: Annotated[Decimal, Field(gt=0, max_digits=10, decimal_places=2)]
+    # AwareDatetime: a timezone is required. Comparing a naive datetime with
+    # the timezone-aware values stored in Postgres raises TypeError (a 500).
+    valid_from: AwareDatetime
+    valid_until: AwareDatetime
+    max_uses: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="after")
-    def _check_date_range(self) -> Self:
-        if self.valid_until <= self.valid_from:
-            raise ValueError("valid_until must be after valid_from")
+    def _check_rules(self) -> Self:
+        check_promotion_rules(
+            self.discount_type, self.discount_value, self.valid_from, self.valid_until
+        )
         return self
 
 
-class PromotionUpdate(BaseModel):
+class PromotionUpdate(_PatchModel):
     # No `code` field, deliberately — renaming a promo code out from under
     # anyone already holding/redeeming it is more confusing than useful;
     # create a new code instead.
-    discount_type: str | None = None
-    discount_value: float | None = None
-    valid_from: datetime | None = None
-    valid_until: datetime | None = None
-    max_uses: int | None = None
+    nullable_fields = frozenset({"max_uses"})  # null = unlimited uses
+
+    discount_type: DiscountType | None = None
+    discount_value: Annotated[Decimal, Field(gt=0, max_digits=10, decimal_places=2)] | None = None
+    valid_from: AwareDatetime | None = None
+    valid_until: AwareDatetime | None = None
+    max_uses: int | None = Field(default=None, ge=1)
     is_active: bool | None = None
 
 
@@ -133,5 +181,22 @@ class PromotionResponse(BaseModel):
     max_uses: int | None
     times_used: int
     is_active: bool
+
+    model_config = {"from_attributes": True}
+
+
+class StatusChangeRequest(BaseModel):
+    """Optional body for approve/suspend — recorded in the audit trail."""
+
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class StatusHistoryResponse(BaseModel):
+    from_status: str | None
+    to_status: str
+    actor_id: str
+    actor_role: str
+    reason: str | None
+    created_at: datetime
 
     model_config = {"from_attributes": True}

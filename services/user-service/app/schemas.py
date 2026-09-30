@@ -1,30 +1,38 @@
 from datetime import datetime
+from typing import Annotated
 
-from pydantic import BaseModel, EmailStr
+from pydantic import AfterValidator, BaseModel, EmailStr, Field
 
 # Public self-registration is limited to these roles — system_admin accounts
 # are created out-of-band (seed script / DB), not self-serve.
 PUBLIC_ROLES = ("customer", "restaurant_admin", "rider")
 
+# Lowercased so "A@x.com" and "a@x.com" can't become two accounts (the unique
+# index on users.email is case-sensitive).
+NormalizedEmail = Annotated[EmailStr, AfterValidator(str.lower)]
+# Upper bound caps the cost of hashing attacker-supplied input with argon2.
+NewPassword = Annotated[str, Field(min_length=8, max_length=128)]
+
 
 class RegisterRequest(BaseModel):
-    email: EmailStr
-    password: str
-    full_name: str
-    phone_number: str
+    email: NormalizedEmail
+    password: NewPassword
+    full_name: str = Field(min_length=1, max_length=200)
+    phone_number: str = Field(min_length=5, max_length=20)
     role: str = "customer"
 
 
 class BootstrapAdminRequest(BaseModel):
-    email: EmailStr
-    password: str
-    full_name: str
-    phone_number: str
+    email: NormalizedEmail
+    password: NewPassword
+    full_name: str = Field(min_length=1, max_length=200)
+    phone_number: str = Field(min_length=5, max_length=20)
 
 
 class LoginRequest(BaseModel):
-    email: EmailStr
-    password: str
+    email: NormalizedEmail
+    # No min length here — login shouldn't reveal the password policy.
+    password: str = Field(max_length=128)
 
 
 class RefreshRequest(BaseModel):
@@ -56,8 +64,8 @@ class AddressCreate(BaseModel):
     line1: str
     line2: str | None = None
     city: str
-    lat: float
-    lng: float
+    lat: float = Field(ge=-90, le=90)
+    lng: float = Field(ge=-180, le=180)
     is_default: bool = False
 
 

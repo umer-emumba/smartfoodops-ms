@@ -5,7 +5,7 @@ class BaseServiceSettings(BaseSettings):
     """Common config every service loads. Extend per-service for extra vars.
 
     Loaded from environment / `.env` via pydantic-settings — see each service's
-    `.env.example` for the required vars.
+    `env.example` for the required vars.
     """
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")

@@ -4,6 +4,8 @@ from typing import Generic, TypeVar
 
 from pydantic import BaseModel
 
+from sfo_common.errors import ValidationAppError
+
 T = TypeVar("T")
 
 
@@ -23,6 +25,11 @@ def encode_cursor(created_at: datetime, id_: str) -> str:
 
 
 def decode_cursor(cursor: str) -> tuple[datetime, str]:
-    raw = base64.urlsafe_b64decode(cursor.encode()).decode()
-    created_at_str, id_ = raw.split("|", 1)
-    return datetime.fromisoformat(created_at_str), id_
+    """Raises ValidationAppError (422) on a malformed cursor — it's client
+    input, so a bad one is the client's error, not a 500."""
+    try:
+        raw = base64.urlsafe_b64decode(cursor.encode()).decode()
+        created_at_str, id_ = raw.split("|", 1)
+        return datetime.fromisoformat(created_at_str), id_
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise ValidationAppError("Invalid pagination cursor") from exc

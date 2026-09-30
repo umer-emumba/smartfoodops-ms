@@ -1,10 +1,13 @@
+import time
+
+import jwt
 import pytest
+from app import security
+from app.config import settings
+from app.security import authenticate, is_public_route
 from sfo_auth import Role, create_access_token
 from sfo_common.errors import UnauthorizedError
 from starlette.requests import Request
-
-from app.config import settings
-from app.security import is_public_route, require_valid_bearer_token
 
 
 def _request_with_auth_header(value: str | None) -> Request:
@@ -35,22 +38,54 @@ def test_private_routes_not_misclassified_as_public() -> None:
     assert not is_public_route("GET", "users", "me")
 
 
-def test_require_valid_bearer_token_rejects_missing_header() -> None:
-    with pytest.raises(UnauthorizedError):
-        require_valid_bearer_token(_request_with_auth_header(None))
+@pytest.fixture
+def not_blocked(monkeypatch):
+    async def exists(_: str) -> int:
+        return 0
+
+    monkeypatch.setattr(security.redis, "exists", exists)
 
 
-def test_require_valid_bearer_token_rejects_garbage_token() -> None:
-    with pytest.raises(UnauthorizedError):
-        require_valid_bearer_token(_request_with_auth_header("Bearer not-a-jwt"))
-
-
-def test_require_valid_bearer_token_accepts_valid_token() -> None:
-    token = create_access_token(
+def _token(role: str = "customer") -> str:
+    return create_access_token(
         user_id="u1",
-        role=Role.CUSTOMER,
+        role=Role(role),
         secret=settings.jwt_secret,
         algorithm=settings.jwt_algorithm,
         ttl_minutes=15,
     )
-    require_valid_bearer_token(_request_with_auth_header(f"Bearer {token}"))
+
+
+@pytest.mark.asyncio
+async def test_private_route_rejects_missing_token(not_blocked) -> None:
+    with pytest.raises(UnauthorizedError):
+        await authenticate(_request_with_auth_header(None), public=False)
+
+
+@pytest.mark.asyncio
+async def test_private_route_rejects_garbage_token(not_blocked) -> None:
+    with pytest.raises(UnauthorizedError):
+        await authenticate(_request_with_auth_header("Bearer not-a-jwt"), public=False)
+
+
+@pytest.mark.asyncio
+async def test_private_route_accepts_valid_token(not_blocked) -> None:
+    await authenticate(_request_with_auth_header(f"Bearer {_token()}"), public=False)
+
+
+@pytest.mark.asyncio
+async def test_public_route_tolerates_missing_or_bad_token(not_blocked) -> None:
+    await authenticate(_request_with_auth_header(None), public=True)
+    await authenticate(_request_with_auth_header("Bearer not-a-jwt"), public=True)
+
+
+@pytest.mark.asyncio
+async def test_correctly_signed_token_with_unknown_role_is_invalid(not_blocked) -> None:
+    now = int(time.time())
+    token = jwt.encode(
+        {"sub": "u1", "role": "superuser", "iat": now, "exp": now + 600},
+        settings.jwt_secret,
+        algorithm=settings.jwt_algorithm,
+    )
+    with pytest.raises(UnauthorizedError):
+        await authenticate(_request_with_auth_header(f"Bearer {token}"), public=False)
