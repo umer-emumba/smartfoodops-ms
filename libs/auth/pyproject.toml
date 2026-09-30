@@ -1,0 +1,21 @@
+[project]
+name = "sfo-auth"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "pyjwt>=2.9",
+    "pwdlib[argon2]>=0.2",
+    "redis>=5.0",
+    "sfo-common",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sfo_auth"]
+
+[tool.uv.sources]
+sfo-common = { workspace = true }
