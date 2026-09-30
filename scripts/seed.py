@@ -40,7 +40,7 @@ def register_and_login(
 
 
 def bootstrap_admin_and_login(client: httpx.Client) -> str:
-    email = "admin@demo.smartfoodops.local"
+    email = "admin@demo.smartfoodops.example"
     resp = client.post(
         "/v1/auth/bootstrap-admin",
         headers={"X-Bootstrap-Secret": BOOTSTRAP_SECRET},
@@ -68,7 +68,7 @@ def main() -> None:
         print("Registering demo customer...")
         customer_token = register_and_login(
             client,
-            email="customer@demo.smartfoodops.local",
+            email="customer@demo.smartfoodops.example",
             role="customer",
             full_name="Demo Customer",
             phone_number="+923000000001",
@@ -89,7 +89,7 @@ def main() -> None:
         print("Registering demo restaurant admin...")
         restaurant_admin_token = register_and_login(
             client,
-            email="restaurant-admin@demo.smartfoodops.local",
+            email="restaurant-admin@demo.smartfoodops.example",
             role="restaurant_admin",
             full_name="Demo Restaurant Admin",
             phone_number="+923000000002",
@@ -143,7 +143,7 @@ def main() -> None:
         print("Registering demo rider...")
         rider_token = register_and_login(
             client,
-            email="rider@demo.smartfoodops.local",
+            email="rider@demo.smartfoodops.example",
             role="rider",
             full_name="Demo Rider",
             phone_number="+923000000003",
@@ -159,10 +159,10 @@ def main() -> None:
 
         print(f"\nDone. Demo restaurant_id={restaurant_id}, approved and active.")
         print("Demo accounts (password for all): " + PASSWORD)
-        print("  admin@demo.smartfoodops.local (system_admin)")
-        print("  customer@demo.smartfoodops.local")
-        print("  restaurant-admin@demo.smartfoodops.local")
-        print("  rider@demo.smartfoodops.local (approved)")
+        print("  admin@demo.smartfoodops.example (system_admin)")
+        print("  customer@demo.smartfoodops.example")
+        print("  restaurant-admin@demo.smartfoodops.example")
+        print("  rider@demo.smartfoodops.example (approved)")
 
 
 if __name__ == "__main__":

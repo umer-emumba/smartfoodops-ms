@@ -1,8 +1,3 @@
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
-
-from fastapi import FastAPI
-from fastapi_limiter import FastAPILimiter
 from sfo_common import create_app
 from sfo_common.health import add_health_routes
 from sfo_observability import configure_logging
@@ -14,19 +9,11 @@ from app.security import DenyListGuardMiddleware
 
 configure_logging(settings.service_name, settings.log_level)
 
-
-@asynccontextmanager
-async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
-    await FastAPILimiter.init(redis)
-    yield
-
-
 app = create_app(
     title="SmartFoodOps — API Gateway",
     enable_cors=True,
     cors_origins=settings.cors_origin_list,
 )
-app.router.lifespan_context = _lifespan
 
 app.add_middleware(DenyListGuardMiddleware)
 

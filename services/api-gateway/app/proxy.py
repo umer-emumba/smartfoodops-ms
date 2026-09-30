@@ -1,10 +1,10 @@
 import httpx
 from fastapi import APIRouter, Depends, Request, Response
-from fastapi_limiter.depends import RateLimiter
 from sfo_common.errors import NotFoundError
 from sfo_common.middleware import CORRELATION_ID_HEADER, get_correlation_id
 
 from app.config import settings
+from app.rate_limit import RateLimiter
 from app.security import is_public_route, require_valid_bearer_token
 
 router = APIRouter()
@@ -56,10 +56,27 @@ async def forward_request(resource: str, rest_of_path: str, request: Request) ->
     )
 
 
+_default_rate_limit = Depends(
+    RateLimiter(times=settings.rate_limit_default_per_minute, seconds=60, bucket="default")
+)
+
+
+# Two routes, one handler: "/v1/{resource}/{rest_of_path:path}" requires at
+# least one "/" after {resource} to match at all (Starlette's `:path`
+# converter needs the separator present, even to capture an empty string) —
+# without this bare-resource route, a call like `POST /v1/restaurants` (no
+# trailing segment) 307-redirects to "/v1/restaurants/" instead of reaching
+# this handler, and most HTTP clients (including httpx.Client's default
+# config) don't auto-follow redirects, especially for non-GET methods.
+@router.api_route(
+    "/v1/{resource}",
+    methods=["GET", "POST", "PATCH", "PUT", "DELETE"],
+    dependencies=[_default_rate_limit],
+)
 @router.api_route(
     "/v1/{resource}/{rest_of_path:path}",
     methods=["GET", "POST", "PATCH", "PUT", "DELETE"],
-    dependencies=[Depends(RateLimiter(times=settings.rate_limit_default_per_minute, seconds=60))],
+    dependencies=[_default_rate_limit],
 )
-async def proxy(resource: str, rest_of_path: str, request: Request) -> Response:
+async def proxy(resource: str, *, rest_of_path: str = "", request: Request) -> Response:
     return await forward_request(resource, rest_of_path, request)

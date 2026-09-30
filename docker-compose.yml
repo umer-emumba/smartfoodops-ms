@@ -94,19 +94,32 @@ services:
     ports: ["15672:15672"] # management UI
 
   kafka:
-    image: bitnami/kafka:3.7
+    # bitnami/kafka was pulled from the free Docker Hub catalog after this
+    # compose file was first written (Bitnami moved older free tags behind a
+    # paywall) — confluentinc/cp-kafka, version-matched to schema-registry
+    # below, replaces it: same vendor/release train as an already-used image,
+    # actively maintained, no free-tier ambiguity.
+    image: confluentinc/cp-kafka:7.7.0
     environment:
-      KAFKA_CFG_NODE_ID: "0"
-      KAFKA_CFG_PROCESS_ROLES: controller,broker
-      KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
-      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
-      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
-      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 0@kafka:9093
-      ALLOW_PLAINTEXT_LISTENER: "yes"
-    volumes: ["kafka-data:/bitnami/kafka"]
+      KAFKA_NODE_ID: "1"
+      KAFKA_PROCESS_ROLES: controller,broker
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      # Single-broker dev cluster — Confluent's defaults (replication factor 3)
+      # would otherwise fail to ever reach "healthy" with only one broker.
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      # Fixed, valid-format KRaft cluster ID — the same literal Confluent's own
+      # quickstart docs use for single-node local dev; any valid base64 UUID
+      # works, but pinning one keeps `docker compose down -v && up` reproducible.
+      CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"
+    volumes: ["kafka-data:/var/lib/kafka/data"]
     healthcheck:
-      test: ["CMD-SHELL", "kafka-topics.sh --bootstrap-server localhost:9092 --list"]
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list"]
       interval: 10s
       timeout: 10s
       retries: 10
@@ -139,25 +152,17 @@ services:
       TEMPORAL_CORS_ORIGINS: http://localhost:3000
     ports: ["8088:8080"]
 
-  traefik:
-    image: traefik:v3.1
-    command:
-      - "--providers.docker=true"
-      - "--providers.docker.exposedbydefault=false"
-      - "--entrypoints.web.address=:80"
-    ports: ["8080:80"]
-    volumes: ["/var/run/docker.sock:/var/run/docker.sock:ro"]
-
   # ---------- App services ----------
+  # No Traefik / reverse proxy in front of api-gateway here, deliberately —
+  # gateway HA (multiple replicas + load balancing) is a Kubernetes-deployment
+  # concern (Service + Deployment/HPA), not something a single dev laptop can
+  # meaningfully demonstrate. See docs/technical-documentation.md#gateway.
   api-gateway:
     build: { context: ., dockerfile: services/api-gateway/Dockerfile }
     env_file: [services/api-gateway/.env]
     depends_on:
       redis: { condition: service_healthy }
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.gateway.rule=PathPrefix(`/`)"
-      - "traefik.http.services.gateway.loadbalancer.server.port=8000"
+    ports: ["8080:8000"]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 5s

@@ -45,6 +45,11 @@ class ForbiddenError(AppError):
     code = "forbidden"
 
 
+class TooManyRequestsError(AppError):
+    status_code = status.HTTP_429_TOO_MANY_REQUESTS
+    code = "rate_limited"
+
+
 def _envelope(code: str, message: str, details: dict | None = None) -> dict:
     return {"error": {"code": code, "message": message, "details": details or {}}}
 
