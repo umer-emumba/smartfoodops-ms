@@ -108,10 +108,11 @@ never fully closed out. Fixed:
 Re-read `Guidelines.pdf`/`Part A.pdf` directly rather than relying on this file's own
 tracking. Confirmed everything above is accurate and found two real gaps:
 
-- [ ] **No git repository** — this directory has never been `git init`'d, zero commit
-      history. Guidelines' Submission Guidelines explicitly require "meaningful commit
-      history showing incremental system evolution." Not fixed yet — needs your go-ahead
-      before I run `git init`/commit anything.
+- [x] **No git repository** — fixed: `git init`, initial commit capturing everything built
+      so far, pushed to `origin main`
+      (https://github.com/umer-emumba/smartfoodops-ms). Commit history from this point
+      forward will be incremental per the Guidelines' requirement — this first commit is
+      necessarily a single large snapshot since the work already existed unversioned.
 - [x] **MongoDB was declared but never used** — Guidelines' Week 1 scope lists "Database
       schema design (PostgreSQL + NoSQL)," but `delivery-service` only had `motor` as a
       dependency and `MONGO_URL` configured, no actual client or collection. Fixed: added
