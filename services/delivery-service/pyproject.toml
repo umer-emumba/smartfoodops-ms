@@ -8,7 +8,8 @@ dependencies = [
     "asyncpg>=0.29",
     "sqlalchemy[asyncio]>=2.0.35",
     "alembic>=1.13",
-    "motor>=3.6",
+    # Native async client (AsyncMongoClient) — replaces the deprecated Motor.
+    "pymongo>=4.13",
     "redis>=5.0",
     "sfo-common",
     "sfo-auth",

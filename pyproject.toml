@@ -39,3 +39,9 @@ extend-immutable-calls = [
 python_version = "3.12"
 ignore_missing_imports = true
 disallow_untyped_defs = true
+
+[tool.pytest.ini_options]
+# Found from every service directory (none has its own pytest section).
+# auto: async tests and fixtures need no @pytest.mark.asyncio marker.
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"

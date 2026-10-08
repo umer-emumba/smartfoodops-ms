@@ -105,7 +105,6 @@ def _client() -> AsyncClient:
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://t")
 
 
-@pytest.mark.asyncio
 async def test_active_menu_cached_and_publicly_cacheable(env) -> None:
     async with _client() as c:
         first = await c.get(f"/v1/restaurants/{RID}/menu")
@@ -117,7 +116,6 @@ async def test_active_menu_cached_and_publicly_cacheable(env) -> None:
     assert second.headers["cache-control"] == cache.PUBLIC_CACHE_CONTROL
 
 
-@pytest.mark.asyncio
 async def test_suspended_restaurant_never_cached_or_shared(env) -> None:
     env["restaurant"].status = "suspended"
     async with _client() as c:
@@ -131,7 +129,6 @@ async def test_suspended_restaurant_never_cached_or_shared(env) -> None:
     assert env["redis"].store == {}
 
 
-@pytest.mark.asyncio
 async def test_status_change_invalidates_cached_views(env) -> None:
     async with _client() as c:
         await c.get(f"/v1/restaurants/{RID}")
@@ -146,7 +143,6 @@ async def test_status_change_invalidates_cached_views(env) -> None:
         assert (await c.get(f"/v1/restaurants/{RID}/menu")).status_code == 404
 
 
-@pytest.mark.asyncio
 async def test_redis_down_falls_back_to_database(env, monkeypatch) -> None:
     async def down(*_a, **_k):
         raise RedisConnectionError("down")
@@ -159,7 +155,6 @@ async def test_redis_down_falls_back_to_database(env, monkeypatch) -> None:
     assert r.json()[0]["id"] == "m1"
 
 
-@pytest.mark.asyncio
 async def test_public_list_is_cacheable(env, monkeypatch) -> None:
     async def list_restaurants(_session, **_kw):
         return {"items": [env["restaurant"]], "next_cursor": None}

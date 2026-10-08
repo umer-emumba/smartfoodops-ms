@@ -1,6 +1,5 @@
 from datetime import UTC, datetime
 
-import pytest
 from app.repository import _escape_like, purge_expired_refresh_tokens
 from sfo_auth import (
     generate_refresh_token,
@@ -12,7 +11,6 @@ from sfo_auth import (
 from sqlalchemy.dialects import postgresql
 
 
-@pytest.mark.asyncio
 async def test_password_hash_round_trip_off_event_loop() -> None:
     hashed = await hash_password("correct horse")
     assert hashed.startswith("$argon2")
@@ -45,7 +43,6 @@ class _RecordingSession:
         return type("Result", (), {"rowcount": 7})()
 
 
-@pytest.mark.asyncio
 async def test_purge_deletes_only_expired_rows_in_a_bounded_batch() -> None:
     session = _RecordingSession()
     deleted = await purge_expired_refresh_tokens(

@@ -1,11 +1,9 @@
-import pytest
 from app.main import app
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from sfo_common.health import add_health_routes
 
 
-@pytest.mark.asyncio
 async def test_health_reports_status() -> None:
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -14,7 +12,6 @@ async def test_health_reports_status() -> None:
     assert "status" in response.json()
 
 
-@pytest.mark.asyncio
 async def test_liveness_ignores_dependencies_readiness_does_not() -> None:
     async def dependency_down() -> bool:
         return False

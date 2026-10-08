@@ -41,7 +41,6 @@ def stub_restaurant(monkeypatch):
     return state
 
 
-@pytest.mark.asyncio
 async def test_prices_and_names_come_from_restaurant_service(stub_restaurant) -> None:
     items = await _build_items(_order(("biryani", 2), ("wrap", 3)))
     assert [(i.item_name_snapshot, i.unit_price) for i in items] == [
@@ -57,39 +56,33 @@ def test_client_cannot_send_price() -> None:
     assert not hasattr(order.items[0], "unit_price")
 
 
-@pytest.mark.asyncio
 async def test_unknown_item_rejected(stub_restaurant) -> None:
     with pytest.raises(ValidationAppError):
         await _build_items(_order(("not-on-menu", 1)))
 
 
-@pytest.mark.asyncio
 async def test_unavailable_item_rejected(stub_restaurant) -> None:
     with pytest.raises(ConflictError):
         await _build_items(_order(("soldout", 1)))
 
 
-@pytest.mark.asyncio
 async def test_stock_checked_across_split_lines(stub_restaurant) -> None:
     # 3 + 3 exceeds stock of 5 even though each line alone fits.
     with pytest.raises(ConflictError):
         await _build_items(_order(("biryani", 3), ("biryani", 3)))
 
 
-@pytest.mark.asyncio
 async def test_quote_requests_each_item_once(stub_restaurant) -> None:
     await _build_items(_order(("biryani", 1), ("wrap", 1), ("biryani", 2)))
     assert stub_restaurant["requested"] == ["biryani", "wrap"]
 
 
-@pytest.mark.asyncio
 async def test_restaurant_not_accepting_orders(stub_restaurant) -> None:
     stub_restaurant["restaurant"] = RestaurantSnapshot(RESTAURANT_ID, "active", False)
     with pytest.raises(ConflictError):
         await _build_items(_order(("biryani", 1)))
 
 
-@pytest.mark.asyncio
 async def test_inactive_restaurant_rejected(stub_restaurant) -> None:
     stub_restaurant["restaurant"] = RestaurantSnapshot(RESTAURANT_ID, "suspended", True)
     with pytest.raises(NotFoundError):

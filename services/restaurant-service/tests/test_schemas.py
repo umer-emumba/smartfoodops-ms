@@ -2,7 +2,10 @@ from decimal import Decimal
 
 import pytest
 from app.schemas import MenuItemCreate, MenuItemUpdate, PromotionCreate, RestaurantUpdate
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
 from pydantic import ValidationError
+from sfo_common.errors import register_exception_handlers
 
 _PROMO = {
     "code": "WELCOME10",
@@ -49,13 +52,9 @@ def test_bad_coordinates_rejected() -> None:
         RestaurantUpdate.model_validate({"lat": 200})
 
 
-def test_custom_validator_error_is_a_422_envelope() -> None:
+async def test_custom_validator_error_is_a_422_envelope() -> None:
     """Regression: ValueError from a model validator used to crash the shared
     422 handler (non-serializable ctx) and surface as a 500."""
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
-    from sfo_common.errors import register_exception_handlers
-
     app = FastAPI()
     register_exception_handlers(app)
 
@@ -63,6 +62,7 @@ def test_custom_validator_error_is_a_422_envelope() -> None:
     async def patch(body: RestaurantUpdate) -> dict:
         return {}
 
-    r = TestClient(app).patch("/r", json={"name": None})
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+        r = await client.patch("/r", json={"name": None})
     assert r.status_code == 422
     assert "cannot be null" in r.text

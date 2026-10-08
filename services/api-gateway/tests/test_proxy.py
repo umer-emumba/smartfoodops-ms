@@ -55,7 +55,6 @@ def _client() -> AsyncClient:
     )
 
 
-@pytest.mark.asyncio
 async def test_backend_unreachable_is_502(gateway) -> None:
     def handler(request):
         raise httpx.ConnectError("refused", request=request)
@@ -67,7 +66,6 @@ async def test_backend_unreachable_is_502(gateway) -> None:
     assert r.json()["error"]["code"] == "bad_gateway"
 
 
-@pytest.mark.asyncio
 async def test_backend_timeout_is_504(gateway) -> None:
     def handler(request):
         raise httpx.ReadTimeout("slow", request=request)
@@ -79,7 +77,6 @@ async def test_backend_timeout_is_504(gateway) -> None:
     assert r.json()["error"]["code"] == "gateway_timeout"
 
 
-@pytest.mark.asyncio
 async def test_blocked_user_is_403_envelope(gateway, monkeypatch) -> None:
     async def blocked(_key, _window, deny_key):
         return 1, 60_000, True
@@ -92,7 +89,6 @@ async def test_blocked_user_is_403_envelope(gateway, monkeypatch) -> None:
     assert r.json()["error"]["message"] == "Account is blocked"
 
 
-@pytest.mark.asyncio
 async def test_forwards_and_strips_hop_by_hop_headers(gateway) -> None:
     seen = {}
 
@@ -116,7 +112,6 @@ async def test_forwards_and_strips_hop_by_hop_headers(gateway) -> None:
     assert "\n" not in seen["x-request-id"]
 
 
-@pytest.mark.asyncio
 async def test_dot_dot_path_rejected(gateway) -> None:
     gateway(lambda request: httpx.Response(200, json={"leaked": True}))
     async with _client() as c:
@@ -124,7 +119,6 @@ async def test_dot_dot_path_rejected(gateway) -> None:
     assert r.status_code == 404
 
 
-@pytest.mark.asyncio
 async def test_docs_serves_gateway_index() -> None:
     async with _client() as c:
         r = await c.get("/docs")
@@ -132,7 +126,6 @@ async def test_docs_serves_gateway_index() -> None:
     assert "SmartFoodOps — API Documentation" in r.text
 
 
-@pytest.mark.asyncio
 async def test_full_backend_pool_is_503_not_504(gateway) -> None:
     def handler(request):
         raise httpx.PoolTimeout("pool full", request=request)
@@ -150,7 +143,6 @@ def test_each_backend_has_its_own_connection_pool() -> None:
     assert len({id(c) for c in proxy.clients.values()}) == len(proxy.clients)
 
 
-@pytest.mark.asyncio
 async def test_rate_limit_keyed_by_user_when_authenticated(gateway, monkeypatch) -> None:
     keys = []
 
@@ -170,7 +162,6 @@ async def test_rate_limit_keyed_by_user_when_authenticated(gateway, monkeypatch)
     ]
 
 
-@pytest.mark.asyncio
 async def test_rate_limit_exceeded_is_429_with_retry_after(gateway, monkeypatch) -> None:
     async def over_limit(_key, _window, deny_key):
         return 121, 4_000, False
@@ -183,7 +174,6 @@ async def test_rate_limit_exceeded_is_429_with_retry_after(gateway, monkeypatch)
     assert r.json()["error"]["details"]["retry_after_ms"] == 4_000
 
 
-@pytest.mark.asyncio
 async def test_rate_limiter_fails_open_when_redis_is_down(gateway, monkeypatch) -> None:
     async def redis_down(*_a, **_k):
         raise RedisConnectionError("down")
@@ -196,7 +186,6 @@ async def test_rate_limiter_fails_open_when_redis_is_down(gateway, monkeypatch) 
     assert r.status_code == 200
 
 
-@pytest.mark.asyncio
 async def test_deny_list_still_fails_closed_when_redis_is_down(gateway, monkeypatch) -> None:
     async def redis_down(*_a, **_k):
         raise RedisConnectionError("down")
@@ -209,7 +198,6 @@ async def test_deny_list_still_fails_closed_when_redis_is_down(gateway, monkeypa
     assert r.status_code == 503
 
 
-@pytest.mark.asyncio
 async def test_deny_list_not_rechecked_when_rate_limiter_fetched_it(gateway, monkeypatch) -> None:
     async def must_not_be_called(_: str) -> int:
         raise AssertionError("second Redis round-trip")
@@ -243,7 +231,6 @@ class _FakePipeline:
         return [[3, 59_000]] + [1 for cmd in self.sent if cmd[0] == "exists"]
 
 
-@pytest.mark.asyncio
 async def test_redis_checks_pipeline_one_round_trip(monkeypatch) -> None:
     sent: list = []
     monkeypatch.setattr(rate_limit.redis, "pipeline", lambda transaction: _FakePipeline(sent))

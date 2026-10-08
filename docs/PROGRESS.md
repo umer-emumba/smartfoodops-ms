@@ -355,7 +355,16 @@ Week 1 scope only; Week 2/3 design items are tracked separately.
 - [x] restaurant-service: Redis cache for an active restaurant's detail/menu/categories
       (60s TTL, invalidated on every write, fail-open), `Cache-Control` on public reads
 
-**Tests**: gateway 23, order 14, user 7, restaurant 14 (61 total, was 36).
+**Tooling & deprecations**:
+- [x] Money typed `Decimal` end to end (`sfo_common.money.MoneyAmount` keeps JSON numbers)
+- [x] ruff clean (was 215 findings) and `ruff format`-ed; mypy clean per service with
+      `disallow_untyped_defs`; `.pre-commit-config.yaml` + `scripts/check.sh`
+- [x] delivery-service: Motor (deprecated) → PyMongo's `AsyncMongoClient`; Mongo client
+      now closed on shutdown
+- [x] Tests: no deprecated Starlette `TestClient`; pytest-asyncio `asyncio_mode = "auto"`
+- [x] Dev JWT secret in `env.example` lengthened to ≥ 32 bytes (update local `.env` files)
+
+**Tests**: gateway 23, order 15, user 7, restaurant 14 (62 total, was 36).
 
 **Breaking changes**: list endpoints now return `{"items", "next_cursor"}` instead of a bare
 array. Refresh tokens issued before this change no longer verify (they were argon2-hashed),
@@ -366,7 +375,11 @@ so existing sessions must log in again.
 - [ ] Streaming proxy (needed for Week 2 WebSocket/SSE tracking), pure-ASGI middleware
 - [ ] Declarative gateway route-policy table (public / rate bucket / timeout per route)
 - [ ] RS256 (user-service signs; others verify with the public key) instead of one shared
-      HS256 secret; longer dev JWT secret (PyJWT warns the dummy one is < 32 bytes)
+      HS256 secret
+- [ ] Before Week 2: replace the deprecated `temporalio/auto-setup:1.24` image (Temporal CLI
+      dev server, or `temporalio/server` + `admin-tools` for schema setup)
+- [ ] Before Week 3: `cp-kafka`/`cp-schema-registry` 7.7 → 8.x (7.7 standard support ended
+      2026-07-26); `rabbitmq:3` → 4.x (3.13 is out of community support), or drop it with Celery
 - [ ] Compose network segmentation (per-service data networks); RabbitMQ/Redis credentials
 - [ ] Rate limiting behind a load balancer: set uvicorn `FORWARDED_ALLOW_IPS` to the LB's
       address so the client IP (not the LB's) is the rate-limit key

@@ -65,30 +65,25 @@ def _token(role: str = "customer") -> str:
     )
 
 
-@pytest.mark.asyncio
 async def test_private_route_rejects_missing_token(not_blocked) -> None:
     with pytest.raises(UnauthorizedError):
         await authenticate(_request_with_auth_header(None), public=False)
 
 
-@pytest.mark.asyncio
 async def test_private_route_rejects_garbage_token(not_blocked) -> None:
     with pytest.raises(UnauthorizedError):
         await authenticate(_request_with_auth_header("Bearer not-a-jwt"), public=False)
 
 
-@pytest.mark.asyncio
 async def test_private_route_accepts_valid_token(not_blocked) -> None:
     await authenticate(_request_with_auth_header(f"Bearer {_token()}"), public=False)
 
 
-@pytest.mark.asyncio
 async def test_public_route_tolerates_missing_or_bad_token(not_blocked) -> None:
     await authenticate(_request_with_auth_header(None), public=True)
     await authenticate(_request_with_auth_header("Bearer not-a-jwt"), public=True)
 
 
-@pytest.mark.asyncio
 async def test_correctly_signed_token_with_unknown_role_is_invalid(not_blocked) -> None:
     now = int(time.time())
     token = jwt.encode(
