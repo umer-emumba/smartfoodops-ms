@@ -11,7 +11,12 @@ configure_logging(settings.service_name, settings.log_level)
 
 app = create_app(
     title="SmartFoodOps — Notification Service",
-    tags_metadata=[{"name": "notifications", "description": "Order/delivery notifications (Kafka consumer added Week 3)"}],
+    tags_metadata=[
+        {
+            "name": "notifications",
+            "description": "Order/delivery notifications (Kafka consumer added Week 3)",
+        }
+    ],
 )
 
 app.include_router(router)

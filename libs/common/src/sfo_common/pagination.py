@@ -1,16 +1,14 @@
 import base64
 from datetime import datetime
-from typing import Any, Generic, TypeVar
+from typing import Any
 
 from pydantic import BaseModel
 from sqlalchemy import Select, tuple_
 
 from sfo_common.errors import ValidationAppError
 
-T = TypeVar("T")
 
-
-class Page(BaseModel, Generic[T]):
+class Page[T](BaseModel):
     """Cursor-based (keyset) pagination envelope — used on all list endpoints
     instead of offset/limit, which degrades on large tables and skips/repeats
     rows when new ones are inserted between page requests. See

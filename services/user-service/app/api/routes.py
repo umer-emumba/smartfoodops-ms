@@ -154,7 +154,9 @@ async def login(body: LoginRequest, session: AsyncSession = Depends(get_session)
 
 
 @router.post("/auth/refresh", response_model=TokenResponse)
-async def refresh(body: RefreshRequest, session: AsyncSession = Depends(get_session)) -> TokenResponse:
+async def refresh(
+    body: RefreshRequest, session: AsyncSession = Depends(get_session)
+) -> TokenResponse:
     try:
         lookup_id, raw_secret = parse_refresh_token(body.refresh_token)
     except ValueError as exc:

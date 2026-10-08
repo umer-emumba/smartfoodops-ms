@@ -11,7 +11,9 @@ configure_logging(settings.service_name, settings.log_level)
 
 app = create_app(
     title="SmartFoodOps — Payment Service",
-    tags_metadata=[{"name": "payments", "description": "Authorize/capture/refund simulation (Week 2)"}],
+    tags_metadata=[
+        {"name": "payments", "description": "Authorize/capture/refund simulation (Week 2)"}
+    ],
 )
 
 app.include_router(router)

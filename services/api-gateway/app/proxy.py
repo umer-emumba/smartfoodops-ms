@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 import httpx
@@ -83,7 +84,7 @@ _EXCLUDED_REQUEST_HEADERS = _HOP_BY_HOP | {"host", "content-length", CORRELATION
 _EXCLUDED_RESPONSE_HEADERS = _HOP_BY_HOP | {"content-length", "content-encoding"}
 
 
-def _filter_headers(headers: httpx.Headers | dict, excluded: set[str]) -> dict[str, str]:
+def _filter_headers(headers: Mapping[str, str], excluded: set[str]) -> dict[str, str]:
     connection_listed = {
         h.strip().lower() for h in headers.get("connection", "").split(",") if h.strip()
     }

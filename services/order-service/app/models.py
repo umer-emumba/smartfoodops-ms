@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from decimal import Decimal
 from enum import StrEnum
 
 from sfo_common import new_id
@@ -59,7 +60,9 @@ class Order(Base):
     # customer support / receipts (docs/technical-documentation.md).
     order_number: Mapped[int] = mapped_column(Integer, Identity(start=1000), unique=True)
     customer_id: Mapped[str] = mapped_column(String)  # opaque ref to user-service
-    restaurant_id: Mapped[str] = mapped_column(String, index=True)  # opaque ref to restaurant-service
+    restaurant_id: Mapped[str] = mapped_column(
+        String, index=True
+    )  # opaque ref to restaurant-service
     status: Mapped[str] = mapped_column(String, default=OrderStatus.CREATED)
 
     # Idempotency-Key header from POST /v1/orders, plus a hash of the request
@@ -80,12 +83,12 @@ class Order(Base):
     # Pricing breakdown — PRD requires "pricing and discounts must be
     # applied"; Week 1 populates subtotal only, tax/fee/discount computation
     # is the saga's "price/discount" step starting Week 2.
-    subtotal: Mapped[float] = mapped_column(Numeric(10, 2))
-    tax_amount: Mapped[float] = mapped_column(Numeric(10, 2), default=0)
-    delivery_fee: Mapped[float] = mapped_column(Numeric(10, 2), default=0)
-    discount_amount: Mapped[float] = mapped_column(Numeric(10, 2), default=0)
+    subtotal: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    tax_amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
+    delivery_fee: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
+    discount_amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
     promo_code: Mapped[str | None] = mapped_column(String, nullable=True)
-    total_amount: Mapped[float] = mapped_column(Numeric(10, 2))
+    total_amount: Mapped[Decimal] = mapped_column(Numeric(10, 2))
 
     # Why the order left the happy path, if it did (rejected/cancelled) —
     # feeds the "Order Cancellation Rate"/"Restaurant Acceptance Rate"
@@ -96,7 +99,9 @@ class Order(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     rejected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -125,7 +130,7 @@ class OrderItem(Base):
     # cross-service joins aren't possible anyway (database-per-service).
     item_name_snapshot: Mapped[str] = mapped_column(String)
     quantity: Mapped[int] = mapped_column(Integer)
-    unit_price: Mapped[float] = mapped_column(Numeric(10, 2))
+    unit_price: Mapped[Decimal] = mapped_column(Numeric(10, 2))
     special_instructions: Mapped[str | None] = mapped_column(String, nullable=True)
 
     order: Mapped["Order"] = relationship(back_populates="items")

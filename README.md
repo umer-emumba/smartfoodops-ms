@@ -175,6 +175,16 @@ dependency closure. This is expected, not a bug — see
 [docs/architecture.md](docs/architecture.md) for why each service is a self-contained
 package.)
 
+### Lint, types and tests
+
+```bash
+./scripts/check.sh          # ruff lint + format check, mypy per service, every service's tests
+uvx pre-commit install      # once: ruff + mypy run on every commit
+```
+
+`mypy` runs per service (`scripts/typecheck.sh`), not over the whole repo, because every
+service has its own top-level `app` package.
+
 ## API overview
 
 Every service auto-generates its own OpenAPI/Swagger docs (no hand-maintained endpoint

@@ -1,0 +1,22 @@
+# Install once: `uvx pre-commit install`. Hooks use the workspace's own locked
+# ruff/mypy (uv.lock) via `uv run`, so there's no second set of tool versions
+# to keep in sync. Full gate including tests: scripts/check.sh.
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: uv run --frozen ruff check --fix
+        language: system
+        types: [python]
+      - id: ruff-format
+        name: ruff format
+        entry: uv run --frozen ruff format
+        language: system
+        types: [python]
+      - id: mypy
+        name: mypy (per service)
+        entry: ./scripts/typecheck.sh
+        language: system
+        types: [python]
+        pass_filenames: false

@@ -43,13 +43,18 @@ def _replay_or_conflict(existing: Order, request_hash: str, response: Response) 
     return existing
 
 
+def _can_supply(item: restaurant_client.MenuItemSnapshot, quantity: int) -> bool:
+    """Available, and either unlimited stock (None) or enough of it."""
+    return item.is_available and (item.stock_count is None or item.stock_count >= quantity)
+
+
 async def _build_items(body: OrderCreate) -> list[OrderItem]:
     """Validates the order against restaurant-service's live data and returns
     priced line items. Raises before anything is written, so a rejected order
     leaves no trace in order_db."""
     # Summed per item, so the same item split across two lines can't slip
     # past the stock check.
-    requested = Counter()
+    requested: Counter[str] = Counter()
     for line in body.items:
         requested[line.menu_item_id] += line.quantity
 
@@ -67,10 +72,7 @@ async def _build_items(body: OrderCreate) -> list[OrderItem]:
             "Some items are not on this restaurant's menu", details={"menu_item_ids": unknown}
         )
     unavailable = [
-        item_id
-        for item_id, qty in requested.items()
-        if not menu[item_id].is_available
-        or (menu[item_id].stock_count is not None and menu[item_id].stock_count < qty)
+        item_id for item_id, qty in requested.items() if not _can_supply(menu[item_id], qty)
     ]
     if unavailable:
         raise ConflictError(

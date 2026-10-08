@@ -35,10 +35,13 @@ def _key(restaurant_id: str, view: View) -> str:
 
 async def get(restaurant_id: str, view: View) -> bytes | None:
     try:
-        return await redis.get(_key(restaurant_id, view))
+        value = await redis.get(_key(restaurant_id, view))
     except RedisError:
         _logger.warning("Restaurant cache read failed", exc_info=True)
         return None
+    # The client doesn't decode responses, so this is bytes; the redis-py
+    # stubs just can't express that.
+    return value.encode() if isinstance(value, str) else value
 
 
 async def put(restaurant_id: str, view: View, body: bytes) -> None:

@@ -28,7 +28,9 @@ class Rider(Base):
     )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
-    user_id: Mapped[str] = mapped_column(String, unique=True, index=True)  # opaque ref to user-service
+    user_id: Mapped[str] = mapped_column(
+        String, unique=True, index=True
+    )  # opaque ref to user-service
     status: Mapped[str] = mapped_column(String, default=RIDER_STATUS_OFFLINE)
     # Separate from `status` (self-reported availability) — this is the
     # system_admin vetting gate: pending_approval | approved | suspended. Week
@@ -51,7 +53,9 @@ class Delivery(Base):
     __tablename__ = "deliveries"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
-    order_id: Mapped[str] = mapped_column(String, unique=True, index=True)  # opaque ref to order-service
+    order_id: Mapped[str] = mapped_column(
+        String, unique=True, index=True
+    )  # opaque ref to order-service
     rider_id: Mapped[str | None] = mapped_column(ForeignKey("riders.id"), nullable=True)
     status: Mapped[str] = mapped_column(String, default="pending_assignment")
 

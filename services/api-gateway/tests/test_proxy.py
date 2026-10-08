@@ -246,9 +246,7 @@ class _FakePipeline:
 @pytest.mark.asyncio
 async def test_redis_checks_pipeline_one_round_trip(monkeypatch) -> None:
     sent: list = []
-    monkeypatch.setattr(
-        rate_limit.redis, "pipeline", lambda transaction: _FakePipeline(sent)
-    )
+    monkeypatch.setattr(rate_limit.redis, "pipeline", lambda transaction: _FakePipeline(sent))
     assert await rate_limit._redis_checks("rl:k", 60_000, "blocked_user:u1") == (3, 59_000, True)
     assert sent == [("eval", "rl:k", "60000"), ("exists", "blocked_user:u1")]
 

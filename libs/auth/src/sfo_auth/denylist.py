@@ -11,8 +11,9 @@ def blocked_key(user_id: str) -> str:
 
 async def block_user(redis: Redis, user_id: str, *, ttl_seconds: int) -> None:
     """Called by user-service when an admin blocks/disables a user. TTL is set
-    to the access-token lifetime — see docs/technical-documentation.md#auth-15-minute-access-tokens-rotating-refresh-tokens-redis-deny-list for
-    why that bound is safe (the authoritative check is user_db.is_blocked at
+    to the access-token lifetime — see docs/technical-documentation.md, "Auth:
+    15-minute access tokens, rotating refresh tokens, Redis deny-list" for why
+    that bound is safe (the authoritative check is user_db.is_blocked at
     refresh time, this is just the fast-path for an already-issued token)."""
     await redis.set(blocked_key(user_id), "1", ex=ttl_seconds)
 

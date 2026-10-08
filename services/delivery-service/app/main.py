@@ -23,7 +23,12 @@ async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 app = create_app(
     title="SmartFoodOps — Delivery Service",
-    tags_metadata=[{"name": "riders", "description": "Rider registration/availability (assignment added Week 2)"}],
+    tags_metadata=[
+        {
+            "name": "riders",
+            "description": "Rider registration/availability (assignment added Week 2)",
+        }
+    ],
 )
 app.router.lifespan_context = _lifespan
 

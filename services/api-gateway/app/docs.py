@@ -18,9 +18,7 @@ def _services() -> dict[str, str]:
 
 @router.get("/docs", response_class=HTMLResponse, include_in_schema=False)
 async def docs_index() -> str:
-    links = "\n".join(
-        f'<li><a href="/docs/{name}">{name}</a></li>' for name in _services()
-    )
+    links = "\n".join(f'<li><a href="/docs/{name}">{name}</a></li>' for name in _services())
     return f"""
     <html><head><title>SmartFoodOps API Docs</title></head>
     <body>

@@ -1,4 +1,7 @@
+from collections.abc import AsyncIterator
+
 from sfo_common.db import make_engine, make_session_factory
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import DeclarativeBase
 
 from app.config import settings
@@ -18,6 +21,6 @@ engine = make_engine(
 SessionFactory = make_session_factory(engine)
 
 
-async def get_session():
+async def get_session() -> AsyncIterator[AsyncSession]:
     async with SessionFactory() as session:
         yield session

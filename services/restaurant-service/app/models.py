@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from sfo_common import new_id
 from sfo_events import OutboxEventMixin
@@ -60,7 +61,7 @@ class MenuItem(Base):
     category_id: Mapped[str] = mapped_column(ForeignKey("menu_categories.id"), index=True)
     name: Mapped[str] = mapped_column(String)
     description: Mapped[str] = mapped_column(String, default="")
-    price: Mapped[float] = mapped_column(Numeric(10, 2))
+    price: Mapped[Decimal] = mapped_column(Numeric(10, 2))
     is_available: Mapped[bool] = mapped_column(Boolean, default=True)
     stock_count: Mapped[int | None] = mapped_column(Integer, nullable=True)  # None = unlimited
     created_at: Mapped[datetime] = mapped_column(
@@ -91,7 +92,7 @@ class Promotion(Base):
     restaurant_id: Mapped[str] = mapped_column(ForeignKey("restaurants.id"), index=True)
     code: Mapped[str] = mapped_column(String, index=True)
     discount_type: Mapped[str] = mapped_column(String)  # percentage | fixed_amount
-    discount_value: Mapped[float] = mapped_column(Numeric(10, 2))
+    discount_value: Mapped[Decimal] = mapped_column(Numeric(10, 2))
     valid_from: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     valid_until: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     max_uses: Mapped[int | None] = mapped_column(Integer, nullable=True)  # None = unlimited

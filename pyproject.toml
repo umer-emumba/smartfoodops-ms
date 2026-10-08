@@ -23,7 +23,19 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency/parameter markers are meant to be called in defaults.
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.Query",
+    "fastapi.Header",
+    "fastapi.Path",
+    "fastapi.Body",
+    # Each service's role-check dependency factory (sfo_auth.build_auth_dependencies).
+    "app.auth_deps.require_roles",
+]
+
 [tool.mypy]
 python_version = "3.12"
 ignore_missing_imports = true
-disallow_untyped_defs = false
+disallow_untyped_defs = true

@@ -3,6 +3,7 @@ from decimal import Decimal
 from typing import Annotated, ClassVar, Literal, Self
 
 from pydantic import AwareDatetime, BaseModel, Field, model_validator
+from sfo_common.money import MoneyAmount
 
 Latitude = Annotated[float, Field(ge=-90, le=90)]
 Longitude = Annotated[float, Field(ge=-180, le=180)]
@@ -119,7 +120,7 @@ class MenuItemResponse(BaseModel):
     category_id: str
     name: str
     description: str
-    price: float
+    price: MoneyAmount
     is_available: bool
     stock_count: int | None
     version: int
@@ -175,7 +176,7 @@ class PromotionResponse(BaseModel):
     restaurant_id: str
     code: str
     discount_type: str
-    discount_value: float
+    discount_value: MoneyAmount
     valid_from: datetime
     valid_until: datetime
     max_uses: int | None

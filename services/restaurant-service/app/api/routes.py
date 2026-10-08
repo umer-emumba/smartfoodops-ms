@@ -341,7 +341,9 @@ async def delete_category(
     await cache.invalidate(restaurant_id)
 
 
-@router.post("/restaurants/{restaurant_id}/menu/items", response_model=MenuItemResponse, status_code=201)
+@router.post(
+    "/restaurants/{restaurant_id}/menu/items", response_model=MenuItemResponse, status_code=201
+)
 async def create_item(
     restaurant_id: str,
     body: MenuItemCreate,

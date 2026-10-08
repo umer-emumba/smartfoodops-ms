@@ -4,7 +4,7 @@ import pytest
 from app import restaurant_client
 from app.api.routes import _build_items
 from app.restaurant_client import MenuItemSnapshot, RestaurantSnapshot
-from app.schemas import OrderCreate
+from app.schemas import OrderCreate, OrderItemResponse
 from sfo_common.errors import ConflictError, NotFoundError, ValidationAppError
 
 RESTAURANT_ID = "r-1"
@@ -94,3 +94,17 @@ async def test_inactive_restaurant_rejected(stub_restaurant) -> None:
     stub_restaurant["restaurant"] = RestaurantSnapshot(RESTAURANT_ID, "suspended", True)
     with pytest.raises(NotFoundError):
         await _build_items(_order(("biryani", 1)))
+
+
+def test_money_is_decimal_in_python_and_a_number_in_json() -> None:
+    item = OrderItemResponse(
+        id="i",
+        menu_item_id="m",
+        item_name_snapshot="Wrap",
+        quantity=3,
+        unit_price=Decimal("0.10"),
+        special_instructions=None,
+    )
+    assert item.unit_price == Decimal("0.10")
+    # The API contract stays a JSON number, and 0.10 doesn't turn into 0.1000000001.
+    assert item.model_dump_json().count('"unit_price":0.1,') == 1

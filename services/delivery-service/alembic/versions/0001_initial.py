@@ -5,15 +5,16 @@ Revises:
 Create Date: 2026-09-22
 
 """
-from typing import Sequence, Union
+
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0001"
-down_revision: Union[str, None] = None
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = None
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -22,7 +23,9 @@ def upgrade() -> None:
         sa.Column("id", sa.String(), primary_key=True),
         sa.Column("user_id", sa.String(), nullable=False),
         sa.Column("status", sa.String(), nullable=False, server_default="offline"),
-        sa.Column("verification_status", sa.String(), nullable=False, server_default="pending_approval"),
+        sa.Column(
+            "verification_status", sa.String(), nullable=False, server_default="pending_approval"
+        ),
         sa.Column("vehicle_type", sa.String(), nullable=False, server_default="bike"),
         sa.Column("license_plate", sa.String(), nullable=True),
         sa.Column("last_lat", sa.Float(), nullable=True),

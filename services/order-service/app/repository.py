@@ -53,10 +53,6 @@ async def list_orders_admin(
 async def list_orders_for_customer(
     session: AsyncSession, customer_id: str, *, cursor: str | None, limit: int
 ) -> dict:
-    stmt = (
-        select(Order)
-        .where(Order.customer_id == customer_id)
-        .options(selectinload(Order.items))
-    )
+    stmt = select(Order).where(Order.customer_id == customer_id).options(selectinload(Order.items))
     result = await session.execute(paginate_newest_first(stmt, Order, cursor=cursor, limit=limit))
     return build_page(list(result.scalars().all()), limit)

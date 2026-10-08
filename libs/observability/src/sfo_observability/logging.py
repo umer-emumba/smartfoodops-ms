@@ -40,7 +40,7 @@ class _JsonFormatter(logging.Formatter):
         self.service_name = service_name
 
     def format(self, record: logging.LogRecord) -> str:
-        payload = {
+        payload: dict[str, object] = {
             "timestamp": datetime.now(UTC).isoformat(),
             "level": record.levelname,
             "service": self.service_name,

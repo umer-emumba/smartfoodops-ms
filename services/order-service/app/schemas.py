@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from pydantic import BaseModel, Field
+from sfo_common.money import MoneyAmount
 
 
 class OrderItemCreate(BaseModel):
@@ -28,7 +29,7 @@ class OrderItemResponse(BaseModel):
     menu_item_id: str
     item_name_snapshot: str
     quantity: int
-    unit_price: float
+    unit_price: MoneyAmount
     special_instructions: str | None
 
     model_config = {"from_attributes": True}
@@ -56,12 +57,12 @@ class OrderResponse(BaseModel):
     delivery_lat: float
     delivery_lng: float
     special_instructions: str | None
-    subtotal: float
-    tax_amount: float
-    delivery_fee: float
-    discount_amount: float
+    subtotal: MoneyAmount
+    tax_amount: MoneyAmount
+    delivery_fee: MoneyAmount
+    discount_amount: MoneyAmount
     promo_code: str | None
-    total_amount: float
+    total_amount: MoneyAmount
     created_at: datetime
     confirmed_at: datetime | None
     rejected_at: datetime | None

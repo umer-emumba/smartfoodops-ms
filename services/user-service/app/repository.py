@@ -1,7 +1,8 @@
 from datetime import datetime
+from typing import Any, cast
 
 from sfo_common.pagination import build_page, paginate_newest_first
-from sqlalchemy import delete, or_, select, update
+from sqlalchemy import CursorResult, delete, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Address, RefreshToken, User
@@ -57,9 +58,7 @@ async def list_users(
                 User.phone_number.ilike(pattern, escape="\\"),
             )
         )
-    result = await session.execute(
-        paginate_newest_first(stmt, User, cursor=cursor, limit=limit)
-    )
+    result = await session.execute(paginate_newest_first(stmt, User, cursor=cursor, limit=limit))
     return build_page(list(result.scalars().all()), limit)
 
 
@@ -90,7 +89,9 @@ async def revoke_refresh_token_if_active(
         .where(RefreshToken.id == lookup_id, RefreshToken.revoked_at.is_(None))
         .values(revoked_at=at)
     )
-    return result.rowcount == 1
+    # DML results are CursorResults; session.execute's annotation is the
+    # general Result, which has no rowcount.
+    return cast(CursorResult[Any], result).rowcount == 1
 
 
 async def revoke_all_refresh_tokens(session: AsyncSession, user_id: str, *, at: datetime) -> None:
@@ -118,7 +119,7 @@ async def purge_expired_refresh_tokens(
         .where(RefreshToken.id.in_(expired_ids))
         .execution_options(synchronize_session=False)
     )
-    return result.rowcount
+    return cast(CursorResult[Any], result).rowcount
 
 
 async def list_addresses(session: AsyncSession, user_id: str) -> list[Address]:

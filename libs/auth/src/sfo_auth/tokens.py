@@ -33,7 +33,8 @@ def create_access_token(
 def decode_access_token(token: str, *, secret: str, algorithm: str) -> TokenPayload:
     """Raises jwt.InvalidTokenError (or a subclass) on bad signature/expiry —
     callers turn that into an UnauthorizedError. Signature + expiry only, no DB
-    call — see docs/technical-documentation.md#auth-15-minute-access-tokens-rotating-refresh-tokens-redis-deny-list."""
+    call — see docs/technical-documentation.md, "Auth: 15-minute access
+    tokens, rotating refresh tokens, Redis deny-list"."""
     raw = jwt.decode(
         token, secret, algorithms=[algorithm], options={"require": ["sub", "role", "exp", "iat"]}
     )
@@ -45,7 +46,9 @@ def decode_access_token(token: str, *, secret: str, algorithm: str) -> TokenPayl
         raise jwt.InvalidTokenError("Malformed token claims") from exc
 
 
-# --- Refresh tokens: NOT JWTs, tracked server-side (see docs/technical-documentation.md#auth-15-minute-access-tokens-rotating-refresh-tokens-redis-deny-list) ---
+# --- Refresh tokens: NOT JWTs, tracked server-side ---
+# (docs/technical-documentation.md, "Auth: 15-minute access tokens, rotating
+# refresh tokens, Redis deny-list")
 # A refresh token string is "{lookup_id}.{secret}": lookup_id is stored in
 # plaintext for O(1) DB lookup, secret is hashed before storage so a DB leak
 # alone doesn't hand out usable refresh tokens.
