@@ -156,7 +156,9 @@ facts, but it isn't what the audit trail depends on.
   both succeed. `/v1/auth/refresh` checks the record isn't revoked/expired and checks
   `is_blocked` — the authoritative block check. Presenting an *already-rotated* token again
   is treated as theft: every refresh token for that user is revoked (the real owner just
-  logs in again). Logout requires the token's secret, not just its lookup ID.
+  logs in again). Expired rows are deleted hourly in small batches by a background task in
+  `user-service` (`app/maintenance.py`; a Postgres try-lock means one replica does it per
+  run). Revoked-but-unexpired rows are kept, since reuse detection depends on them. Logout requires the token's secret, not just its lookup ID.
 - **Credentials**: emails are lowercased at the API boundary; passwords must be 8–128
   characters at registration; login does the same argon2 work for unknown emails as for a
   wrong password, so response time doesn't reveal which emails exist. argon2 runs in a
@@ -330,6 +332,8 @@ A full pass over every route in all 7 services (the gateway plus six domain serv
   IP, and user+IP would hand a user a fresh limit every time their IP changes.
   `/v1/auth/login`, `/v1/auth/register`, and `/v1/auth/bootstrap-admin` share a stricter,
   separate limit. Fails open if Redis is unreachable (the blocked-user check fails closed).
+  The rate-limit counter and the blocked-user lookup go to Redis in one pipelined
+  round-trip per request.
 - **Database connections**: explicit per-replica pool (`DB_POOL_SIZE` 10 +
   `DB_MAX_OVERFLOW` 5), 3s pool wait then `503 service_busy`, Postgres
   `statement_timeout` 5s and `idle_in_transaction_session_timeout` 15s
@@ -338,8 +342,18 @@ A full pass over every route in all 7 services (the gateway plus six domain serv
   via a shared log-sanitizing helper in `libs/observability`.
 - **Gateway scope**: routing, auth, rate limiting, CORS, Swagger proxy/index, tracking
   WebSocket/SSE fanout **(Week 2)** — no cross-service response aggregation in Part A.
-- **Health checks**: every service exposes `GET /health`; `docker-compose.yml` uses
-  `depends_on: condition: service_healthy`.
+- **Health checks**: every service exposes `GET /livez` (process is up — no dependency
+  checks, so a DB outage never makes an orchestrator restart every replica at once) and
+  `GET /readyz` (dependencies reachable — a failing replica is taken out of load balancing,
+  not restarted). `GET /health` is the same as `/readyz`, kept for `docker-compose.yml`'s
+  healthchecks and `depends_on: condition: service_healthy`.
+- **Public-read caching**: `restaurant-service` caches an *active* restaurant's detail,
+  menu and categories in Redis (60s TTL, `app/cache.py`), invalidated after every write to
+  that restaurant; those responses and the public restaurant list also carry
+  `Cache-Control: public, max-age=30`, while an owner/admin viewing a pending/suspended
+  restaurant gets `private, no-store`. A Redis error is just a cache miss. Displayed prices
+  may be up to a TTL stale; the price charged is always re-read uncached by the order
+  quote.
 - **CORS**: handled once, at `api-gateway` only.
 - **Seed/demo data**: `scripts/seed.py` creates a demo restaurant + menu + rider + customer.
 

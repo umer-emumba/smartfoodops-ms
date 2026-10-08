@@ -4,13 +4,12 @@ import jwt
 from fastapi import Request
 from redis.exceptions import RedisError
 from sfo_auth import decode_access_token
+from sfo_auth.denylist import blocked_key
 from sfo_auth.tokens import TokenPayload
 from sfo_common.errors import ForbiddenError, ServiceUnavailableError, UnauthorizedError
 
 from app.config import settings
 from app.redis_client import redis
-
-_DENYLIST_PREFIX = "blocked_user:"
 
 _UUID = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
 
@@ -91,10 +90,14 @@ async def authenticate(request: Request, *, public: bool) -> None:
         if public:
             return
         raise UnauthorizedError("Invalid or expired token")
-    try:
-        blocked = await redis.exists(f"{_DENYLIST_PREFIX}{payload.sub}")
-    except RedisError as exc:
-        # Fail closed: without the deny-list the gateway can't honour a block.
-        raise ServiceUnavailableError("Auth deny-list is unavailable") from exc
+    # Normally already fetched by the rate limiter in the same Redis
+    # round-trip (app/rate_limit.py); checked here only if it wasn't.
+    blocked = getattr(request.state, "blocked", None)
+    if blocked is None:
+        try:
+            blocked = await redis.exists(blocked_key(payload.sub))
+        except RedisError as exc:
+            # Fail closed: without the deny-list the gateway can't honour a block.
+            raise ServiceUnavailableError("Auth deny-list is unavailable") from exc
     if blocked:
         raise ForbiddenError("Account is blocked")

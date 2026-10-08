@@ -26,13 +26,14 @@ def _auth() -> dict[str, str]:
 def gateway(monkeypatch):
     """Gateway with Redis stubbed out and a swappable fake backend."""
 
-    async def allow(*_a, **_k) -> list[int]:
-        return [1, 60_000]  # [count in window, remaining TTL ms]
+    async def allow(_key, _window, deny_key):
+        # (count in window, remaining TTL ms, blocked — None if not checked)
+        return 1, 60_000, (False if deny_key else None)
 
     async def not_blocked(_: str) -> int:
         return 0
 
-    monkeypatch.setattr(rate_limit.redis, "eval", allow)
+    monkeypatch.setattr(rate_limit, "_redis_checks", allow)
     monkeypatch.setattr(security.redis, "exists", not_blocked)
 
     def use_backend(handler) -> None:
@@ -80,11 +81,11 @@ async def test_backend_timeout_is_504(gateway) -> None:
 
 @pytest.mark.asyncio
 async def test_blocked_user_is_403_envelope(gateway, monkeypatch) -> None:
-    async def blocked(_: str) -> int:
-        return 1
+    async def blocked(_key, _window, deny_key):
+        return 1, 60_000, True
 
     gateway(lambda request: httpx.Response(200, json=[]))
-    monkeypatch.setattr(security.redis, "exists", blocked)
+    monkeypatch.setattr(rate_limit, "_redis_checks", blocked)
     async with _client() as c:
         r = await c.get("/v1/orders", headers=_auth())
     assert r.status_code == 403
@@ -153,24 +154,28 @@ def test_each_backend_has_its_own_connection_pool() -> None:
 async def test_rate_limit_keyed_by_user_when_authenticated(gateway, monkeypatch) -> None:
     keys = []
 
-    async def record(_script, _n, key, _window) -> list[int]:
-        keys.append(key)
-        return [1, 60_000]
+    async def record(key, _window, deny_key):
+        keys.append((key, deny_key))
+        return 1, 60_000, (False if deny_key else None)
 
-    monkeypatch.setattr(rate_limit.redis, "eval", record)
+    monkeypatch.setattr(rate_limit, "_redis_checks", record)
     gateway(lambda request: httpx.Response(200, json=[]))
     async with _client() as c:
         await c.get("/v1/orders", headers=_auth())
         await c.get("/v1/restaurants")
-    assert keys == ["rate_limit:default:user:u1", "rate_limit:default:ip:127.0.0.1"]
+    assert keys == [
+        ("rate_limit:default:user:u1", "blocked_user:u1"),
+        # Anonymous: keyed by IP, and there's no user to check the deny-list for.
+        ("rate_limit:default:ip:127.0.0.1", None),
+    ]
 
 
 @pytest.mark.asyncio
 async def test_rate_limit_exceeded_is_429_with_retry_after(gateway, monkeypatch) -> None:
-    async def over_limit(*_a, **_k) -> list[int]:
-        return [121, 4_000]
+    async def over_limit(_key, _window, deny_key):
+        return 121, 4_000, False
 
-    monkeypatch.setattr(rate_limit.redis, "eval", over_limit)
+    monkeypatch.setattr(rate_limit, "_redis_checks", over_limit)
     gateway(lambda request: httpx.Response(200, json=[]))
     async with _client() as c:
         r = await c.get("/v1/orders", headers=_auth())
@@ -183,8 +188,70 @@ async def test_rate_limiter_fails_open_when_redis_is_down(gateway, monkeypatch) 
     async def redis_down(*_a, **_k):
         raise RedisConnectionError("down")
 
-    monkeypatch.setattr(rate_limit.redis, "eval", redis_down)
+    monkeypatch.setattr(rate_limit, "_redis_checks", redis_down)
+    gateway(lambda request: httpx.Response(200, json={"ok": True}))
+    async with _client() as c:
+        r = await c.get("/v1/orders", headers=_auth())
+    # The fixture's separate deny-list check still succeeds, so it's allowed.
+    assert r.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_deny_list_still_fails_closed_when_redis_is_down(gateway, monkeypatch) -> None:
+    async def redis_down(*_a, **_k):
+        raise RedisConnectionError("down")
+
+    monkeypatch.setattr(rate_limit, "_redis_checks", redis_down)
+    monkeypatch.setattr(security.redis, "exists", redis_down)
+    gateway(lambda request: httpx.Response(200, json={"ok": True}))
+    async with _client() as c:
+        r = await c.get("/v1/orders", headers=_auth())
+    assert r.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_deny_list_not_rechecked_when_rate_limiter_fetched_it(gateway, monkeypatch) -> None:
+    async def must_not_be_called(_: str) -> int:
+        raise AssertionError("second Redis round-trip")
+
+    monkeypatch.setattr(security.redis, "exists", must_not_be_called)
     gateway(lambda request: httpx.Response(200, json={"ok": True}))
     async with _client() as c:
         r = await c.get("/v1/orders", headers=_auth())
     assert r.status_code == 200
+
+
+class _FakePipeline:
+    """Records pipelined commands; execute() answers them in one go."""
+
+    def __init__(self, sent: list) -> None:
+        self.sent = sent
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_exc) -> None:
+        return None
+
+    def eval(self, _script, _numkeys, key, window) -> None:
+        self.sent.append(("eval", key, window))
+
+    def exists(self, key) -> None:
+        self.sent.append(("exists", key))
+
+    async def execute(self) -> list:
+        return [[3, 59_000]] + [1 for cmd in self.sent if cmd[0] == "exists"]
+
+
+@pytest.mark.asyncio
+async def test_redis_checks_pipeline_one_round_trip(monkeypatch) -> None:
+    sent: list = []
+    monkeypatch.setattr(
+        rate_limit.redis, "pipeline", lambda transaction: _FakePipeline(sent)
+    )
+    assert await rate_limit._redis_checks("rl:k", 60_000, "blocked_user:u1") == (3, 59_000, True)
+    assert sent == [("eval", "rl:k", "60000"), ("exists", "blocked_user:u1")]
+
+    sent.clear()
+    assert await rate_limit._redis_checks("rl:ip", 60_000, None) == (3, 59_000, None)
+    assert sent == [("eval", "rl:ip", "60000")]

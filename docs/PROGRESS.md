@@ -347,8 +347,15 @@ Week 1 scope only; Week 2/3 design items are tracked separately.
       (+ partial index on undispatched outbox rows in order_db)
 - [x] Admin user search escapes `%`/`_`/`\`, and `q` is length-checked after stripping
 - [x] Order statuses defined once (`OrderStatus` StrEnum)
+- [x] `/livez` (no dependency checks) and `/readyz` on every service; `/health` = `/readyz`
+- [x] Gateway: rate-limit counter + blocked-user lookup in one pipelined Redis round-trip
+      (block-list key defined once in `sfo_auth.denylist.blocked_key`)
+- [x] Expired refresh tokens purged hourly (batched, one replica per run via try-lock);
+      `refresh_tokens.expires_at` index
+- [x] restaurant-service: Redis cache for an active restaurant's detail/menu/categories
+      (60s TTL, invalidated on every write, fail-open), `Cache-Control` on public reads
 
-**Tests**: gateway 19, order 14, user 6, restaurant 9 (51 total, was 36).
+**Tests**: gateway 23, order 14, user 7, restaurant 14 (61 total, was 36).
 
 **Breaking changes**: list endpoints now return `{"items", "next_cursor"}` instead of a bare
 array. Refresh tokens issued before this change no longer verify (they were argon2-hashed),
@@ -363,7 +370,6 @@ so existing sessions must log in again.
 - [ ] Compose network segmentation (per-service data networks); RabbitMQ/Redis credentials
 - [ ] Rate limiting behind a load balancer: set uvicorn `FORWARDED_ALLOW_IPS` to the LB's
       address so the client IP (not the LB's) is the rate-limit key
-- [ ] Batching the gateway's rate-limit + deny-list Redis calls into one round-trip
 - [ ] `user-service` migration declares email/phone uniqueness twice (column + index)
 
 ## Week 2 — Order Lifecycle + Delivery Workflow

@@ -15,6 +15,9 @@ class Settings(BaseServiceSettings):
     # this to a real secret and rotates/removes it after the first admin exists.
     admin_bootstrap_secret: str
 
+    # How often expired refresh-token rows are deleted (app/maintenance.py).
+    refresh_token_purge_interval_seconds: int = 3600
+
     @model_validator(mode="after")
     def _refuse_dummy_secret_outside_local(self) -> Self:
         if self.environment != "local" and self.admin_bootstrap_secret == _DUMMY_BOOTSTRAP_SECRET:

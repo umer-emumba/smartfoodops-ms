@@ -1,3 +1,9 @@
+import asyncio
+import contextlib
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
 from sfo_common import create_app
 from sfo_common.db import check_db_ready
 from sfo_common.health import add_health_routes
@@ -6,12 +12,24 @@ from sfo_observability import configure_logging
 from app.api.routes import router
 from app.config import settings
 from app.db import engine
+from app.maintenance import run_refresh_token_purge_loop
 
 configure_logging(settings.service_name, settings.log_level)
+
+
+@asynccontextmanager
+async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
+    purge_task = asyncio.create_task(run_refresh_token_purge_loop())
+    yield
+    purge_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await purge_task
+
 
 app = create_app(
     title="SmartFoodOps — User Service",
     tags_metadata=[{"name": "auth", "description": "Registration, login, tokens, roles"}],
+    lifespan=_lifespan,
 )
 
 app.include_router(router)

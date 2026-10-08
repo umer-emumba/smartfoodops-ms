@@ -36,6 +36,8 @@ class RefreshToken(Base):
     O(1) lookup; token_hash is the hashed secret, never the raw token."""
 
     __tablename__ = "refresh_tokens"
+    # For the periodic purge of expired rows (app/maintenance.py).
+    __table_args__ = (Index("ix_refresh_tokens_expires_at", "expires_at"),)
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     user_id: Mapped[str] = mapped_column(String, index=True)

@@ -1,11 +1,14 @@
-from fastapi import APIRouter, Depends, Query, status
+from collections.abc import Awaitable, Callable
+
+from fastapi import APIRouter, Depends, Query, Response, status
+from pydantic import TypeAdapter
 from sfo_auth import CurrentUser, Role
 from sfo_common.errors import ConflictError, ForbiddenError, NotFoundError, ValidationAppError
 from sfo_common.pagination import Page
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import repository
+from app import cache, repository
 from app.auth_deps import get_current_user_optional, require_roles
 from app.db import get_session
 from app.models import MenuCategory, MenuItem, Promotion, Restaurant, RestaurantStatusHistory
@@ -66,6 +69,39 @@ def _ensure_restaurant_visible(restaurant: Restaurant, current: CurrentUser | No
         raise NotFoundError("Restaurant not found")
 
 
+_menu_json = TypeAdapter(list[MenuItemResponse])
+_categories_json = TypeAdapter(list[MenuCategoryResponse])
+
+
+async def _public_restaurant_view(
+    session: AsyncSession,
+    restaurant_id: str,
+    current: CurrentUser | None,
+    view: cache.View,
+    render: Callable[[Restaurant], Awaitable[bytes]],
+) -> Response:
+    """Serves one of a restaurant's public views through the cache (app/cache.py).
+
+    A hit is served as-is: only active restaurants' views are ever cached, and
+    every write invalidates them. On a miss the usual visibility rule applies;
+    an active restaurant's view is cached and marked publicly cacheable, while
+    a pending/suspended one (visible only to its owner or an admin) is neither
+    cached nor shareable.
+    """
+    cached = await cache.get(restaurant_id, view)
+    if cached is not None:
+        return cache.json_response(cached, public=True)
+    restaurant = await repository.get_restaurant(session, restaurant_id)
+    if restaurant is None:
+        raise NotFoundError("Restaurant not found")
+    _ensure_restaurant_visible(restaurant, current)
+    body = await render(restaurant)
+    if restaurant.status != "active":
+        return cache.json_response(body, public=False)
+    await cache.put(restaurant_id, view, body)
+    return cache.json_response(body, public=True)
+
+
 def _record_status_change(
     session: AsyncSession,
     restaurant: Restaurant,
@@ -117,11 +153,16 @@ async def create_restaurant(
 
 @router.get("/restaurants", response_model=Page[RestaurantResponse])
 async def list_restaurants(
+    response: Response,
     city: str | None = Query(default=None),
     cursor: str | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=100),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
+    # Active restaurants only and identical for every caller, so a browser
+    # or CDN may reuse it briefly. Not Redis-cached: every city/cursor/limit
+    # combination would be a separate entry.
+    response.headers["Cache-Control"] = cache.PUBLIC_CACHE_CONTROL
     return await repository.list_restaurants(session, city=city, cursor=cursor, limit=limit)
 
 
@@ -155,12 +196,11 @@ async def get_restaurant(
     restaurant_id: str,
     current: CurrentUser | None = Depends(get_current_user_optional),
     session: AsyncSession = Depends(get_session),
-) -> Restaurant:
-    restaurant = await repository.get_restaurant(session, restaurant_id)
-    if restaurant is None:
-        raise NotFoundError("Restaurant not found")
-    _ensure_restaurant_visible(restaurant, current)
-    return restaurant
+) -> Response:
+    async def render(restaurant: Restaurant) -> bytes:
+        return RestaurantResponse.model_validate(restaurant).model_dump_json().encode()
+
+    return await _public_restaurant_view(session, restaurant_id, current, "detail", render)
 
 
 @router.patch("/restaurants/{restaurant_id}", response_model=RestaurantResponse)
@@ -174,6 +214,7 @@ async def update_restaurant(
     for field, value in body.model_dump(exclude_unset=True).items():
         setattr(restaurant, field, value)
     await session.commit()
+    await cache.invalidate(restaurant_id)
     return restaurant
 
 
@@ -189,6 +230,7 @@ async def approve_restaurant(
         raise NotFoundError("Restaurant not found")
     _record_status_change(session, restaurant, "active", current, body.reason if body else None)
     await session.commit()
+    await cache.invalidate(restaurant_id)
     return restaurant
 
 
@@ -207,6 +249,7 @@ async def suspend_restaurant(
         raise NotFoundError("Restaurant not found")
     _record_status_change(session, restaurant, "suspended", current, body.reason if body else None)
     await session.commit()
+    await cache.invalidate(restaurant_id)
     return restaurant
 
 
@@ -238,6 +281,7 @@ async def create_category(
     category = MenuCategory(restaurant_id=restaurant_id, name=body.name)
     category = await repository.create_category(session, category)
     await session.commit()
+    await cache.invalidate(restaurant_id)
     return category
 
 
@@ -248,12 +292,14 @@ async def list_categories(
     restaurant_id: str,
     current: CurrentUser | None = Depends(get_current_user_optional),
     session: AsyncSession = Depends(get_session),
-) -> list[MenuCategory]:
-    restaurant = await repository.get_restaurant(session, restaurant_id)
-    if restaurant is None:
-        raise NotFoundError("Restaurant not found")
-    _ensure_restaurant_visible(restaurant, current)
-    return await repository.list_categories(session, restaurant_id)
+) -> Response:
+    async def render(_: Restaurant) -> bytes:
+        categories = await repository.list_categories(session, restaurant_id)
+        return _categories_json.dump_json(
+            _categories_json.validate_python(categories, from_attributes=True)
+        )
+
+    return await _public_restaurant_view(session, restaurant_id, current, "categories", render)
 
 
 @router.patch(
@@ -272,6 +318,7 @@ async def update_category(
     for field, value in body.model_dump(exclude_unset=True).items():
         setattr(category, field, value)
     await session.commit()
+    await cache.invalidate(restaurant_id)
     return category
 
 
@@ -291,6 +338,7 @@ async def delete_category(
         raise ConflictError("Category still has menu items — move or delete them first")
     await repository.delete_category(session, category)
     await session.commit()
+    await cache.invalidate(restaurant_id)
 
 
 @router.post("/restaurants/{restaurant_id}/menu/items", response_model=MenuItemResponse, status_code=201)
@@ -305,6 +353,7 @@ async def create_item(
     item = MenuItem(restaurant_id=restaurant_id, **body.model_dump())
     item = await repository.create_item(session, item)
     await session.commit()
+    await cache.invalidate(restaurant_id)
     return item
 
 
@@ -323,6 +372,7 @@ async def update_item(
     for field, value in body.model_dump(exclude_unset=True).items():
         setattr(item, field, value)
     await session.commit()
+    await cache.invalidate(restaurant_id)
     return item
 
 
@@ -341,6 +391,7 @@ async def delete_item(
         raise NotFoundError("Menu item not found")
     await repository.delete_item(session, item)
     await session.commit()
+    await cache.invalidate(restaurant_id)
 
 
 @router.get("/restaurants/{restaurant_id}/menu", response_model=list[MenuItemResponse])
@@ -348,12 +399,12 @@ async def get_menu(
     restaurant_id: str,
     current: CurrentUser | None = Depends(get_current_user_optional),
     session: AsyncSession = Depends(get_session),
-) -> list[MenuItem]:
-    restaurant = await repository.get_restaurant(session, restaurant_id)
-    if restaurant is None:
-        raise NotFoundError("Restaurant not found")
-    _ensure_restaurant_visible(restaurant, current)
-    return await repository.list_menu(session, restaurant_id)
+) -> Response:
+    async def render(_: Restaurant) -> bytes:
+        items = await repository.list_menu(session, restaurant_id)
+        return _menu_json.dump_json(_menu_json.validate_python(items, from_attributes=True))
+
+    return await _public_restaurant_view(session, restaurant_id, current, "menu", render)
 
 
 @router.post(

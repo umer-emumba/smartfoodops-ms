@@ -186,6 +186,9 @@ services:
     env_file: [services/restaurant-service/.env]
     depends_on:
       restaurant-db: { condition: service_healthy }
+      # Public-read cache (app/cache.py). Not strictly required — a Redis
+      # outage only means cache misses — but start with it available.
+      redis: { condition: service_healthy }
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 5s

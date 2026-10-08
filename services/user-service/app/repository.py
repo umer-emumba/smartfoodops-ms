@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from sfo_common.pagination import build_page, paginate_newest_first
-from sqlalchemy import or_, select, update
+from sqlalchemy import delete, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Address, RefreshToken, User
@@ -99,6 +99,26 @@ async def revoke_all_refresh_tokens(session: AsyncSession, user_id: str, *, at: 
         .where(RefreshToken.user_id == user_id, RefreshToken.revoked_at.is_(None))
         .values(revoked_at=at)
     )
+
+
+async def purge_expired_refresh_tokens(
+    session: AsyncSession, *, now: datetime, batch_size: int
+) -> int:
+    """Deletes up to batch_size expired rows; returns how many. Revoked rows
+    are kept until they expire too: refresh reuse detection relies on finding
+    a revoked row, and once a token has expired it's rejected anyway."""
+    expired_ids = (
+        select(RefreshToken.id)
+        .where(RefreshToken.expires_at < now)
+        .limit(batch_size)
+        .scalar_subquery()
+    )
+    result = await session.execute(
+        delete(RefreshToken)
+        .where(RefreshToken.id.in_(expired_ids))
+        .execution_options(synchronize_session=False)
+    )
+    return result.rowcount
 
 
 async def list_addresses(session: AsyncSession, user_id: str) -> list[Address]:
