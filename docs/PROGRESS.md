@@ -363,6 +363,11 @@ Week 1 scope only; Week 2/3 design items are tracked separately.
       now closed on shutdown
 - [x] Tests: no deprecated Starlette `TestClient`; pytest-asyncio `asyncio_mode = "auto"`
 - [x] Dev JWT secret in `env.example` lengthened to ≥ 32 bytes (update local `.env` files)
+- [x] Infra images: deprecated `temporalio/auto-setup:1.24` + its Postgres + `temporalio/ui`
+      → one `temporalio/temporal:1.9.1` CLI dev server (SQLite on a volume, UI still on
+      `:8088`); `cp-kafka`/`cp-schema-registry` 7.7.0 → 8.3.2 (7.7 standard support ended
+      2026-07-26); `rabbitmq:3` → `4.3.6` (3.13 is commercial-support only); Schema Registry
+      got a healthcheck. All tags pinned to a patch version.
 
 **Tests**: gateway 23, order 15, user 7, restaurant 14 (62 total, was 36).
 
@@ -376,10 +381,6 @@ so existing sessions must log in again.
 - [ ] Declarative gateway route-policy table (public / rate bucket / timeout per route)
 - [ ] RS256 (user-service signs; others verify with the public key) instead of one shared
       HS256 secret
-- [ ] Before Week 2: replace the deprecated `temporalio/auto-setup:1.24` image (Temporal CLI
-      dev server, or `temporalio/server` + `admin-tools` for schema setup)
-- [ ] Before Week 3: `cp-kafka`/`cp-schema-registry` 7.7 → 8.x (7.7 standard support ended
-      2026-07-26); `rabbitmq:3` → 4.x (3.13 is out of community support), or drop it with Celery
 - [ ] Compose network segmentation (per-service data networks); RabbitMQ/Redis credentials
 - [ ] Rate limiting behind a load balancer: set uvicorn `FORWARDED_ALLOW_IPS` to the LB's
       address so the client IP (not the LB's) is the rate-limit key

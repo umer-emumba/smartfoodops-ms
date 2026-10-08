@@ -58,14 +58,6 @@ services:
       POSTGRES_DB: notification_db
     volumes: ["notification-db-data:/var/lib/postgresql/data"]
 
-  temporal-db:
-    <<: *postgres-common
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: temporal
-    volumes: ["temporal-db-data:/var/lib/postgresql/data"]
-
   # ---------- Infra: shared stores/brokers ----------
   mongo:
     image: mongo:7
@@ -85,7 +77,9 @@ services:
       retries: 10
 
   rabbitmq:
-    image: rabbitmq:3-management-alpine
+    # 4.3: the community-supported series (3.13 is commercial-support only).
+    # Pinned to a patch so builds are reproducible.
+    image: rabbitmq:4.3.6-management-alpine
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 5s
@@ -98,8 +92,10 @@ services:
     # compose file was first written (Bitnami moved older free tags behind a
     # paywall) — confluentinc/cp-kafka, version-matched to schema-registry
     # below, replaces it: same vendor/release train as an already-used image,
-    # actively maintained, no free-tier ambiguity.
-    image: confluentinc/cp-kafka:7.7.0
+    # actively maintained, no free-tier ambiguity. 8.x (Kafka 4.x, KRaft only —
+    # this config already was) replaces 7.7, whose standard support ended
+    # 2026-07-26.
+    image: confluentinc/cp-kafka:8.3.2
     environment:
       KAFKA_NODE_ID: "1"
       KAFKA_PROCESS_ROLES: controller,broker
@@ -125,32 +121,48 @@ services:
       retries: 10
 
   schema-registry:
-    image: confluentinc/cp-schema-registry:7.7.0
+    image: confluentinc/cp-schema-registry:8.3.2
     depends_on:
       kafka: { condition: service_healthy }
     environment:
       SCHEMA_REGISTRY_HOST_NAME: schema-registry
       SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://kafka:9092
       SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+    healthcheck:
+      # The 8.x image ships python3 but no curl.
+      test:
+        - CMD
+        - python3
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8081/subjects')"
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   temporal:
-    image: temporalio/auto-setup:1.24
-    depends_on:
-      temporal-db: { condition: service_healthy }
-    environment:
-      DB: postgres12
-      DB_PORT: "5432"
-      POSTGRES_USER: postgres
-      POSTGRES_PWD: postgres
-      POSTGRES_SEEDS: temporal-db
-
-  temporal-ui:
-    image: temporalio/ui:2.31.2
-    depends_on: [temporal]
-    environment:
-      TEMPORAL_ADDRESS: temporal:7233
-      TEMPORAL_CORS_ORIGINS: http://localhost:3000
-    ports: ["127.0.0.1:8088:8080"] # no auth — localhost only
+    # Temporal CLI dev server — Temporal's recommended local setup, replacing the
+    # deprecated temporalio/auto-setup image (plus its own Postgres and a
+    # separate UI container). One process: frontend on :7233, web UI on :8233,
+    # state in SQLite on a volume so workflows survive restarts. Production
+    # would run temporalio/server against a real database (or Temporal Cloud).
+    image: temporalio/temporal:1.9.1
+    command:
+      - server
+      - start-dev
+      - --ip=0.0.0.0
+      - --ui-ip=0.0.0.0
+      - --db-filename=/home/temporal/temporal.db
+    # Mounted on the image's own temporal-owned home dir: the container runs as
+    # the non-root `temporal` user, and a fresh named volume takes the
+    # ownership of the directory it's mounted over (a new /data would be
+    # root-owned and SQLite couldn't create its file).
+    volumes: ["temporal-data:/home/temporal"]
+    ports: ["127.0.0.1:8088:8233"] # web UI, no auth — localhost only
+    healthcheck:
+      test: ["CMD", "temporal", "operator", "cluster", "health", "--address", "localhost:7233"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
 
   # ---------- App services ----------
   # No Traefik / reverse proxy in front of api-gateway here, deliberately —
@@ -247,6 +259,6 @@ volumes:
   delivery-db-data:
   payment-db-data:
   notification-db-data:
-  temporal-db-data:
+  temporal-data:
   mongo-data:
   kafka-data:

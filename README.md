@@ -126,7 +126,8 @@ anything outside containers (tests, the seed script).
    ```
 
    This starts per-service Postgres containers, Mongo, Redis, RabbitMQ, Kafka + Schema
-   Registry, Temporal (+ UI on `:8088`), and all app services (`api-gateway` on `:8080`).
+   Registry, Temporal (the Temporal CLI dev server, web UI on `:8088`), and all app
+   services (`api-gateway` on `:8080`).
    Each service runs its own Alembic migrations on startup. Wait for `docker compose ps`
    to show everything healthy.
 
