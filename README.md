@@ -185,6 +185,21 @@ uvx pre-commit install      # once: ruff + mypy run on every commit
 `mypy` runs per service (`scripts/typecheck.sh`), not over the whole repo, because every
 service has its own top-level `app` package.
 
+### Smoke test (whole running system)
+
+```bash
+docker compose up -d && uv run --group dev python scripts/seed.py
+uv run --group dev python scripts/smoke_test.py          # API only, through the gateway
+uv run --group dev python scripts/smoke_test.py --deep   # + checks inside local Docker
+```
+
+One end-to-end test for the platform, not one per service: it drives the system through
+`api-gateway` like a client (auth, browsing, caching, ordering, admin views, riders), so it
+catches what per-service tests can't — routing, migrations, config, service-to-service
+calls. `--deep` also checks each service's `/readyz`/`/livez`, the Redis menu cache,
+refresh-token storage and the Mongo location ping. `--base-url` points it at another
+deployment. Safe to re-run; exits non-zero on any failure.
+
 ## API overview
 
 Every service auto-generates its own OpenAPI/Swagger docs (no hand-maintained endpoint
