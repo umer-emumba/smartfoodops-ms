@@ -326,6 +326,34 @@ role escalation at registration, admin-only routes) — all behaved correctly. F
       `status`, `restaurant_id`, `customer_id`)
 - [ ] Week 2: restaurant admins need to list their restaurant's orders (for accept/reject)
 
+### Production-readiness pass (2026-10-08)
+
+Week 1 scope only; Week 2/3 design items are tracked separately.
+
+- [x] Gateway: separate connection pool per backend service (bulkhead), 0.5s pool wait →
+      503, per-service read timeouts (10s order-service, 5s others), 1s connect
+- [x] Gateway rate limiting keyed by user ID when the token is valid, IP otherwise; fails
+      open on Redis errors (was an unhandled 500); TTL returned by the Lua script
+- [x] argon2 runs in a worker thread (max 4 concurrent per process) — measured ~36ms per
+      verify locally, which previously blocked the whole event loop
+- [x] Refresh-token secrets hashed with SHA-256 instead of argon2
+- [x] Order creation: one `POST /internal/restaurants/{id}/quote` call (was two GETs,
+      including the full menu), made after releasing the DB connection
+- [x] Explicit DB pool + Postgres `statement_timeout` / `idle_in_transaction_session_timeout`;
+      pool exhaustion → 503 instead of 500
+- [x] Alembic migrations take a Postgres advisory lock — replicas can start together
+- [x] Keyset pagination (`Page` envelope, `?cursor=`) on users/admin, orders (mine, admin),
+      restaurants (public, admin), riders/admin, notifications; new composite indexes
+      (+ partial index on undispatched outbox rows in order_db)
+- [x] Admin user search escapes `%`/`_`/`\`, and `q` is length-checked after stripping
+- [x] Order statuses defined once (`OrderStatus` StrEnum)
+
+**Tests**: gateway 19, order 14, user 6, restaurant 9 (51 total, was 36).
+
+**Breaking changes**: list endpoints now return `{"items", "next_cursor"}` instead of a bare
+array. Refresh tokens issued before this change no longer verify (they were argon2-hashed),
+so existing sessions must log in again.
+
 ### Not bugs — deliberately left for a separate design step
 
 - [ ] Streaming proxy (needed for Week 2 WebSocket/SSE tracking), pure-ASGI middleware
@@ -335,7 +363,7 @@ role escalation at registration, admin-only routes) — all behaved correctly. F
 - [ ] Compose network segmentation (per-service data networks); RabbitMQ/Redis credentials
 - [ ] Rate limiting behind a load balancer: set uvicorn `FORWARDED_ALLOW_IPS` to the LB's
       address so the client IP (not the LB's) is the rate-limit key
-- [ ] Parallel order → restaurant calls; batching the gateway's two Redis round-trips
+- [ ] Batching the gateway's rate-limit + deny-list Redis calls into one round-trip
 - [ ] `user-service` migration declares email/phone uniqueness twice (column + index)
 
 ## Week 2 — Order Lifecycle + Delivery Workflow

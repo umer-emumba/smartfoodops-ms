@@ -200,3 +200,35 @@ class StatusHistoryResponse(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+# --- Internal: order-service's price/stock quote (app/api/internal.py) ---
+
+
+class QuoteRequest(BaseModel):
+    item_ids: list[str] = Field(min_length=1, max_length=200)
+
+
+class QuoteRestaurant(BaseModel):
+    id: str
+    status: str
+    is_accepting_orders: bool
+
+    model_config = {"from_attributes": True}
+
+
+class QuoteItem(BaseModel):
+    id: str
+    name: str
+    # Decimal (serialized as a string), not float — order-service totals
+    # money with Decimal and shouldn't inherit float rounding.
+    price: Decimal
+    is_available: bool
+    stock_count: int | None
+
+    model_config = {"from_attributes": True}
+
+
+class QuoteResponse(BaseModel):
+    restaurant: QuoteRestaurant
+    items: list[QuoteItem]

@@ -4,6 +4,7 @@ import jwt
 from fastapi import Request
 from redis.exceptions import RedisError
 from sfo_auth import decode_access_token
+from sfo_auth.tokens import TokenPayload
 from sfo_common.errors import ForbiddenError, ServiceUnavailableError, UnauthorizedError
 
 from app.config import settings
@@ -41,6 +42,31 @@ def is_public_route(method: str, resource: str, rest_of_path: str) -> bool:
     )
 
 
+def _has_bearer(request: Request) -> bool:
+    return request.headers.get("authorization", "").lower().startswith("bearer ")
+
+
+def verified_token(request: Request) -> TokenPayload | None:
+    """The request's bearer token, signature/expiry/claims verified — or None
+    if there's no token or it's invalid. Decoded at most once per request and
+    cached on request.state: the rate limiter (which runs first, keying on the
+    user ID) and authenticate() both need it."""
+    if hasattr(request.state, "token_payload"):
+        return request.state.token_payload
+    payload = None
+    if _has_bearer(request):
+        try:
+            payload = decode_access_token(
+                request.headers["authorization"][7:],
+                secret=settings.jwt_secret,
+                algorithm=settings.jwt_algorithm,
+            )
+        except jwt.InvalidTokenError:
+            payload = None
+    request.state.token_payload = payload
+    return payload
+
+
 async def authenticate(request: Request, *, public: bool) -> None:
     """The gateway's one auth step: decodes the bearer token once, then
     checks the Redis deny-list for it.
@@ -56,19 +82,15 @@ async def authenticate(request: Request, *, public: bool) -> None:
     Runs inside the route (not as middleware) so its errors go through the
     shared exception handlers and get the normal JSON envelope + CORS headers.
     """
-    auth_header = request.headers.get("authorization", "")
-    if not auth_header.lower().startswith("bearer "):
+    if not _has_bearer(request):
         if public:
             return
         raise UnauthorizedError("Missing bearer token")
-    try:
-        payload = decode_access_token(
-            auth_header[7:], secret=settings.jwt_secret, algorithm=settings.jwt_algorithm
-        )
-    except jwt.InvalidTokenError as exc:
+    payload = verified_token(request)
+    if payload is None:
         if public:
             return
-        raise UnauthorizedError("Invalid or expired token") from exc
+        raise UnauthorizedError("Invalid or expired token")
     try:
         blocked = await redis.exists(f"{_DENYLIST_PREFIX}{payload.sub}")
     except RedisError as exc:

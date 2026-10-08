@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import secrets
 from datetime import UTC, datetime, timedelta
 
@@ -45,8 +47,21 @@ def decode_access_token(token: str, *, secret: str, algorithm: str) -> TokenPayl
 
 # --- Refresh tokens: NOT JWTs, tracked server-side (see docs/technical-documentation.md#auth-15-minute-access-tokens-rotating-refresh-tokens-redis-deny-list) ---
 # A refresh token string is "{lookup_id}.{secret}": lookup_id is stored in
-# plaintext for O(1) DB lookup, secret is hashed (sfo_auth.passwords) before
-# storage so a DB leak alone doesn't hand out usable refresh tokens.
+# plaintext for O(1) DB lookup, secret is hashed before storage so a DB leak
+# alone doesn't hand out usable refresh tokens.
+#
+# SHA-256, not argon2: a slow hash protects low-entropy secrets (passwords)
+# from offline guessing. The secret here is 256 random bits, which can't be
+# guessed at any hash speed — argon2 would add ~50ms of CPU to every refresh
+# and logout for no security gain.
+
+
+def hash_refresh_secret(raw_secret: str) -> str:
+    return hashlib.sha256(raw_secret.encode()).hexdigest()
+
+
+def verify_refresh_secret(raw_secret: str, hashed: str) -> bool:
+    return hmac.compare_digest(hash_refresh_secret(raw_secret), hashed)
 
 
 def generate_refresh_token() -> tuple[str, str, str]:

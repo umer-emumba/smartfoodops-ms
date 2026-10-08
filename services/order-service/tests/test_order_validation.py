@@ -31,14 +31,13 @@ def stub_restaurant(monkeypatch):
         },
     }
 
-    async def get_restaurant(_: str) -> RestaurantSnapshot:
-        return state["restaurant"]
+    async def get_quote(_: str, item_ids: list[str]):
+        # Like the real endpoint: only requested items that are on the menu.
+        state["requested"] = item_ids
+        menu = state["menu"]
+        return state["restaurant"], {i: menu[i] for i in item_ids if i in menu}
 
-    async def get_menu(_: str) -> dict[str, MenuItemSnapshot]:
-        return state["menu"]
-
-    monkeypatch.setattr(restaurant_client, "get_restaurant", get_restaurant)
-    monkeypatch.setattr(restaurant_client, "get_menu", get_menu)
+    monkeypatch.setattr(restaurant_client, "get_quote", get_quote)
     return state
 
 
@@ -75,6 +74,12 @@ async def test_stock_checked_across_split_lines(stub_restaurant) -> None:
     # 3 + 3 exceeds stock of 5 even though each line alone fits.
     with pytest.raises(ConflictError):
         await _build_items(_order(("biryani", 3), ("biryani", 3)))
+
+
+@pytest.mark.asyncio
+async def test_quote_requests_each_item_once(stub_restaurant) -> None:
+    await _build_items(_order(("biryani", 1), ("wrap", 1), ("biryani", 2)))
+    assert stub_restaurant["requested"] == ["biryani", "wrap"]
 
 
 @pytest.mark.asyncio

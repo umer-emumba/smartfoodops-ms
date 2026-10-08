@@ -3,6 +3,7 @@ import logging
 from fastapi import APIRouter, Depends, Query
 from sfo_auth import CurrentUser, Role
 from sfo_common.errors import ConflictError, ForbiddenError, NotFoundError
+from sfo_common.pagination import Page
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -135,14 +136,17 @@ async def update_my_location(
     return rider
 
 
-@router.get("/riders/admin", response_model=list[RiderResponse])
+@router.get("/riders/admin", response_model=Page[RiderResponse])
 async def list_riders_admin(
     verification_status: str | None = Query(default=None),
+    cursor: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     _: CurrentUser = Depends(require_roles(Role.SYSTEM_ADMIN)),
     session: AsyncSession = Depends(get_session),
-) -> list[Rider]:
-    return await repository.list_riders(session, verification_status=verification_status, limit=limit)
+) -> dict:
+    return await repository.list_riders(
+        session, verification_status=verification_status, cursor=cursor, limit=limit
+    )
 
 
 @router.post("/riders/{rider_id}/approve", response_model=RiderResponse)

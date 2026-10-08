@@ -1,14 +1,15 @@
+from sfo_common.pagination import build_page, paginate_newest_first
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Notification
 
 
-async def list_for_user(session: AsyncSession, user_id: str, *, limit: int) -> list[Notification]:
+async def list_for_user(
+    session: AsyncSession, user_id: str, *, cursor: str | None, limit: int
+) -> dict:
+    stmt = select(Notification).where(Notification.user_id == user_id)
     result = await session.execute(
-        select(Notification)
-        .where(Notification.user_id == user_id)
-        .order_by(Notification.created_at.desc())
-        .limit(limit)
+        paginate_newest_first(stmt, Notification, cursor=cursor, limit=limit)
     )
-    return list(result.scalars().all())
+    return build_page(list(result.scalars().all()), limit)

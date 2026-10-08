@@ -29,23 +29,41 @@ class Settings(BaseSettings):
     rate_limit_default_per_minute: int = 120
     rate_limit_auth_per_minute: int = 10
 
+    # How long a request may wait for a free connection in a backend's pool
+    # before the gateway gives up with 503 — short on purpose, see app/proxy.py.
+    upstream_pool_timeout_seconds: float = 0.5
+    upstream_connect_timeout_seconds: float = 1.0
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
     @property
+    def service_urls(self) -> dict[str, str]:
+        """Base URL per backend service."""
+        return {
+            "user-service": self.user_service_url,
+            "restaurant-service": self.restaurant_service_url,
+            "order-service": self.order_service_url,
+            "delivery-service": self.delivery_service_url,
+            "payment-service": self.payment_service_url,
+            "notification-service": self.notification_service_url,
+        }
+
+    @property
     def service_registry(self) -> dict[str, str]:
         """Maps the first /v1/{resource} path segment to the owning service's
-        base URL — see docs/architecture.md#conventions (gateway routes by
-        resource, clients don't need to know which service owns what)."""
+        name (a key of service_urls) — see docs/architecture.md#conventions
+        (gateway routes by resource, clients don't need to know which service
+        owns what)."""
         return {
-            "auth": self.user_service_url,
-            "users": self.user_service_url,
-            "restaurants": self.restaurant_service_url,
-            "orders": self.order_service_url,
-            "riders": self.delivery_service_url,
-            "payments": self.payment_service_url,
-            "notifications": self.notification_service_url,
+            "auth": "user-service",
+            "users": "user-service",
+            "restaurants": "restaurant-service",
+            "orders": "order-service",
+            "riders": "delivery-service",
+            "payments": "payment-service",
+            "notifications": "notification-service",
         }
 
 

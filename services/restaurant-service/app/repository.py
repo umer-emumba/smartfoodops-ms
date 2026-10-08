@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 
+from sfo_common.pagination import build_page, paginate_newest_first
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,13 +18,15 @@ async def get_restaurant(session: AsyncSession, restaurant_id: str) -> Restauran
 
 
 async def list_restaurants(
-    session: AsyncSession, *, city: str | None, limit: int
-) -> list[Restaurant]:
-    stmt = select(Restaurant).where(Restaurant.status == "active").order_by(Restaurant.created_at.desc())
+    session: AsyncSession, *, city: str | None, cursor: str | None, limit: int
+) -> dict:
+    stmt = select(Restaurant).where(Restaurant.status == "active")
     if city:
         stmt = stmt.where(Restaurant.city == city)
-    result = await session.execute(stmt.limit(limit))
-    return list(result.scalars().all())
+    result = await session.execute(
+        paginate_newest_first(stmt, Restaurant, cursor=cursor, limit=limit)
+    )
+    return build_page(list(result.scalars().all()), limit)
 
 
 async def list_restaurants_by_owner(session: AsyncSession, admin_user_id: str) -> list[Restaurant]:
@@ -38,15 +41,17 @@ async def list_restaurants_by_owner(session: AsyncSession, admin_user_id: str) -
 
 
 async def list_restaurants_admin(
-    session: AsyncSession, *, status: str | None, limit: int
-) -> list[Restaurant]:
+    session: AsyncSession, *, status: str | None, cursor: str | None, limit: int
+) -> dict:
     """system_admin management view — unlike list_restaurants, not filtered to
     'active' by default, so pending/suspended restaurants can be reviewed."""
-    stmt = select(Restaurant).order_by(Restaurant.created_at.desc())
+    stmt = select(Restaurant)
     if status:
         stmt = stmt.where(Restaurant.status == status)
-    result = await session.execute(stmt.limit(limit))
-    return list(result.scalars().all())
+    result = await session.execute(
+        paginate_newest_first(stmt, Restaurant, cursor=cursor, limit=limit)
+    )
+    return build_page(list(result.scalars().all()), limit)
 
 
 async def create_category(session: AsyncSession, category: MenuCategory) -> MenuCategory:
@@ -87,6 +92,17 @@ async def create_item(session: AsyncSession, item: MenuItem) -> MenuItem:
 
 async def get_item(session: AsyncSession, item_id: str) -> MenuItem | None:
     return await session.get(MenuItem, item_id)
+
+
+async def get_items_by_ids(
+    session: AsyncSession, restaurant_id: str, item_ids: list[str]
+) -> list[MenuItem]:
+    """Scoped to the restaurant, so another restaurant's item ID is simply
+    not found rather than priced."""
+    result = await session.execute(
+        select(MenuItem).where(MenuItem.restaurant_id == restaurant_id, MenuItem.id.in_(item_ids))
+    )
+    return list(result.scalars().all())
 
 
 async def delete_item(session: AsyncSession, item: MenuItem) -> None:

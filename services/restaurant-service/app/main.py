@@ -3,6 +3,7 @@ from sfo_common.db import check_db_ready
 from sfo_common.health import add_health_routes
 from sfo_observability import configure_logging
 
+from app.api import internal
 from app.api.routes import router
 from app.config import settings
 from app.db import engine
@@ -15,6 +16,7 @@ app = create_app(
 )
 
 app.include_router(router)
+app.include_router(internal.router)
 
 
 async def _readiness() -> bool:

@@ -1,6 +1,13 @@
+from dataclasses import dataclass
+
 import httpx
 from fastapi import APIRouter, Depends, Request, Response
-from sfo_common.errors import BadGatewayError, GatewayTimeoutError, NotFoundError
+from sfo_common.errors import (
+    BadGatewayError,
+    GatewayTimeoutError,
+    NotFoundError,
+    ServiceUnavailableError,
+)
 from sfo_common.middleware import CORRELATION_ID_HEADER, get_correlation_id
 
 from app.config import settings
@@ -9,14 +16,52 @@ from app.security import authenticate, is_public_route
 
 router = APIRouter()
 
-# One pooled client for every backend call. Connect timeout is short so a
-# dead backend fails fast (502) instead of holding the request for the full
-# read timeout; the read timeout bounds a backend that accepted but hangs (504).
-# Closed on shutdown by app.main's lifespan.
-client = httpx.AsyncClient(
-    timeout=httpx.Timeout(10.0, connect=2.0),
-    limits=httpx.Limits(max_connections=200, max_keepalive_connections=50),
-)
+
+@dataclass(frozen=True)
+class _UpstreamPolicy:
+    max_connections: int
+    timeout_seconds: float
+
+
+# One connection pool *per backend service*, not one shared pool (a
+# bulkhead): a backend that slows down can only fill its own pool, so a slow
+# order-service can't starve requests to a healthy restaurant-service. Limits
+# are per gateway replica; size them roughly as peak req/s to that service x
+# normal response time x ~10 headroom, and tune from load tests.
+# order-service's longer timeout covers order creation's own downstream call.
+_UPSTREAM_POLICIES: dict[str, _UpstreamPolicy] = {
+    "user-service": _UpstreamPolicy(max_connections=100, timeout_seconds=5.0),
+    "restaurant-service": _UpstreamPolicy(max_connections=150, timeout_seconds=5.0),
+    "order-service": _UpstreamPolicy(max_connections=100, timeout_seconds=10.0),
+    "delivery-service": _UpstreamPolicy(max_connections=100, timeout_seconds=5.0),
+    "payment-service": _UpstreamPolicy(max_connections=50, timeout_seconds=5.0),
+    "notification-service": _UpstreamPolicy(max_connections=50, timeout_seconds=5.0),
+}
+
+
+def _make_client(policy: _UpstreamPolicy) -> httpx.AsyncClient:
+    # connect: a dead backend fails fast (502). read: bounds a backend that
+    # accepted but hangs (504). pool: a request that can't get a connection
+    # because the pool is full fails fast (503) instead of queueing behind
+    # the slow requests that filled it.
+    return httpx.AsyncClient(
+        timeout=httpx.Timeout(
+            policy.timeout_seconds,
+            connect=settings.upstream_connect_timeout_seconds,
+            pool=settings.upstream_pool_timeout_seconds,
+        ),
+        limits=httpx.Limits(
+            max_connections=policy.max_connections,
+            max_keepalive_connections=policy.max_connections // 2,
+        ),
+    )
+
+
+# Keyed by service name (settings.service_urls). Closed on shutdown by
+# app.main's lifespan.
+clients: dict[str, httpx.AsyncClient] = {
+    name: _make_client(_UPSTREAM_POLICIES[name]) for name in settings.service_urls
+}
 
 # Hop-by-hop headers (RFC 9110 §7.6.1) describe one connection, not the
 # request, so they must not be forwarded — plus any header the Connection
@@ -55,9 +100,10 @@ async def forward_request(resource: str, rest_of_path: str, request: Request) ->
     BFF: one client call always maps to exactly one backend service call
     (docs/architecture.md#conventions, gateway scope). Shared by the generic
     catch-all route and the auth routes that need a stricter rate limit."""
-    base_url = settings.service_registry.get(resource)
-    if base_url is None:
+    service = settings.service_registry.get(resource)
+    if service is None:
         raise NotFoundError(f"No service owns resource '{resource}'")
+    base_url = settings.service_urls[service]
     # httpx would collapse ".." segments, letting an authenticated caller
     # reach a backend path outside /v1/{resource}/ (e.g. /openapi.json).
     if ".." in rest_of_path.split("/"):
@@ -70,13 +116,17 @@ async def forward_request(resource: str, rest_of_path: str, request: Request) ->
     forward_headers[CORRELATION_ID_HEADER] = get_correlation_id()
 
     try:
-        upstream_response = await client.request(
+        upstream_response = await clients[service].request(
             request.method,
             target_url,
             params=request.query_params,
             headers=forward_headers,
             content=await request.body(),
         )
+    except httpx.PoolTimeout as exc:
+        # Checked before TimeoutException (its parent): the backend wasn't
+        # slow on *this* request, its pool is full of other in-flight ones.
+        raise ServiceUnavailableError(f"'{resource}' service is busy, please retry") from exc
     except httpx.TimeoutException as exc:
         raise GatewayTimeoutError(f"'{resource}' service timed out") from exc
     except httpx.RequestError as exc:

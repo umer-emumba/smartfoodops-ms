@@ -381,7 +381,13 @@ tradeoff: heavier local resource usage (~6 Postgres containers), no added engine
 **Implemented (Week 1)**: fully async I/O stack (FastAPI + asyncpg/SQLAlchemy async + async
 httpx); stateless domain services (no in-process session state — any replica can serve any
 request); Redis-backed gateway rate limiting; per-query DB indexes on the hot lookup paths
-(owner/customer/restaurant IDs, city, cuisine); bounded list limits.
+(owner/customer/restaurant IDs, city, cuisine); keyset-paginated lists with matching
+`(filter…, created_at, id)` indexes; per-backend connection pools in the gateway (one slow
+service can't starve the others) with fail-fast 503 when a pool is full; explicit DB pool
+sizing plus Postgres statement/idle-in-transaction timeouts; argon2 off the event loop and
+SHA-256 (not argon2) for refresh-token secrets; a single `restaurant-service` call per order,
+made without holding a DB connection; advisory-locked migrations so replicas can start
+together.
 
 **Planned (Weeks 2–3)**: Temporal activity retry/backoff for inter-service calls, Kafka
 partitioning by aggregate ID for parallel consumer scale-out, Celery worker pools scaled
@@ -409,7 +415,7 @@ for the saga's synchronous calls.
 | JWT | PyJWT | Simpler, actively maintained vs. `python-jose` |
 | Redis client | redis-py (`redis.asyncio`) | Official, async-native since v4.2 |
 | MongoDB client | Motor | Official async MongoDB driver |
-| Gateway rate limiting | In-house (`app/rate_limit.py`, Redis-backed) | `fastapi-limiter`'s `RateLimiter` dependency crashed against this FastAPI version's routing internals (see docs/PROGRESS.md, "Docker verification"). Replaced with ~40 lines: one atomic Lua `INCR`+`PEXPIRE` per request, keyed by client IP + a caller-supplied bucket name. Needs shared state across gateway replicas either way, which Redis still provides. |
+| Gateway rate limiting | In-house (`app/rate_limit.py`, Redis-backed) | `fastapi-limiter`'s `RateLimiter` dependency crashed against this FastAPI version's routing internals (see docs/PROGRESS.md, "Docker verification"). Replaced with ~40 lines: one atomic Lua `INCR`+`PEXPIRE` per request, keyed by user ID (valid token) or client IP (anonymous) + a caller-supplied bucket name; the script also returns the remaining TTL, so a 429 needs no second round-trip. Needs shared state across gateway replicas either way, which Redis still provides. |
 | Kafka client | confluent-kafka-python (Week 3) | See rationale above |
 | Testing | pytest + pytest-asyncio + httpx.AsyncClient (ASGITransport) | Week 1: per-service health tests, gateway route-classification tests, order-validation unit tests (stubbed `restaurant-service`). testcontainers-backed DB integration tests are planned for Week 2 |
 | Lint/format/types | ruff + mypy | Fast, replaces flake8+isort+black in one tool |

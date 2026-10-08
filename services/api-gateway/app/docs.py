@@ -4,8 +4,8 @@ from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import HTMLResponse, JSONResponse
 from sfo_common.errors import BadGatewayError, NotFoundError
 
+from app import proxy
 from app.config import settings
-from app.proxy import client
 
 router = APIRouter()
 
@@ -13,14 +13,7 @@ router = APIRouter()
 def _services() -> dict[str, str]:
     """Unique backend services (not one per resource) — see
     docs/architecture.md#api-documentation."""
-    return {
-        "user-service": settings.user_service_url,
-        "restaurant-service": settings.restaurant_service_url,
-        "order-service": settings.order_service_url,
-        "delivery-service": settings.delivery_service_url,
-        "payment-service": settings.payment_service_url,
-        "notification-service": settings.notification_service_url,
-    }
+    return settings.service_urls
 
 
 @router.get("/docs", response_class=HTMLResponse, include_in_schema=False)
@@ -52,7 +45,7 @@ async def service_openapi(service: str) -> JSONResponse:
     if base_url is None:
         raise NotFoundError(f"Unknown service '{service}'")
     try:
-        upstream = await client.get(f"{base_url}/openapi.json")
+        upstream = await proxy.clients[service].get(f"{base_url}/openapi.json")
         upstream.raise_for_status()
         spec = upstream.json()
     except (httpx.HTTPError, ValueError) as exc:

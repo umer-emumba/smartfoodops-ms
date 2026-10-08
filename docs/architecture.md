@@ -46,8 +46,13 @@ local Traefik-based version of it was removed rather than kept as a demo.
 
 - **Sync REST (httpx, async)** for direct request/response needs. Built today:
   `order-service` → `restaurant-service` at order creation, to fetch live prices,
-  availability, and restaurant status (`order-service/app/restaurant_client.py`, 5s
-  timeout, clean 503 if unreachable, no retry yet). **(Week 2)**: these calls move into
+  availability, and restaurant status in one call to
+  `POST /internal/restaurants/{id}/quote` (only the ordered items, not the full menu;
+  `order-service/app/restaurant_client.py`, 5s timeout, clean 503 if unreachable, no retry
+  yet). Made *after* the order-service request has released its DB connection, so a slow
+  `restaurant-service` can't pin order-service's connection pool. `/internal/*` routes are
+  service-to-service only: the gateway forwards `/v1/*` exclusively, so clients can't reach
+  them. **(Week 2)**: these calls move into
   Temporal activities, which supply retry/backoff; `payment-service` authorization is
   added the same way.
 - **Temporal (Week 2)** owns the **order saga**: `order-service`'s worker orchestrates validate
@@ -145,7 +150,8 @@ facts, but it isn't what the audit trail depends on.
 - **Access tokens**: stateless JWT, 15-minute lifetime, role claims. Verified by every
   service independently (see [Defense-in-depth auth](#defense-in-depth-auth)), not just the
   gateway — signature + expiry only, no DB call.
-- **Refresh tokens**: tracked server-side in `user_db` (hashed), 7-day lifetime, rotated on
+- **Refresh tokens**: tracked server-side in `user_db` (SHA-256 of the 256-bit random
+  secret — a slow hash adds nothing for a secret that can't be guessed), 7-day lifetime, rotated on
   every use via an atomic compare-and-set, so two concurrent refreshes with one token can't
   both succeed. `/v1/auth/refresh` checks the record isn't revoked/expired and checks
   `is_blocked` — the authoritative block check. Presenting an *already-rotated* token again
@@ -153,7 +159,9 @@ facts, but it isn't what the audit trail depends on.
   logs in again). Logout requires the token's secret, not just its lookup ID.
 - **Credentials**: emails are lowercased at the API boundary; passwords must be 8–128
   characters at registration; login does the same argon2 work for unknown emails as for a
-  wrong password, so response time doesn't reveal which emails exist.
+  wrong password, so response time doesn't reveal which emails exist. argon2 runs in a
+  worker thread (at most 4 at once per process), never on the event loop — inline, each
+  ~50ms hash would stall every other request on that process.
 - **Blocked-user enforcement**: `user-service` writes a blocked user's ID into a Redis
   deny-list key with TTL = access-token lifetime (15 min), *before* committing
   `is_blocked` in the DB, so a Redis failure can't leave a block that live tokens ignore. The
@@ -238,8 +246,18 @@ is unreachable) go through the shared exception handlers and get the normal JSON
 CORS headers. As middleware, a blocked user got a plain-text 500.
 
 **Backend failures** are mapped the same way: a backend that refuses connections (or can't
-be reached within the 2s connect timeout) is a `502 bad_gateway`, one that accepts but
-doesn't answer within 10s is a `504 gateway_timeout`. The gateway never retries: most
+be reached within the 1s connect timeout) is a `502 bad_gateway`, one that accepts but
+doesn't answer within its timeout (10s for `order-service`, 5s for the rest) is a
+`504 gateway_timeout`.
+
+**Per-service connection pools (bulkhead)**: the gateway holds a separate HTTP connection
+pool for each backend service (`_UPSTREAM_POLICIES` in `app/proxy.py`), not one shared pool.
+A backend that slows down fills only its own pool, so a slow `order-service` can't starve
+requests to a healthy `restaurant-service`. A request that can't get a connection within
+0.5s gets `503 upstream_unavailable` ("busy, retry") instead of queueing behind the slow
+requests. Scaling gateway or backend replicas doesn't replace this: when a service is slow
+because of something behind it (its DB, a downstream call), more replicas add more waiting
+requests, not more capacity. The gateway never retries: most
 requests aren't safe to replay, and the client holds the `Idempotency-Key` where one
 matters. The proxy strips hop-by-hop headers (RFC 9110 §7.6.1) in both directions, rejects
 `..` path segments, and replaces a malformed client `X-Request-ID`.
@@ -300,11 +318,22 @@ A full pass over every route in all 7 services (the gateway plus six domain serv
 - **Error responses**: `{"error": {"code", "message", "details"}}` envelope, shared handler
   in `libs/common`.
 - **API versioning**: all routes under `/v1/...`.
-- **Pagination**: Week 1 list endpoints take a bounded `limit` (`1 ≤ limit ≤ 100/200`) and
-  return newest-first. Cursor-based (keyset) pagination via `sfo_common.pagination.Page`
-  is **(Week 2)** — the helper exists but isn't wired into routes yet.
-- **Rate limiting**: `/v1/auth/login`, `/v1/auth/register`, and
-  `/v1/auth/bootstrap-admin` share a stricter, separate per-IP limit than general traffic.
+- **Pagination**: list endpoints return `{"items": [...], "next_cursor": "..."}`
+  (`sfo_common.pagination.Page`), newest first, with a bounded `limit`; pass `?cursor=` from
+  the previous page to get the next. Keyset, not offset: ordered by `(created_at, id)` —
+  `id` breaks ties, and `created_at` never changes, so rows can't be skipped or repeated
+  between pages, even while new rows are being inserted. Each list has a matching
+  `(filter columns…, created_at, id)` index. Small bounded lists (a restaurant's menu and
+  categories, an owner's restaurants, a user's addresses) aren't paginated.
+- **Rate limiting**: keyed by user ID for requests with a valid token, by client IP
+  otherwise — per-IP alone would throttle unrelated customers behind one mobile-carrier
+  IP, and user+IP would hand a user a fresh limit every time their IP changes.
+  `/v1/auth/login`, `/v1/auth/register`, and `/v1/auth/bootstrap-admin` share a stricter,
+  separate limit. Fails open if Redis is unreachable (the blocked-user check fails closed).
+- **Database connections**: explicit per-replica pool (`DB_POOL_SIZE` 10 +
+  `DB_MAX_OVERFLOW` 5), 3s pool wait then `503 service_busy`, Postgres
+  `statement_timeout` 5s and `idle_in_transaction_session_timeout` 15s
+  (`sfo_common.db.make_engine`). Total connections per database = replicas × 15.
 - **Logging hygiene**: passwords, tokens, and payment details are never logged, enforced
   via a shared log-sanitizing helper in `libs/observability`.
 - **Gateway scope**: routing, auth, rate limiting, CORS, Swagger proxy/index, tracking
@@ -353,5 +382,9 @@ smartfoodops/
 ```
 
 Each service directory: `pyproject.toml` (workspace member), `Dockerfile`,
-`entrypoint.sh` (runs `alembic upgrade head`, then uvicorn), `env.example`, `app/` (API
+`entrypoint.sh` (runs `alembic upgrade head`, then uvicorn — safe with many replicas
+starting at once: migrations take a Postgres advisory lock, so one replica migrates and
+the rest wait, then find nothing to do; see `sfo_common.db.acquire_migration_lock`.
+Migrations must stay backward-compatible with the previous release, since old replicas
+keep serving during a rolling deploy), `env.example`, `app/` (API
 routers, models, schemas, repository), `alembic/` + `alembic.ini`, `tests/`.

@@ -1,5 +1,5 @@
 from datetime import UTC, datetime
-from typing import Literal
+from enum import StrEnum
 
 from sfo_common import new_id
 from sfo_events import OutboxEventMixin
@@ -8,30 +8,34 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Identity,
+    Index,
     Integer,
     Numeric,
     String,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
 
-# Week 1: skeleton create/read only. Week 2 adds the Temporal saga that drives
-# transitions through this state machine — see docs/architecture.md.
-# created -> awaiting_restaurant_acceptance -> confirmed -> assigned -> picked_up -> delivered
-# plus: rejected, cancelled
-ORDER_STATUS_CREATED = "created"
-OrderStatus = Literal[
-    "created",
-    "awaiting_restaurant_acceptance",
-    "confirmed",
-    "assigned",
-    "picked_up",
-    "delivered",
-    "rejected",
-    "cancelled",
-]
+
+class OrderStatus(StrEnum):
+    """The one definition of order statuses — used for the column default,
+    every transition, and API filters, so they can't drift apart.
+
+    Week 1: skeleton create/read only. Week 2 adds the Temporal saga that
+    drives transitions through this state machine — see docs/architecture.md.
+    """
+
+    CREATED = "created"
+    AWAITING_RESTAURANT_ACCEPTANCE = "awaiting_restaurant_acceptance"
+    CONFIRMED = "confirmed"
+    ASSIGNED = "assigned"
+    PICKED_UP = "picked_up"
+    DELIVERED = "delivered"
+    REJECTED = "rejected"
+    CANCELLED = "cancelled"
 
 
 class Order(Base):
@@ -42,15 +46,21 @@ class Order(Base):
         UniqueConstraint(
             "customer_id", "idempotency_key", name="uq_orders_customer_idempotency_key"
         ),
+        # Keyset pagination (sfo_common.pagination: created_at DESC, id DESC)
+        # for a customer's own orders, the admin status filter, and the
+        # unfiltered admin list.
+        Index("ix_orders_customer_id_created_at_id", "customer_id", "created_at", "id"),
+        Index("ix_orders_status_created_at_id", "status", "created_at", "id"),
+        Index("ix_orders_created_at_id", "created_at", "id"),
     )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
     # Human-facing, sequential — distinct from the UUID primary key, for
     # customer support / receipts (docs/technical-documentation.md).
     order_number: Mapped[int] = mapped_column(Integer, Identity(start=1000), unique=True)
-    customer_id: Mapped[str] = mapped_column(String, index=True)  # opaque ref to user-service
+    customer_id: Mapped[str] = mapped_column(String)  # opaque ref to user-service
     restaurant_id: Mapped[str] = mapped_column(String, index=True)  # opaque ref to restaurant-service
-    status: Mapped[str] = mapped_column(String, default=ORDER_STATUS_CREATED)
+    status: Mapped[str] = mapped_column(String, default=OrderStatus.CREATED)
 
     # Idempotency-Key header from POST /v1/orders, plus a hash of the request
     # body — a retry with the same key and same body returns this order
@@ -146,3 +156,12 @@ class OrderStatusHistory(Base):
 
 class OutboxEvent(Base, OutboxEventMixin):
     __tablename__ = "outbox_events"
+    # Week 3's relay polls undispatched rows oldest-first; a partial index
+    # stays small because dispatched rows drop out of it.
+    __table_args__ = (
+        Index(
+            "ix_outbox_events_undispatched",
+            "created_at",
+            postgresql_where=text("dispatched_at IS NULL"),
+        ),
+    )

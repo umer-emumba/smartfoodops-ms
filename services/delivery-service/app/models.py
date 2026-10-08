@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 
 from sfo_common import new_id
 from sfo_events import OutboxEventMixin
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String
+from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -15,6 +15,17 @@ RIDER_STATUS_OFFLINE = "offline"
 
 class Rider(Base):
     __tablename__ = "riders"
+    # Keyset pagination of the admin rider list (sfo_common.pagination),
+    # unfiltered and by verification_status.
+    __table_args__ = (
+        Index("ix_riders_created_at_id", "created_at", "id"),
+        Index(
+            "ix_riders_verification_status_created_at_id",
+            "verification_status",
+            "created_at",
+            "id",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
     user_id: Mapped[str] = mapped_column(String, unique=True, index=True)  # opaque ref to user-service

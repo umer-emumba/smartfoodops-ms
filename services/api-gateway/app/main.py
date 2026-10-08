@@ -16,7 +16,8 @@ configure_logging(settings.service_name, settings.log_level)
 @asynccontextmanager
 async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
     yield
-    await proxy.client.aclose()
+    for client in proxy.clients.values():
+        await client.aclose()
     await redis.aclose()
 
 

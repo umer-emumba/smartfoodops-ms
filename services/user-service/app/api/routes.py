@@ -7,12 +7,22 @@ from sfo_auth import (
     Role,
     create_access_token,
     generate_refresh_token,
-    hash_secret,
+    hash_password,
+    hash_password_blocking,
+    hash_refresh_secret,
     parse_refresh_token,
-    verify_secret,
+    verify_password,
+    verify_refresh_secret,
 )
 from sfo_auth.denylist import block_user, unblock_user
-from sfo_common.errors import ConflictError, ForbiddenError, NotFoundError, UnauthorizedError
+from sfo_common.errors import (
+    ConflictError,
+    ForbiddenError,
+    NotFoundError,
+    UnauthorizedError,
+    ValidationAppError,
+)
+from sfo_common.pagination import Page
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -39,7 +49,7 @@ router = APIRouter(prefix="/v1", tags=["auth"])
 # Verified against when the email doesn't exist, so an unknown email costs the
 # same argon2 work as a wrong password — response time doesn't reveal which
 # emails have accounts.
-_DUMMY_PASSWORD_HASH = hash_secret("timing-equalizer-not-a-real-password")
+_DUMMY_PASSWORD_HASH = hash_password_blocking("timing-equalizer-not-a-real-password")
 
 
 async def _create_user_or_conflict(session: AsyncSession, user: User) -> User:
@@ -72,7 +82,7 @@ def _issue_tokens(user: User) -> tuple[str, RefreshToken, str]:
     refresh_row = RefreshToken(
         id=lookup_id,
         user_id=user.id,
-        token_hash=hash_secret(raw_secret),
+        token_hash=hash_refresh_secret(raw_secret),
         expires_at=datetime.now(UTC) + timedelta(days=settings.refresh_token_ttl_days),
     )
     return access_token, refresh_row, token_str
@@ -84,7 +94,7 @@ async def register(body: RegisterRequest, session: AsyncSession = Depends(get_se
         raise ForbiddenError(f"Cannot self-register with role '{body.role}'")
     user = User(
         email=body.email,
-        hashed_password=hash_secret(body.password),
+        hashed_password=await hash_password(body.password),
         role=body.role,
         full_name=body.full_name,
         phone_number=body.phone_number,
@@ -118,7 +128,7 @@ async def bootstrap_admin(
         raise ConflictError("A system_admin already exists — bootstrap is disabled")
     user = User(
         email=body.email,
-        hashed_password=hash_secret(body.password),
+        hashed_password=await hash_password(body.password),
         role=Role.SYSTEM_ADMIN,
         full_name=body.full_name,
         phone_number=body.phone_number,
@@ -130,9 +140,9 @@ async def bootstrap_admin(
 async def login(body: LoginRequest, session: AsyncSession = Depends(get_session)) -> TokenResponse:
     user = await repository.get_user_by_email(session, body.email)
     if user is None:
-        verify_secret(body.password, _DUMMY_PASSWORD_HASH)
+        await verify_password(body.password, _DUMMY_PASSWORD_HASH)
         raise UnauthorizedError("Invalid email or password")
-    if not verify_secret(body.password, user.hashed_password):
+    if not await verify_password(body.password, user.hashed_password):
         raise UnauthorizedError("Invalid email or password")
     if user.is_blocked:
         raise ForbiddenError("Account is blocked")
@@ -152,7 +162,7 @@ async def refresh(body: RefreshRequest, session: AsyncSession = Depends(get_sess
 
     record = await repository.get_refresh_token(session, lookup_id)
     now = datetime.now(UTC)
-    if record is None or not verify_secret(raw_secret, record.token_hash):
+    if record is None or not verify_refresh_secret(raw_secret, record.token_hash):
         raise UnauthorizedError("Invalid or expired refresh token")
     if record.revoked_at is not None:
         # A genuine, already-rotated token being presented again means two
@@ -190,7 +200,7 @@ async def logout(body: RefreshRequest, session: AsyncSession = Depends(get_sessi
     record = await repository.get_refresh_token(session, lookup_id)
     # The secret must match — knowing a lookup_id alone (e.g. from a log line)
     # must not let someone end another user's session.
-    if record is None or not verify_secret(raw_secret, record.token_hash):
+    if record is None or not verify_refresh_secret(raw_secret, record.token_hash):
         return
     if await repository.revoke_refresh_token_if_active(session, record.id, at=datetime.now(UTC)):
         await session.commit()
@@ -208,22 +218,30 @@ async def get_me(
 
 
 # Registered after /users/me, so "me" is never captured as a {user_id}.
-@router.get("/users", response_model=list[UserResponse])
+@router.get("/users", response_model=Page[UserResponse])
 async def list_users(
     role: Role | None = Query(default=None),
     is_blocked: bool | None = Query(default=None),
-    q: str | None = Query(default=None, min_length=2, max_length=100),
+    q: str | None = Query(default=None, max_length=100),
+    cursor: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     _: CurrentUser = Depends(require_roles(Role.SYSTEM_ADMIN)),
     session: AsyncSession = Depends(get_session),
-) -> list[User]:
+) -> dict:
     """system_admin user management: find users to review or block, by role,
-    blocked state, or a search over email/name/phone."""
+    blocked state, or a search over email/name/phone. Newest first; pass the
+    previous page's `next_cursor` to get the next page."""
+    # Checked after stripping, so "  " can't pass as a 2-character search.
+    if q is not None:
+        q = q.strip()
+        if len(q) < 2:
+            raise ValidationAppError("Search term must be at least 2 characters")
     return await repository.list_users(
         session,
         role=role.value if role else None,
         is_blocked=is_blocked,
         q=q,
+        cursor=cursor,
         limit=limit,
     )
 

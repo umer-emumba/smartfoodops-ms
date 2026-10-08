@@ -3,6 +3,7 @@ from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy.ext.asyncio import async_engine_from_config
+from sfo_common.db import acquire_migration_lock
 from sqlalchemy import pool
 
 from app.config import settings
@@ -31,6 +32,8 @@ def run_migrations_offline() -> None:
 def _do_run_migrations(connection) -> None:
     context.configure(connection=connection, target_metadata=target_metadata)
     with context.begin_transaction():
+        # Only one replica migrates at a time — see sfo_common.db.
+        acquire_migration_lock(connection)
         context.run_migrations()
 
 

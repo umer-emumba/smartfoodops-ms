@@ -1,5 +1,6 @@
 from datetime import datetime
 
+from sfo_common.pagination import build_page, paginate_newest_first
 from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,32 +26,41 @@ async def get_user_by_id(session: AsyncSession, user_id: str) -> User | None:
     return await session.get(User, user_id)
 
 
+def _escape_like(term: str) -> str:
+    """`%` and `_` are LIKE wildcards — escaped so a search for "a_b" or "50%"
+    matches those characters literally instead of anything."""
+    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 async def list_users(
     session: AsyncSession,
     *,
     role: str | None,
     is_blocked: bool | None,
     q: str | None,
+    cursor: str | None,
     limit: int,
-) -> list[User]:
+) -> dict:
     """system_admin user search. `q` is a case-insensitive substring match on
     email, full name, or phone number."""
-    stmt = select(User).order_by(User.created_at.desc())
+    stmt = select(User)
     if role is not None:
         stmt = stmt.where(User.role == role)
     if is_blocked is not None:
         stmt = stmt.where(User.is_blocked == is_blocked)
     if q:
-        pattern = f"%{q}%"
+        pattern = f"%{_escape_like(q)}%"
         stmt = stmt.where(
             or_(
-                User.email.ilike(pattern),
-                User.full_name.ilike(pattern),
-                User.phone_number.ilike(pattern),
+                User.email.ilike(pattern, escape="\\"),
+                User.full_name.ilike(pattern, escape="\\"),
+                User.phone_number.ilike(pattern, escape="\\"),
             )
         )
-    result = await session.execute(stmt.limit(limit))
-    return list(result.scalars().all())
+    result = await session.execute(
+        paginate_newest_first(stmt, User, cursor=cursor, limit=limit)
+    )
+    return build_page(list(result.scalars().all()), limit)
 
 
 async def create_user(session: AsyncSession, *, user: User) -> User:

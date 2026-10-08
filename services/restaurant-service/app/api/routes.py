@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, Query, status
 from sfo_auth import CurrentUser, Role
 from sfo_common.errors import ConflictError, ForbiddenError, NotFoundError, ValidationAppError
+from sfo_common.pagination import Page
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -114,13 +115,14 @@ async def create_restaurant(
     return restaurant
 
 
-@router.get("/restaurants", response_model=list[RestaurantResponse])
+@router.get("/restaurants", response_model=Page[RestaurantResponse])
 async def list_restaurants(
     city: str | None = Query(default=None),
+    cursor: str | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=100),
     session: AsyncSession = Depends(get_session),
-) -> list[Restaurant]:
-    return await repository.list_restaurants(session, city=city, limit=limit)
+) -> dict:
+    return await repository.list_restaurants(session, city=city, cursor=cursor, limit=limit)
 
 
 # Static paths ("mine", "admin") must be registered before the dynamic
@@ -135,14 +137,17 @@ async def list_my_restaurants(
     return await repository.list_restaurants_by_owner(session, current.id)
 
 
-@router.get("/restaurants/admin", response_model=list[RestaurantResponse])
+@router.get("/restaurants/admin", response_model=Page[RestaurantResponse])
 async def list_restaurants_admin(
     status: str | None = Query(default=None),
+    cursor: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     _: CurrentUser = Depends(require_roles(Role.SYSTEM_ADMIN)),
     session: AsyncSession = Depends(get_session),
-) -> list[Restaurant]:
-    return await repository.list_restaurants_admin(session, status=status, limit=limit)
+) -> dict:
+    return await repository.list_restaurants_admin(
+        session, status=status, cursor=cursor, limit=limit
+    )
 
 
 @router.get("/restaurants/{restaurant_id}", response_model=RestaurantResponse)

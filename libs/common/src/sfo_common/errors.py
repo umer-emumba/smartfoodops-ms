@@ -4,6 +4,7 @@ from fastapi import FastAPI, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import TimeoutError as SQLAlchemyPoolTimeout
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 
@@ -113,6 +114,17 @@ def register_exception_handlers(app: FastAPI) -> None:
                 # every custom-validator 422 would itself crash into a 500.
                 {"errors": jsonable_encoder(exc.errors(), custom_encoder={Exception: str})},
             ),
+        )
+
+    @app.exception_handler(SQLAlchemyPoolTimeout)
+    async def _handle_pool_timeout(_: Request, exc: SQLAlchemyPoolTimeout) -> JSONResponse:
+        """Every DB connection in this replica is busy (see
+        sfo_common.db.make_engine's short pool_timeout) — a retryable 503,
+        not a 500."""
+        _logger.warning("Database connection pool exhausted")
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content=_envelope("service_busy", "Service is busy, please retry"),
         )
 
     @app.exception_handler(Exception)

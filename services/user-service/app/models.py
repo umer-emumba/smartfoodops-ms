@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 
 from sfo_auth import Role
 from sfo_common import new_id
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, String
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -10,6 +10,8 @@ from app.db import Base
 
 class User(Base):
     __tablename__ = "users"
+    # Keyset pagination for the admin user list (sfo_common.pagination).
+    __table_args__ = (Index("ix_users_created_at_id", "created_at", "id"),)
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
     email: Mapped[str] = mapped_column(String, unique=True, index=True)

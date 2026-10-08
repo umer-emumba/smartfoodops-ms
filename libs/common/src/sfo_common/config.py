@@ -17,6 +17,13 @@ class BaseServiceSettings(BaseSettings):
     database_url: str
     redis_url: str = "redis://redis:6379/0"
 
+    # Per replica — total connections against Postgres are
+    # replicas x (pool_size + max_overflow). See sfo_common.db.make_engine.
+    db_pool_size: int = 10
+    db_max_overflow: int = 5
+    db_pool_timeout_seconds: float = 3.0
+    db_statement_timeout_ms: int = 5000
+
     jwt_secret: str
     jwt_algorithm: str = "HS256"
     access_token_ttl_minutes: int = 15

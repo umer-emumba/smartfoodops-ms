@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 
 from sfo_common import new_id
-from sqlalchemy import DateTime, Integer, String
+from sqlalchemy import DateTime, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -13,9 +13,14 @@ from app.db import Base
 
 class Notification(Base):
     __tablename__ = "notifications"
+    # Keyset pagination of a user's own notifications (sfo_common.pagination);
+    # also serves plain user_id lookups.
+    __table_args__ = (
+        Index("ix_notifications_user_id_created_at_id", "user_id", "created_at", "id"),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
-    user_id: Mapped[str] = mapped_column(String, index=True)  # opaque ref to user-service
+    user_id: Mapped[str] = mapped_column(String)  # opaque ref to user-service
     # So a customer can click through from a notification to what it's about.
     related_order_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     type: Mapped[str] = mapped_column(String)  # order_update | delivery_update | cancellation ...

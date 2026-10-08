@@ -1,3 +1,4 @@
+from sfo_common.pagination import build_page, paginate_newest_first
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -35,27 +36,27 @@ async def list_orders_admin(
     status: str | None,
     restaurant_id: str | None,
     customer_id: str | None,
+    cursor: str | None,
     limit: int,
-) -> list[Order]:
-    stmt = select(Order).order_by(Order.created_at.desc()).options(selectinload(Order.items))
+) -> dict:
+    stmt = select(Order).options(selectinload(Order.items))
     if status is not None:
         stmt = stmt.where(Order.status == status)
     if restaurant_id is not None:
         stmt = stmt.where(Order.restaurant_id == restaurant_id)
     if customer_id is not None:
         stmt = stmt.where(Order.customer_id == customer_id)
-    result = await session.execute(stmt.limit(limit))
-    return list(result.scalars().all())
+    result = await session.execute(paginate_newest_first(stmt, Order, cursor=cursor, limit=limit))
+    return build_page(list(result.scalars().all()), limit)
 
 
 async def list_orders_for_customer(
-    session: AsyncSession, customer_id: str, *, limit: int
-) -> list[Order]:
-    result = await session.execute(
+    session: AsyncSession, customer_id: str, *, cursor: str | None, limit: int
+) -> dict:
+    stmt = (
         select(Order)
         .where(Order.customer_id == customer_id)
-        .order_by(Order.created_at.desc())
-        .limit(limit)
         .options(selectinload(Order.items))
     )
-    return list(result.scalars().all())
+    result = await session.execute(paginate_newest_first(stmt, Order, cursor=cursor, limit=limit))
+    return build_page(list(result.scalars().all()), limit)

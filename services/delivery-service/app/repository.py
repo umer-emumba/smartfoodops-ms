@@ -1,3 +1,4 @@
+from sfo_common.pagination import build_page, paginate_newest_first
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,15 +21,15 @@ async def get_rider(session: AsyncSession, rider_id: str) -> Rider | None:
 
 
 async def list_riders(
-    session: AsyncSession, *, verification_status: str | None, limit: int
-) -> list[Rider]:
+    session: AsyncSession, *, verification_status: str | None, cursor: str | None, limit: int
+) -> dict:
     """system_admin management view — all riders, optionally filtered by
     verification_status, unlike the rider's own self-service /riders/me."""
-    stmt = select(Rider).order_by(Rider.created_at.desc())
+    stmt = select(Rider)
     if verification_status:
         stmt = stmt.where(Rider.verification_status == verification_status)
-    result = await session.execute(stmt.limit(limit))
-    return list(result.scalars().all())
+    result = await session.execute(paginate_newest_first(stmt, Rider, cursor=cursor, limit=limit))
+    return build_page(list(result.scalars().all()), limit)
 
 
 async def list_verification_history(

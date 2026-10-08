@@ -10,6 +10,13 @@ from app.db import Base
 
 class Restaurant(Base):
     __tablename__ = "restaurants"
+    # Keyset pagination (sfo_common.pagination: created_at DESC, id DESC) for
+    # the public list (always status = active, optionally by city) and the
+    # admin list's status filter.
+    __table_args__ = (
+        Index("ix_restaurants_status_city_created_at_id", "status", "city", "created_at", "id"),
+        Index("ix_restaurants_status_created_at_id", "status", "created_at", "id"),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
     admin_user_id: Mapped[str] = mapped_column(String, index=True)  # opaque ref to user-service

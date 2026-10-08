@@ -7,10 +7,10 @@ from sfo_common.errors import NotFoundError, ServiceUnavailableError
 from app.config import settings
 
 # Sync REST call to restaurant-service — the source of truth for menu prices,
-# availability and restaurant status. Called anonymously on purpose: the
-# public read endpoints already 404 any restaurant that isn't `active`, so a
-# pending/suspended restaurant is rejected without order-service needing its
-# own copy of that visibility rule. Week 2's saga replaces this with a
+# availability and restaurant status. Uses restaurant-service's /internal
+# quote endpoint (one round trip, only the ordered items), which api-gateway
+# never routes to — it only forwards /v1/*.
+# Week 2's saga replaces this with a
 # Temporal activity (retried by Temporal); Week 1 has no retry, just a
 # bounded timeout and a clean 503 when restaurant-service is unreachable.
 client = httpx.AsyncClient(
@@ -34,9 +34,17 @@ class MenuItemSnapshot:
     stock_count: int | None
 
 
-async def _get_json(path: str) -> dict | list:
+async def get_quote(
+    restaurant_id: str, item_ids: list[str]
+) -> tuple[RestaurantSnapshot, dict[str, MenuItemSnapshot]]:
+    """One round trip for the restaurant's status and just the requested items
+    — not the full public menu. Items that aren't on this restaurant's menu are
+    simply absent from the result. The restaurant's status is returned as-is
+    (not 404'd when inactive), so the caller applies the visibility rule."""
     try:
-        resp = await client.get(path)
+        resp = await client.post(
+            f"/internal/restaurants/{restaurant_id}/quote", json={"item_ids": item_ids}
+        )
     except httpx.RequestError as exc:
         raise ServiceUnavailableError("restaurant-service is unreachable") from exc
     if resp.status_code == 404:
@@ -45,19 +53,12 @@ async def _get_json(path: str) -> dict | list:
         raise ServiceUnavailableError(
             "restaurant-service returned an error", details={"status": resp.status_code}
         )
-    return resp.json()
-
-
-async def get_restaurant(restaurant_id: str) -> RestaurantSnapshot:
-    data = await _get_json(f"/v1/restaurants/{restaurant_id}")
-    return RestaurantSnapshot(
-        id=data["id"], status=data["status"], is_accepting_orders=data["is_accepting_orders"]
+    data = resp.json()
+    r = data["restaurant"]
+    restaurant = RestaurantSnapshot(
+        id=r["id"], status=r["status"], is_accepting_orders=r["is_accepting_orders"]
     )
-
-
-async def get_menu(restaurant_id: str) -> dict[str, MenuItemSnapshot]:
-    data = await _get_json(f"/v1/restaurants/{restaurant_id}/menu")
-    return {
+    items = {
         item["id"]: MenuItemSnapshot(
             id=item["id"],
             name=item["name"],
@@ -67,5 +68,6 @@ async def get_menu(restaurant_id: str) -> dict[str, MenuItemSnapshot]:
             is_available=item["is_available"],
             stock_count=item["stock_count"],
         )
-        for item in data
+        for item in data["items"]
     }
+    return restaurant, items
