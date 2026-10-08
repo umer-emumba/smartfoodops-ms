@@ -31,6 +31,11 @@ class Settings(BaseSettings):
 
     # How long a request may wait for a free connection in a backend's pool
     # before the gateway gives up with 503 — short on purpose, see app/proxy.py.
+    # Largest request body the gateway will accept (413 above it). Every API
+    # body is small JSON; this stops one oversized request from holding a
+    # pod's memory, since the gateway buffers bodies before forwarding.
+    max_request_body_bytes: int = 1_048_576
+
     upstream_pool_timeout_seconds: float = 0.5
     upstream_connect_timeout_seconds: float = 1.0
 

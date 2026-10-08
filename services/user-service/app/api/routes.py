@@ -33,7 +33,6 @@ from app.db import get_session
 from app.models import Address, RefreshToken, User
 from app.redis_client import redis
 from app.schemas import (
-    PUBLIC_ROLES,
     AddressCreate,
     AddressResponse,
     BootstrapAdminRequest,
@@ -90,8 +89,7 @@ def _issue_tokens(user: User) -> tuple[str, RefreshToken, str]:
 
 @router.post("/auth/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def register(body: RegisterRequest, session: AsyncSession = Depends(get_session)) -> User:
-    if body.role not in PUBLIC_ROLES:
-        raise ForbiddenError(f"Cannot self-register with role '{body.role}'")
+    # body.role is already limited to PUBLIC_ROLES by the schema (422 otherwise).
     user = User(
         email=body.email,
         hashed_password=await hash_password(body.password),

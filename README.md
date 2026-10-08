@@ -186,6 +186,15 @@ uvx pre-commit install      # once: ruff + mypy run on every commit
 `mypy` runs per service (`scripts/typecheck.sh`), not over the whole repo, because every
 service has its own top-level `app` package.
 
+### Debugging one request across services
+
+Every response carries an `X-Request-ID` header, and every service logs under that
+same ID as `trace_id`. To see one request's whole path:
+
+```bash
+docker compose logs --no-log-prefix | grep <x-request-id>
+```
+
 ### Smoke test (whole running system)
 
 ```bash
@@ -198,7 +207,8 @@ One end-to-end test for the platform, not one per service: it drives the system 
 `api-gateway` like a client (auth, browsing, caching, ordering, admin views, riders), so it
 catches what per-service tests can't — routing, migrations, config, service-to-service
 calls. `--deep` also checks each service's `/readyz`/`/livez`, the Redis menu cache,
-refresh-token storage and the Mongo location ping. `--base-url` points it at another
+refresh-token storage, the Mongo location ping, and that one order's trace ID shows up
+in the gateway, order-service and restaurant-service logs. `--base-url` points it at another
 deployment. Safe to re-run; exits non-zero on any failure.
 
 ## API overview

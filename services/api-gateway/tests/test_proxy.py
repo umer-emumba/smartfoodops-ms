@@ -2,57 +2,12 @@
 back as the standard JSON error envelope, never a plain-text 500."""
 
 import httpx
-import pytest
 from app import proxy, rate_limit, security
 from app.config import settings
-from app.main import app
-from httpx import ASGITransport, AsyncClient
 from redis.exceptions import ConnectionError as RedisConnectionError
-from sfo_auth import Role, create_access_token
 
-
-def _auth() -> dict[str, str]:
-    token = create_access_token(
-        user_id="u1",
-        role=Role.CUSTOMER,
-        secret=settings.jwt_secret,
-        algorithm=settings.jwt_algorithm,
-        ttl_minutes=15,
-    )
-    return {"Authorization": f"Bearer {token}"}
-
-
-@pytest.fixture
-def gateway(monkeypatch):
-    """Gateway with Redis stubbed out and a swappable fake backend."""
-
-    async def allow(_key, _window, deny_key):
-        # (count in window, remaining TTL ms, blocked — None if not checked)
-        return 1, 60_000, (False if deny_key else None)
-
-    async def not_blocked(_: str) -> int:
-        return 0
-
-    monkeypatch.setattr(rate_limit, "_redis_checks", allow)
-    monkeypatch.setattr(security.redis, "exists", not_blocked)
-
-    def use_backend(handler) -> None:
-        monkeypatch.setattr(
-            proxy,
-            "clients",
-            {
-                name: httpx.AsyncClient(transport=httpx.MockTransport(handler))
-                for name in proxy.clients
-            },
-        )
-
-    return use_backend
-
-
-def _client() -> AsyncClient:
-    return AsyncClient(
-        transport=ASGITransport(app=app, raise_app_exceptions=False), base_url="http://gw"
-    )
+from tests.helpers import auth as _auth
+from tests.helpers import gateway_client as _client
 
 
 async def test_backend_unreachable_is_502(gateway) -> None:

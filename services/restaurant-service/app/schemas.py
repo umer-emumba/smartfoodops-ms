@@ -4,6 +4,7 @@ from typing import Annotated, ClassVar, Literal, Self
 
 from pydantic import AwareDatetime, BaseModel, Field, model_validator
 from sfo_common.money import MoneyAmount
+from sfo_common.schemas import EntityId, PhoneNumber, RequestModel
 
 Latitude = Annotated[float, Field(ge=-90, le=90)]
 Longitude = Annotated[float, Field(ge=-180, le=180)]
@@ -11,9 +12,14 @@ Longitude = Annotated[float, Field(ge=-180, le=180)]
 # doesn't fit (too many digits/decimals) is a 422 here instead of a DB error.
 Money = Annotated[Decimal, Field(ge=0, max_digits=10, decimal_places=2)]
 DiscountType = Literal["percentage", "fixed_amount"]
+RestaurantName = Annotated[str, Field(min_length=1, max_length=200)]
+Address = Annotated[str, Field(min_length=1, max_length=500)]
+City = Annotated[str, Field(min_length=1, max_length=100)]
+CuisineType = Annotated[str, Field(min_length=1, max_length=100)]
+Description = Annotated[str, Field(max_length=1000)]
 
 
-class _PatchModel(BaseModel):
+class _PatchModel(RequestModel):
     """Base for PATCH bodies. `exclude_unset` still keeps an explicit
     `{"name": null}`, which would write NULL into a NOT NULL column (a 500).
     Rejects that as a 422 unless the field is genuinely nullable."""
@@ -32,14 +38,14 @@ class _PatchModel(BaseModel):
         return self
 
 
-class RestaurantCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=200)
-    address: str = Field(min_length=1)
-    city: str = Field(min_length=1)
+class RestaurantCreate(RequestModel):
+    name: RestaurantName
+    address: Address
+    city: City
     lat: Latitude
     lng: Longitude
-    contact_phone: str = Field(min_length=5, max_length=20)
-    cuisine_type: str | None = None
+    contact_phone: PhoneNumber
+    cuisine_type: CuisineType | None = None
 
 
 class RestaurantUpdate(_PatchModel):
@@ -49,14 +55,14 @@ class RestaurantUpdate(_PatchModel):
     # would let a restaurant_admin PATCH their own way to "active".
     nullable_fields = frozenset({"cuisine_type"})
 
-    name: str | None = Field(default=None, min_length=1, max_length=200)
-    address: str | None = Field(default=None, min_length=1)
+    name: RestaurantName | None = None
+    address: Address | None = None
     lat: Latitude | None = None
     lng: Longitude | None = None
-    contact_phone: str | None = Field(default=None, min_length=5, max_length=20)
-    cuisine_type: str | None = None
+    contact_phone: PhoneNumber | None = None
+    cuisine_type: CuisineType | None = None
     is_accepting_orders: bool | None = None
-    max_concurrent_orders: int | None = Field(default=None, ge=1)
+    max_concurrent_orders: int | None = Field(default=None, ge=1, le=1000)
     avg_prep_time_minutes: int | None = Field(default=None, ge=1, le=240)
 
 
@@ -79,7 +85,7 @@ class RestaurantResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class MenuCategoryCreate(BaseModel):
+class MenuCategoryCreate(RequestModel):
     name: str = Field(min_length=1, max_length=100)
 
 
@@ -95,12 +101,12 @@ class MenuCategoryResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class MenuItemCreate(BaseModel):
-    category_id: str
+class MenuItemCreate(RequestModel):
+    category_id: EntityId
     name: str = Field(min_length=1, max_length=200)
-    description: str = ""
+    description: Description = ""
     price: Money
-    stock_count: int | None = Field(default=None, ge=0)  # None = unlimited
+    stock_count: int | None = Field(default=None, ge=0, le=1_000_000)  # None = unlimited
 
 
 class MenuItemUpdate(_PatchModel):
@@ -108,10 +114,10 @@ class MenuItemUpdate(_PatchModel):
     nullable_fields = frozenset({"stock_count"})
 
     name: str | None = Field(default=None, min_length=1, max_length=200)
-    description: str | None = None
+    description: Description | None = None
     price: Money | None = None
     is_available: bool | None = None
-    stock_count: int | None = Field(default=None, ge=0)
+    stock_count: int | None = Field(default=None, ge=0, le=1_000_000)
 
 
 class MenuItemResponse(BaseModel):
@@ -139,7 +145,7 @@ def check_promotion_rules(
         raise ValueError("a percentage discount cannot exceed 100")
 
 
-class PromotionCreate(BaseModel):
+class PromotionCreate(RequestModel):
     code: str = Field(min_length=1, max_length=50)
     discount_type: DiscountType
     discount_value: Annotated[Decimal, Field(gt=0, max_digits=10, decimal_places=2)]
@@ -186,7 +192,7 @@ class PromotionResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class StatusChangeRequest(BaseModel):
+class StatusChangeRequest(RequestModel):
     """Optional body for approve/suspend — recorded in the audit trail."""
 
     reason: str | None = Field(default=None, max_length=500)
@@ -206,8 +212,8 @@ class StatusHistoryResponse(BaseModel):
 # --- Internal: order-service's price/stock quote (app/api/internal.py) ---
 
 
-class QuoteRequest(BaseModel):
-    item_ids: list[str] = Field(min_length=1, max_length=200)
+class QuoteRequest(RequestModel):
+    item_ids: list[EntityId] = Field(min_length=1, max_length=200)
 
 
 class QuoteRestaurant(BaseModel):

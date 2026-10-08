@@ -3,6 +3,7 @@ from decimal import Decimal
 
 import httpx
 from sfo_common.errors import NotFoundError, ServiceUnavailableError
+from sfo_common.middleware import propagate_correlation_id
 
 from app.config import settings
 
@@ -13,8 +14,12 @@ from app.config import settings
 # Week 2's saga replaces this with a
 # Temporal activity (retried by Temporal); Week 1 has no retry, just a
 # bounded timeout and a clean 503 when restaurant-service is unreachable.
+# The request hook forwards X-Request-ID, so restaurant-service logs this call
+# under the same trace ID as the order request that triggered it.
 client = httpx.AsyncClient(
-    base_url=settings.restaurant_service_url, timeout=httpx.Timeout(5.0, connect=2.0)
+    base_url=settings.restaurant_service_url,
+    timeout=httpx.Timeout(5.0, connect=2.0),
+    event_hooks={"request": [propagate_correlation_id]},
 )
 
 

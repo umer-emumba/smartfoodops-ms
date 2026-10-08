@@ -1,11 +1,14 @@
 from decimal import Decimal
 
+import httpx
 import pytest
 from app import restaurant_client
 from app.api.routes import _build_items
 from app.restaurant_client import MenuItemSnapshot, RestaurantSnapshot
-from app.schemas import OrderCreate, OrderItemResponse
+from app.schemas import MAX_ORDER_LINES, OrderCreate, OrderItemResponse
+from pydantic import ValidationError
 from sfo_common.errors import ConflictError, NotFoundError, ValidationAppError
+from sfo_common.middleware import _correlation_id
 
 RESTAURANT_ID = "r-1"
 
@@ -101,3 +104,32 @@ def test_money_is_decimal_in_python_and_a_number_in_json() -> None:
     assert item.unit_price == Decimal("0.10")
     # The API contract stays a JSON number, and 0.10 doesn't turn into 0.1000000001.
     assert item.model_dump_json().count('"unit_price":0.1,') == 1
+
+
+def test_order_line_count_and_text_bounded() -> None:
+    with pytest.raises(ValidationError):
+        _order(*[(f"item-{i}", 1) for i in range(MAX_ORDER_LINES + 1)])
+    with pytest.raises(ValidationError):
+        OrderCreate.model_validate(
+            {**_order(("biryani", 1)).model_dump(), "special_instructions": "x" * 501}
+        )
+
+
+def test_order_rejects_unknown_fields_including_client_prices() -> None:
+    body = _order(("biryani", 1)).model_dump()
+    with pytest.raises(ValidationError):
+        OrderCreate.model_validate({**body, "total_amount": "0.01"})
+    body["items"][0]["unit_price"] = "0.01"
+    with pytest.raises(ValidationError):
+        OrderCreate.model_validate(body)
+
+
+async def test_restaurant_call_forwards_trace_id() -> None:
+    token = _correlation_id.set("trace-from-gateway")
+    try:
+        request = httpx.Request("POST", "http://restaurant-service/internal/x")
+        for hook in restaurant_client.client.event_hooks["request"]:
+            await hook(request)
+    finally:
+        _correlation_id.reset(token)
+    assert request.headers["x-request-id"] == "trace-from-gateway"

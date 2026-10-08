@@ -2,26 +2,31 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 from sfo_common.money import MoneyAmount
+from sfo_common.schemas import EntityId, RequestModel
+
+# One order can't hold more distinct lines than this — bounds the quote call to
+# restaurant-service and the rows written per order.
+MAX_ORDER_LINES = 50
 
 
-class OrderItemCreate(BaseModel):
+class OrderItemCreate(RequestModel):
     """Only *what* and *how many* — name and price are looked up server-side
     from restaurant-service (app/restaurant_client.py), never trusted from the
     client."""
 
-    menu_item_id: str
+    menu_item_id: EntityId
     quantity: int = Field(gt=0, le=50)
-    special_instructions: str | None = None
+    special_instructions: str | None = Field(default=None, max_length=500)
 
 
-class OrderCreate(BaseModel):
-    restaurant_id: str
-    delivery_address_text: str
+class OrderCreate(RequestModel):
+    restaurant_id: EntityId
+    delivery_address_text: str = Field(min_length=1, max_length=500)
     delivery_lat: float = Field(ge=-90, le=90)
     delivery_lng: float = Field(ge=-180, le=180)
-    special_instructions: str | None = None
-    promo_code: str | None = None
-    items: list[OrderItemCreate] = Field(min_length=1)
+    special_instructions: str | None = Field(default=None, max_length=500)
+    promo_code: str | None = Field(default=None, min_length=1, max_length=50)
+    items: list[OrderItemCreate] = Field(min_length=1, max_length=MAX_ORDER_LINES)
 
 
 class OrderItemResponse(BaseModel):

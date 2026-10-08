@@ -17,6 +17,7 @@ makes is reverted. Exits non-zero if any check fails.
 """
 
 import argparse
+import json
 import subprocess
 import sys
 import time
@@ -158,10 +159,38 @@ def run(base_url: str, deep: bool) -> None:
                 "delivery_lng": 67.01,
                 "items": [{"menu_item_id": item["id"], "quantity": 2}],
             }
+            trace_id = f"smoke-{uuid.uuid4()}"
             placed = c.post(
-                "/v1/orders", headers={**customer_h, "Idempotency-Key": key}, json=order_body
+                "/v1/orders",
+                headers={**customer_h, "Idempotency-Key": key, "X-Request-ID": trace_id},
+                json=order_body,
             )
             check("customer places an order", placed.status_code == 201, placed.text[:200])
+            check(
+                "response echoes the trace ID",
+                placed.headers.get("x-request-id") == trace_id,
+                placed.headers.get("x-request-id"),
+            )
+            if deep:
+                # The order spans gateway -> order-service -> restaurant-service;
+                # all three must have logged under the client's trace ID.
+                logs = subprocess.run(
+                    "docker compose logs --no-log-prefix --since 2m "
+                    "api-gateway order-service restaurant-service",
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout
+                services_seen = {
+                    json.loads(line)["service"]
+                    for line in logs.splitlines()
+                    if trace_id in line and line.startswith("{")
+                }
+                check(
+                    "one trace ID across gateway, order and restaurant logs",
+                    services_seen >= {"api-gateway", "order-service", "restaurant-service"},
+                    sorted(services_seen),
+                )
             if placed.status_code == 201:
                 order = placed.json()
                 check(
@@ -231,6 +260,20 @@ def run(base_url: str, deep: bool) -> None:
             "notification list is a page",
             "items" in c.get("/v1/notifications", headers=customer_h).json(),
         )
+
+        section("Input hardening")
+        extra = c.post(
+            "/v1/orders",
+            headers={**customer_h, "Idempotency-Key": str(uuid.uuid4())},
+            json={**order_body, "total_amount": "0.01"},
+        )
+        check("unknown field -> 422 (not ignored)", extra.status_code == 422, extra.status_code)
+        too_big = c.post(
+            "/v1/orders",
+            headers={**customer_h, "Idempotency-Key": str(uuid.uuid4())},
+            content=b"x" * (1_048_576 + 1),
+        )
+        check("body over 1 MB -> 413", too_big.status_code == 413, too_big.status_code)
 
         section("Gateway")
         check(

@@ -369,7 +369,19 @@ Week 1 scope only; Week 2/3 design items are tracked separately.
       2026-07-26); `rabbitmq:3` → `4.3.6` (3.13 is commercial-support only); Schema Registry
       got a healthcheck. All tags pinned to a patch version.
 
-**Tests**: gateway 23, order 15, user 7, restaurant 14 (62 total, was 36).
+**Input hardening & tracing**:
+- [x] `RequestModel` base for all request bodies: unknown fields → 422, whitespace
+      trimmed (passwords verbatim), max lengths on every string/list, E.164 phones,
+      registration `role` a closed set
+- [x] Gateway rejects bodies over 1 MB (413), including chunked uploads
+- [x] Pure-ASGI correlation middleware: one JSON access line per request with
+      `trace_id`; uvicorn logs routed through JSON; plain access log off
+- [x] Trace ID forwarded on order → restaurant calls (shared httpx hook) — verified one
+      ID across gateway, order-service and restaurant-service logs
+- [x] Docker log rotation (10 MB × 3) on every container
+
+**Tests**: gateway 28, order 18, user 15, restaurant 15 (79 total, was 36); smoke test
+46 checks.
 
 **Breaking changes**: list endpoints now return `{"items", "next_cursor"}` instead of a bare
 array. Refresh tokens issued before this change no longer verify (they were argon2-hashed),

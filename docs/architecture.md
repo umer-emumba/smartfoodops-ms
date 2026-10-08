@@ -312,14 +312,28 @@ A full pass over every route in all 7 services (the gateway plus six domain serv
 - **Kafka topics**: one per aggregate (`order-events`, `delivery-events`, `payment-events`),
   `event_type` field inside the payload, partitioned by aggregate ID.
 - **Temporal task queue (Week 2)**: single queue, `order-saga-queue`.
-- **Correlation ID**: `X-Request-ID`, generated at the gateway if absent, propagated on
-  every downstream call, included in structured logs, and stored on outbox rows;
-  carried into Kafka headers **(Week 3)**.
+- **Trace ID (`X-Request-ID`)**: generated at the gateway if absent (a valid client value
+  is kept), returned on every response, and forwarded on every downstream call — by the
+  gateway, and by service-to-service clients through the shared
+  `sfo_common.middleware.propagate_correlation_id` httpx hook. Every JSON log line carries
+  it as `trace_id`; it's also stored on outbox rows and carried into Kafka headers
+  **(Week 3)**. To debug one request: take `X-Request-ID` from the response, then
+  `docker compose logs --no-log-prefix | grep <id>` shows its path through every service.
+- **Logging**: JSON on stdout, never files — Docker rotates it (10 MB × 3 per container,
+  `docker-compose.yml`) and a collector ships it in Week 3. Every service writes one
+  access line per request (`logger: sfo.request` — method, path, status, duration;
+  health probes skipped); uvicorn's own logs go through the same JSON formatter and its
+  plain-text access log is off.
 - **Idempotency**: `Idempotency-Key` request header, required on `POST /v1/orders` today;
   extended to payment operations **(Week 2)**.
 - **Error responses**: `{"error": {"code", "message", "details"}}` envelope, shared handler
   in `libs/common`.
 - **API versioning**: all routes under `/v1/...`.
+- **Request validation**: every request body is a `sfo_common.schemas.RequestModel` —
+  unknown fields are a 422 (not silently dropped), strings are whitespace-trimmed
+  (passwords excepted), and every string and list has a max length (IDs ≤ 64, free text
+  ≤ 500–1000, ≤ 50 order lines). Phone numbers are E.164; self-registration roles are a
+  closed set. The gateway refuses bodies over 1 MB with `413` before buffering them.
 - **Pagination**: list endpoints return `{"items": [...], "next_cursor": "..."}`
   (`sfo_common.pagination.Page`), newest first, with a bounded `limit`; pass `?cursor=` from
   the previous page to get the next. Keyset, not offset: ordered by `(created_at, id)` —

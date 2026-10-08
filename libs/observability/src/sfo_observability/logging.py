@@ -41,12 +41,15 @@ class _JsonFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         payload: dict[str, object] = {
-            "timestamp": datetime.now(UTC).isoformat(),
+            "timestamp": datetime.fromtimestamp(record.created, UTC).isoformat(),
             "level": record.levelname,
             "service": self.service_name,
             "logger": record.name,
             "message": record.getMessage(),
-            "correlation_id": get_correlation_id(),
+            # The request's X-Request-ID — the same value in every service a
+            # request touches, so `grep <trace_id>` across all services' logs
+            # shows its whole path. Null outside a request (startup, jobs).
+            "trace_id": get_correlation_id() or None,
         }
         extra = getattr(record, "extra_fields", None)
         if extra:
@@ -57,12 +60,28 @@ class _JsonFormatter(logging.Formatter):
 
 
 def configure_logging(service_name: str, level: str = "INFO") -> None:
-    """Structured JSON logs with the request's correlation ID attached, and
-    sensitive fields stripped before anything hits stdout. Call once at
-    service startup."""
+    """Structured JSON logs on stdout with the request's trace ID attached,
+    and sensitive fields stripped before anything is written. Call once at
+    service startup (module import time, after uvicorn has set up its own
+    logging, so the overrides below win).
+
+    stdout, not files: the container runtime captures it (rotated, see
+    docker-compose.yml's logging options) and a collector ships it to one
+    searchable place — the twelve-factor approach; files inside containers
+    vanish with the container and have to be rotated per pod."""
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(_JsonFormatter(service_name))
 
     root = logging.getLogger()
     root.handlers = [handler]
     root.setLevel(level.upper())
+
+    # uvicorn installs its own plain-text handlers; route its logs through
+    # the JSON handler above instead. Its access log is turned off entirely —
+    # sfo_common.middleware.CorrelationIdMiddleware writes a JSON access line
+    # per request that carries the trace ID (uvicorn's can't).
+    for name in ("uvicorn", "uvicorn.error"):
+        uvicorn_logger = logging.getLogger(name)
+        uvicorn_logger.handlers = []
+        uvicorn_logger.propagate = True
+    logging.getLogger("uvicorn.access").disabled = True

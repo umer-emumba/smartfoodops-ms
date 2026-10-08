@@ -7,6 +7,7 @@ from sfo_common.errors import (
     BadGatewayError,
     GatewayTimeoutError,
     NotFoundError,
+    PayloadTooLargeError,
     ServiceUnavailableError,
 )
 from sfo_common.middleware import CORRELATION_ID_HEADER, get_correlation_id
@@ -95,6 +96,25 @@ def _filter_headers(headers: Mapping[str, str], excluded: set[str]) -> dict[str,
     }
 
 
+async def _read_body_capped(request: Request) -> bytes:
+    """The request body, refusing anything over max_request_body_bytes.
+
+    A too-large declared Content-Length is rejected before reading a byte; a
+    body without one (chunked) is counted as it streams, so neither can make
+    the gateway buffer more than the limit."""
+    limit = settings.max_request_body_bytes
+    too_large = PayloadTooLargeError("Request body is too large", details={"max_bytes": limit})
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > limit:
+        raise too_large
+    body = bytearray()
+    async for chunk in request.stream():
+        body += chunk
+        if len(body) > limit:
+            raise too_large
+    return bytes(body)
+
+
 async def forward_request(resource: str, rest_of_path: str, request: Request) -> Response:
     """Routes by the first /v1/{resource} path segment to the service that
     owns it — see docs/architecture.md#conventions. Not a response-aggregating
@@ -122,7 +142,7 @@ async def forward_request(resource: str, rest_of_path: str, request: Request) ->
             target_url,
             params=request.query_params,
             headers=forward_headers,
-            content=await request.body(),
+            content=await _read_body_capped(request),
         )
     except httpx.PoolTimeout as exc:
         # Checked before TimeoutException (its parent): the backend wasn't

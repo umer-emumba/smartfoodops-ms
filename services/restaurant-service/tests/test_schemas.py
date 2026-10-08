@@ -1,7 +1,13 @@
 from decimal import Decimal
 
 import pytest
-from app.schemas import MenuItemCreate, MenuItemUpdate, PromotionCreate, RestaurantUpdate
+from app.schemas import (
+    MenuItemCreate,
+    MenuItemUpdate,
+    PromotionCreate,
+    RestaurantCreate,
+    RestaurantUpdate,
+)
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from pydantic import ValidationError
@@ -66,3 +72,22 @@ async def test_custom_validator_error_is_a_422_envelope() -> None:
         r = await client.patch("/r", json={"name": None})
     assert r.status_code == 422
     assert "cannot be null" in r.text
+
+
+def test_restaurant_create_hardened() -> None:
+    base = {
+        "name": "Kitchen",
+        "address": "1 St",
+        "city": "Karachi",
+        "lat": 1,
+        "lng": 1,
+        "contact_phone": "+92210000000",
+    }
+    RestaurantCreate.model_validate(base)
+    for bad in [
+        {**base, "status": "active"},  # unknown field: no self-approval via create
+        {**base, "contact_phone": "021-1234"},
+        {**base, "address": "x" * 501},
+    ]:
+        with pytest.raises(ValidationError):
+            RestaurantCreate.model_validate(bad)
