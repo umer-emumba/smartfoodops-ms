@@ -109,18 +109,21 @@ Status: ✅ built · 🟡 partial · ⏳ planned (week).
 | FR-9 | server-side item pricing (W1); promo, tax and fee step in the saga (W2) | 1 / 2 | 🟡 |
 | FR-10 | `payment-service` authorize (simulated), idempotent | 2 | ⏳ |
 | FR-11 | order stays `created` until saga validation passes | 2 | ⏳ |
-| FR-12 | `POST orders/{id}/restaurant-response` → Temporal signal with timeout | 2 | ⏳ |
+| FR-12 | restaurant new-order live feed (SSE) + `POST orders/{id}/restaurant-response` → Temporal signal with timeout ([week2-plan.md](./week2-plan.md) D11) | 2 | ⏳ |
 | FR-13 | saga activity after `confirmed` | 2 | ⏳ |
-| FR-14 | `delivery-service` assignment (`SKIP LOCKED`, only approved + available riders), reassignment | 2 | ⏳ (vetting gate on availability already enforced in W1) |
+| FR-14 | `delivery-service` assignment: Redis GEO nearest + atomic Postgres claim, approved + available riders only; reassignment on decline, expiry and drop-out | 2 | ⏳ (vetting gate on availability already enforced in W1) |
 | FR-15 | ETA from haversine distance and prep time | 2 | ⏳ |
-| FR-16 | delivery status endpoints + `DeliveryStatusUpdated`; gateway WebSocket/SSE | 2 | ⏳ |
+| FR-16 | delivery status endpoints + `DeliveryStatusUpdated`; SSE via `tracking-service` fed by Redis Pub/Sub | 2 | ⏳ |
 | FR-17 | payment capture on `delivered` | 2 | ⏳ |
-| FR-18 | cancel signal + compensation matrix ([technical-documentation.md#failure-handling](./technical-documentation.md#failure-handling)) | 2 | ⏳ |
+| FR-18 | cancel signal + compensation matrix ([technical-documentation.md#failure-handling](./technical-documentation.md#failure-handling)); post-delivery refund workflow | 2 | ⏳ |
 | FR-19 | event schemas in `libs/events`; outbox rows (`OrderPlaced` written in W1); Kafka relay | 1 / 3 | 🟡 |
 | FR-20 | `notification-service` Kafka consumer + Celery dispatch | 3 | ⏳ (schema + list endpoint in W1) |
 | FR-21 | `analytics-service` | 3 | ⏳ |
 | NFR-1 | order creation is validate-then-single-transaction (W1); saga compensation (W2) | 1 / 2 | 🟡 |
 | NFR-2 | order Idempotency-Key (W1); payments and consumers (W2/3) | 1–3 | 🟡 |
-| NFR-6 | JSON logs + correlation IDs (W1); metrics and tracing (W3) | 1 / 3 | 🟡 |
-| NFR-7 | see FR-5; bootstrap-admin one-shot + rate limited | 1 | ✅ |
+| NFR-3 | async I/O; stateless services; per-service gateway connection pools, timeouts, body-size limit; explicit DB pools; Redis cache for public reads; keyset pagination (W1). Atomic reservations, Redis GEO assignment, Kafka partitioning (W2/3) | 1–3 | 🟡 |
+| NFR-4 | transactional outbox rows (W1); Temporal workers separate from APIs (W2); Kafka + Celery consumers (W3) | 1–3 | 🟡 |
+| NFR-5 | database-per-service, one owner per fact, snapshots on orders, optimistic `version` locks, `Decimal` money end to end | 1 | ✅ |
+| NFR-6 | JSON logs with a `trace_id` propagated across services + one access line per request (W1); metrics and tracing (W3) | 1 / 3 | 🟡 |
+| NFR-7 | see FR-5; bootstrap-admin one-shot + rate limited; strict request schemas (unknown fields rejected, size limits), 1 MB body limit, argon2 off the event loop | 1 | ✅ |
 | NFR-8 | `docker-compose.yml`, `entrypoint.sh` migrations, `scripts/seed.py` | 1 | ✅ |

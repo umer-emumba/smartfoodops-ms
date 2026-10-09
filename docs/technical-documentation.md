@@ -414,7 +414,7 @@ for the saga's synchronous calls.
 | Password hashing | argon2-cffi (via `pwdlib`) | `passlib` is effectively unmaintained |
 | JWT | PyJWT | Simpler, actively maintained vs. `python-jose` |
 | Redis client | redis-py (`redis.asyncio`) | Official, async-native since v4.2 |
-| MongoDB client | Motor | Official async MongoDB driver |
+| MongoDB client | PyMongo `AsyncMongoClient` | Official driver's native async API — replaces Motor, which MongoDB deprecated on 2026-05-14 |
 | Gateway rate limiting | In-house (`app/rate_limit.py`, Redis-backed) | `fastapi-limiter`'s `RateLimiter` dependency crashed against this FastAPI version's routing internals (see docs/PROGRESS.md, "Docker verification"). Replaced with ~40 lines: one atomic Lua `INCR`+`PEXPIRE` per request, keyed by user ID (valid token) or client IP (anonymous) + a caller-supplied bucket name; the script also returns the remaining TTL, so a 429 needs no second round-trip. Needs shared state across gateway replicas either way, which Redis still provides. |
 | Kafka client | confluent-kafka-python (Week 3) | See rationale above |
 | Testing | pytest + pytest-asyncio + httpx.AsyncClient (ASGITransport) | Week 1: per-service health tests, gateway route-classification tests, order-validation unit tests (stubbed `restaurant-service`). testcontainers-backed DB integration tests are planned for Week 2 |

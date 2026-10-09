@@ -19,6 +19,7 @@ graph TD
     GW1 -->|REST| NS[notification-service]
     GW1 -->|deny-list check + rate limit| Redis[(Redis)]
     US -->|deny-list write on block| Redis
+    RS -->|public menu/detail cache| Redis
 
     OS -->|sync REST: live prices + availability at order creation| RS
     OS -.->|Temporal saga activities - Week 2| PS

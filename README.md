@@ -235,4 +235,5 @@ Resource → owning service:
 | `/v1/payments` | payment-service |
 | `/v1/notifications` | notification-service |
 
-The gateway also serves its own `/health`, `/docs`, and `/docs/{service}` routes.
+The gateway also serves its own `/livez`, `/readyz` (and `/health`, same as `/readyz`), `/docs`,
+and `/docs/{service}` routes.

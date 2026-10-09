@@ -400,6 +400,9 @@ so existing sessions must log in again.
 
 ## Week 2 — Order Lifecycle + Delivery Workflow
 
+Detailed plan (build order, endpoints, activities, data model, tests): [week2-plan.md](./week2-plan.md). The checklist below is the original scope; the plan's
+steps 0–8 are the working order.
+
 - [ ] `order-service/worker`: Temporal `OrderSagaWorkflow` (availability/capacity → stock →
       price → payment → restaurant accept/reject signal+timeout → confirm → assign rider →
       ETA → notify) with compensation
@@ -412,7 +415,7 @@ so existing sessions must log in again.
       ingestion already built in Week 1)
 - [ ] Stock reservation/release activities in `restaurant-service`; capacity check against
       `max_concurrent_orders`; promo/tax/fee pricing step
-- [ ] Cursor pagination on list endpoints (`sfo_common.pagination.Page`)
+- [x] Cursor pagination on list endpoints (`sfo_common.pagination.Page`) — done early, Week 1 production pass
 - [ ] `api-gateway`: customer WebSocket/SSE tracking endpoint
 - [ ] `payment-service`: authorize/capture/refund with idempotency-key handling
 - [ ] Cancellation/refund flow via Temporal signal + compensation
