@@ -5,19 +5,22 @@ from fastapi import FastAPI
 from sfo_common import create_app
 from sfo_common.db import check_db_ready
 from sfo_common.health import add_health_routes
+from sfo_common.temporal import embedded_workers
 from sfo_observability import configure_logging
 
 from app import restaurant_client
 from app.api.routes import router
 from app.config import settings
 from app.db import engine
+from app.worker import WORKERS
 
 configure_logging(settings.service_name, settings.log_level)
 
 
 @asynccontextmanager
 async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
-    yield
+    async with embedded_workers(WORKERS, settings, service_name=settings.service_name):
+        yield
     await restaurant_client.client.aclose()
 
 

@@ -403,6 +403,38 @@ so existing sessions must log in again.
 Detailed plan (build order, endpoints, activities, data model, tests): [week2-plan.md](./week2-plan.md). The checklist below is the original scope; the plan's
 steps 0–8 are the working order.
 
+### Plan steps
+
+- [x] **Step 0 — Temporal foundations** (2026-10-09)
+  - `libs/contracts` (`sfo_contracts`): task queues, activity/workflow/signal/query names,
+    activity and signal dataclasses, `BusinessErrorType` + `business_error()`
+    (non-retryable), `ACTIVITY_RETRY_POLICY` (1s doubling, 5 attempts)
+  - `sfo_common.temporal` (extra `sfo-common[temporal]`): `connect_client` (retries until
+    reachable), `WorkerSpec`/`run_workers` (graceful shutdown, 8s), `embedded_workers`
+    (lifespan, auto-restart), `run_standalone` (SIGTERM-aware); pydantic data converter so
+    `Decimal`/`datetime` round-trip
+  - `app/worker.py` in order (`order-saga` + `order-activities`), restaurant, payment,
+    delivery; every worker also serves a `ping` activity. `TEMPORAL_WORKER_MODE`
+    (`embedded` default / `standalone`), `depends_on: temporal` in compose
+  - Diagnostic `WorkerPingWorkflow` (order-service) pings all four activity queues:
+    `docker compose exec temporal temporal workflow execute --type WorkerPingWorkflow --task-queue order-saga`
+  - Verified: `check.sh` green (order-service `tests/test_temporal_foundations.py`: ping
+    across queues, retry ×3 then success, give-up after 5, business error not retried,
+    Decimal round-trip); in Docker all 5 queues have pollers, ping workflow completes,
+    `python -m app.worker` standalone polls and exits 0 on SIGTERM, workers survive a
+    Temporal restart, smoke test `--deep` 46/46
+  - Note: the first test run downloads Temporal's test-server binary (cached after)
+- [ ] Step 1 — Order state machine + restaurant-admin views
+- [ ] Step 2 — restaurant-service activities
+- [ ] Step 3 — payment-service activities
+- [ ] Step 4 — Saga part 1
+- [ ] Step 5 — delivery-service: GEO, offers, rider endpoints, ETA
+- [ ] Step 6 — Saga part 2
+- [ ] Step 7 — Live feeds (SSE)
+- [ ] Step 8 — End-to-end scenarios, seed data, docs
+
+### Original scope checklist
+
 - [ ] `order-service/worker`: Temporal `OrderSagaWorkflow` (availability/capacity → stock →
       price → payment → restaurant accept/reject signal+timeout → confirm → assign rider →
       ETA → notify) with compensation

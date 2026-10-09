@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -28,3 +30,18 @@ class BaseServiceSettings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_ttl_minutes: int = 15
     refresh_token_ttl_days: int = 7
+
+
+class TemporalSettings(BaseSettings):
+    """Mixed into the Settings of services that run a Temporal worker
+    (order, restaurant, payment, delivery) — see sfo_common.temporal."""
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    temporal_address: str = "temporal:7233"
+    temporal_namespace: str = "default"
+    # embedded: the worker runs inside the API process, started from its
+    # lifespan (development). standalone: the API doesn't start it; run
+    # `python -m app.worker` as its own process from the same image
+    # (production — API and workers get their own CPU and scale separately).
+    temporal_worker_mode: Literal["embedded", "standalone"] = "embedded"
