@@ -3,15 +3,13 @@ the compose order-db (published on localhost:15434), migrated with the real
 Alembic migrations, emptied before each test. Run with
 `scripts/check.sh --with-db` (or `pytest -m db`) while `docker compose up`."""
 
-import asyncio
 import os
-import subprocess
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
-import asyncpg
 import pytest
 import pytest_asyncio
+from sfo_common.testing import prepare_test_database
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -21,26 +19,9 @@ TEST_DATABASE_URL = os.environ.get(
 )
 
 
-async def _create_database_if_missing(url: str) -> None:
-    base, name = url.replace("postgresql+asyncpg", "postgresql").rsplit("/", 1)
-    conn = await asyncpg.connect(f"{base}/postgres")
-    try:
-        if not await conn.fetchval("SELECT 1 FROM pg_database WHERE datname = $1", name):
-            await conn.execute(f'CREATE DATABASE "{name}"')
-    finally:
-        await conn.close()
-
-
 @pytest.fixture(scope="session")
 def migrated_database() -> str:
-    asyncio.run(_create_database_if_missing(TEST_DATABASE_URL))
-    subprocess.run(
-        ["alembic", "upgrade", "head"],
-        env={**os.environ, "DATABASE_URL": TEST_DATABASE_URL},
-        check=True,
-        capture_output=True,
-    )
-    return TEST_DATABASE_URL
+    return prepare_test_database(TEST_DATABASE_URL)
 
 
 @pytest_asyncio.fixture

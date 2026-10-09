@@ -80,7 +80,7 @@ class RedeemPromotionInput:
 @dataclass(frozen=True)
 class RedeemPromotionResult:
     promotion_id: str
-    discount_type: Literal["percentage", "fixed"]
+    discount_type: Literal["percentage", "fixed_amount"]
     discount_value: Decimal
 
 

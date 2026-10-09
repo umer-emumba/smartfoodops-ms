@@ -447,7 +447,25 @@ steps 0–8 are the working order.
     which is built there
   - **Note for step 4:** the reconciler must not start sagas for old dev/smoke-test orders
     left in `created` (bound it by age, or mark pre-saga orders)
-- [ ] Step 2 — restaurant-service activities
+- [x] **Step 2 — restaurant-service activities** (2026-10-09)
+  - Activities on `restaurant-activities` (`app/activities.py`): `reserve_order` (capacity
+    slot + stock in one transaction via conditional UPDATEs; all or nothing),
+    `release_reservation`, `complete_reservation` (pickup: frees capacity, stock stays used),
+    `redeem_promotion` / `release_promotion` (atomic `times_used`)
+  - Idempotent via one `stock_reservations` / `promotion_redemptions` row per order; a
+    release that arrives before the reserve leaves a `released` tombstone, so a late reserve
+    is a no-op (it returns `status="released"` — the saga must treat that as not reserved)
+  - Rows locked in a fixed order (restaurant, then items by id) — no deadlocks
+  - Stock changes invalidate the public menu cache
+  - Migration `0004`: `restaurants.active_order_count`, `stock_reservations`,
+    `promotion_redemptions`
+  - `sfo_common.testing.prepare_test_database` shared by services' `db` test fixtures
+  - Contract fix: promotion `discount_type` is `percentage | fixed_amount`
+  - Verified: 22 real-DB tests — 20 concurrent orders for stock 5 → exactly 5 succeed;
+    capacity 3 of 10; 5 concurrent retries of one order reserve once; 20 orders with opposite
+    line order don't deadlock; `max_uses=1` under two concurrent redemptions → one. Mutation
+    check: removing the stock guard makes the oversell test fail (20 of 20 succeed). Docker:
+    migration applied, worker up, ping workflow and smoke test `--deep` 46/46
 - [ ] Step 3 — payment-service activities
 - [ ] Step 4 — Saga part 1
 - [ ] Step 5 — delivery-service: GEO, offers, rider endpoints, ETA

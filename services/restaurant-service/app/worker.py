@@ -7,9 +7,10 @@ from sfo_common.temporal import WorkerSpec, run_standalone
 from sfo_contracts import TaskQueue
 from sfo_observability import configure_logging
 
+from app.activities import ACTIVITIES
 from app.config import settings
 
-WORKERS = [WorkerSpec(TaskQueue.RESTAURANT_ACTIVITIES)]
+WORKERS = [WorkerSpec(TaskQueue.RESTAURANT_ACTIVITIES, activities=ACTIVITIES)]
 
 if __name__ == "__main__":
     configure_logging(settings.service_name, settings.log_level)
