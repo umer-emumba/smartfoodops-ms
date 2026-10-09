@@ -76,6 +76,18 @@ async def connect_client(address: str, *, namespace: str = "default") -> Client:
             delay = min(delay * 2, _CONNECT_RETRY_MAX_DELAY_SECONDS)
 
 
+async def lazy_client(settings: TemporalSettings) -> Client:
+    """For API processes that start or signal workflows: returns at once and
+    connects on first use, so the API comes up (and serves everything else)
+    even while Temporal is down; calls made then fail with an RPC error."""
+    return await Client.connect(
+        settings.temporal_address,
+        namespace=settings.temporal_namespace,
+        data_converter=DATA_CONVERTER,
+        lazy=True,
+    )
+
+
 def _ping_activity(service_name: str, task_queue: str) -> Callable[[], Any]:
     @activity.defn(name=PING)
     async def ping() -> PingResult:

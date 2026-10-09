@@ -138,10 +138,22 @@ class OrderActivity(StrEnum):
 
 
 @dataclass(frozen=True)
+class Actor:
+    """Who caused a change, for the audit trail. Both None = the saga itself
+    (system)."""
+
+    id: str | None = None
+    role: str | None = None
+
+
+SYSTEM = Actor()
+
+
+@dataclass(frozen=True)
 class TransitionOrderInput:
     order_id: str
     to_status: str
-    actor: str
+    actor: Actor = SYSTEM
     reason: str | None = None
 
 
@@ -170,7 +182,7 @@ class RecordRefundInput:
     order_id: str
     amount: Decimal
     reason: str
-    actor: str
+    actor: Actor
 
 
 # ---------- delivery-activities ----------

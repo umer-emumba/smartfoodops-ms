@@ -424,7 +424,29 @@ steps 0–8 are the working order.
     `python -m app.worker` standalone polls and exits 0 on SIGTERM, workers survive a
     Temporal restart, smoke test `--deep` 46/46
   - Note: the first test run downloads Temporal's test-server binary (cached after)
-- [ ] Step 1 — Order state machine + restaurant-admin views
+- [x] **Step 1 — Order state machine + restaurant-admin views** (2026-10-09)
+  - `app/state_machine.py` (transitions as data, `can_cancel`, entered-at timestamp columns)
+  - Activities on `order-activities` (`app/activities.py`): `transition_order` (status +
+    history + outbox in one transaction, `version`-guarded, idempotent, then Redis publish to
+    `tracking:order:{id}` / `tracking:restaurant:{id}`), `apply_pricing` (only while
+    `created`), `record_refund` (once per order, D13)
+  - Endpoints: `GET /v1/orders/restaurant/{id}?status=`, `POST /v1/orders/{id}/restaurant-response`,
+    `POST /v1/orders/{id}/cancel` (both 202 + signal the saga; 409 when no workflow is running);
+    owning restaurant admin can read order detail
+  - Quote returns `admin_user_id`, `lat`, `lng` → snapshotted on the order; `OrderCreate`
+    accepts `payment_method`
+  - Migration `0004`: `restaurant_admin_id`, `restaurant_lat/lng`, `payment_method`,
+    `refunded_amount`/`refunded_at`, `assigned_at`/`picked_up_at`/`delivered_at`, restaurant
+    queue indexes
+  - Real-DB tests: compose DBs published on localhost (restaurant 15433, order 15434,
+    delivery 15435, payment 15436); `db` pytest marker, off by default;
+    `scripts/check.sh --with-db` runs them against `*_test` databases (migrated with Alembic)
+  - Verified: `check.sh --with-db` green (order-service 119 tests); in Docker migration 0004
+    applied, new endpoints exercised through the gateway, smoke test `--deep` 46/46
+  - **Deferred to step 6:** `POST /v1/orders/{id}/refund` — it starts `OrderRefundWorkflow`,
+    which is built there
+  - **Note for step 4:** the reconciler must not start sagas for old dev/smoke-test orders
+    left in `created` (bound it by age, or mark pre-saga orders)
 - [ ] Step 2 — restaurant-service activities
 - [ ] Step 3 — payment-service activities
 - [ ] Step 4 — Saga part 1

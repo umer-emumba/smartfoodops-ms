@@ -25,8 +25,7 @@ class OrderStatus(StrEnum):
     """The one definition of order statuses — used for the column default,
     every transition, and API filters, so they can't drift apart.
 
-    Week 1: skeleton create/read only. Week 2 adds the Temporal saga that
-    drives transitions through this state machine — see docs/architecture.md.
+    Allowed transitions between them: app/state_machine.py.
     """
 
     CREATED = "created"
@@ -53,6 +52,16 @@ class Order(Base):
         Index("ix_orders_customer_id_created_at_id", "customer_id", "created_at", "id"),
         Index("ix_orders_status_created_at_id", "status", "created_at", "id"),
         Index("ix_orders_created_at_id", "created_at", "id"),
+        # A restaurant's order queue (GET /v1/orders/restaurant/{id}), with
+        # and without the status filter.
+        Index(
+            "ix_orders_restaurant_id_status_created_at_id",
+            "restaurant_id",
+            "status",
+            "created_at",
+            "id",
+        ),
+        Index("ix_orders_restaurant_id_created_at_id", "restaurant_id", "created_at", "id"),
     )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
@@ -60,9 +69,14 @@ class Order(Base):
     # customer support / receipts (docs/technical-documentation.md).
     order_number: Mapped[int] = mapped_column(Integer, Identity(start=1000), unique=True)
     customer_id: Mapped[str] = mapped_column(String)  # opaque ref to user-service
-    restaurant_id: Mapped[str] = mapped_column(
-        String, index=True
-    )  # opaque ref to restaurant-service
+    restaurant_id: Mapped[str] = mapped_column(String)  # opaque ref to restaurant-service
+    # Snapshotted from restaurant-service at order time (week2-plan D10): the
+    # owner authorizes accept/reject here without a cross-service call, and
+    # the restaurant's location is the delivery pickup point. Nullable only
+    # for orders created before these columns existed.
+    restaurant_admin_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    restaurant_lat: Mapped[float | None] = mapped_column(Float, nullable=True)
+    restaurant_lng: Mapped[float | None] = mapped_column(Float, nullable=True)
     status: Mapped[str] = mapped_column(String, default=OrderStatus.CREATED)
 
     # Idempotency-Key header from POST /v1/orders, plus a hash of the request
@@ -89,6 +103,11 @@ class Order(Base):
     discount_amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
     promo_code: Mapped[str | None] = mapped_column(String, nullable=True)
     total_amount: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    payment_method: Mapped[str] = mapped_column(String, default="card_simulated")
+    # Post-delivery refunds (week2-plan D13). The order stays `delivered`; a
+    # refund is a fact about it, not a lifecycle state.
+    refunded_amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
+    refunded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Why the order left the happy path, if it did (rejected/cancelled) —
     # feeds the "Order Cancellation Rate"/"Restaurant Acceptance Rate"
@@ -106,6 +125,9 @@ class Order(Base):
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     rejected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    assigned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    picked_up_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Optimistic locking — concurrent updates from saga activities + customer
     # cancellation requests (docs/technical-documentation.md#data-consistency-across-services).
@@ -140,8 +162,9 @@ class OrderStatusHistory(Base):
     """Append-only audit trail of every order status transition — who moved
     it, from what, to what, and why. Written in the same transaction as the
     status change itself, so the trail can never disagree with `orders.status`.
-    Week 1 only records the initial `created` row; Week 2's saga appends the
-    rest."""
+    The `created` row is written by POST /v1/orders; every later one by the
+    saga's transition_order activity (app/activities.py). A post-delivery
+    refund appends a delivered → delivered row."""
 
     __tablename__ = "order_status_history"
 

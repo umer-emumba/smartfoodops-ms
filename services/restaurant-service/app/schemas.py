@@ -220,6 +220,12 @@ class QuoteRestaurant(BaseModel):
     id: str
     status: str
     is_accepting_orders: bool
+    # Snapshotted onto the order: the owner authorizes accept/reject in
+    # order-service without a call back here (week2-plan D10), and the
+    # location is the delivery pickup point.
+    admin_user_id: str
+    lat: float
+    lng: float
 
     model_config = {"from_attributes": True}
 

@@ -23,10 +23,14 @@ def _order(*items: tuple[str, int]) -> OrderCreate:
     )
 
 
+def _restaurant(status: str, accepting: bool) -> RestaurantSnapshot:
+    return RestaurantSnapshot(RESTAURANT_ID, status, accepting, "u-owner", 33.68, 73.04)
+
+
 @pytest.fixture
 def stub_restaurant(monkeypatch):
     state = {
-        "restaurant": RestaurantSnapshot(RESTAURANT_ID, "active", True),
+        "restaurant": _restaurant("active", True),
         "menu": {
             "biryani": MenuItemSnapshot("biryani", "Chicken Biryani", Decimal("8.50"), True, 5),
             "wrap": MenuItemSnapshot("wrap", "Veggie Wrap", Decimal("0.10"), True, None),
@@ -45,7 +49,8 @@ def stub_restaurant(monkeypatch):
 
 
 async def test_prices_and_names_come_from_restaurant_service(stub_restaurant) -> None:
-    items = await _build_items(_order(("biryani", 2), ("wrap", 3)))
+    restaurant, items = await _build_items(_order(("biryani", 2), ("wrap", 3)))
+    assert restaurant.admin_user_id == "u-owner"
     assert [(i.item_name_snapshot, i.unit_price) for i in items] == [
         ("Chicken Biryani", Decimal("8.50")),
         ("Veggie Wrap", Decimal("0.10")),
@@ -81,13 +86,13 @@ async def test_quote_requests_each_item_once(stub_restaurant) -> None:
 
 
 async def test_restaurant_not_accepting_orders(stub_restaurant) -> None:
-    stub_restaurant["restaurant"] = RestaurantSnapshot(RESTAURANT_ID, "active", False)
+    stub_restaurant["restaurant"] = _restaurant("active", False)
     with pytest.raises(ConflictError):
         await _build_items(_order(("biryani", 1)))
 
 
 async def test_inactive_restaurant_rejected(stub_restaurant) -> None:
-    stub_restaurant["restaurant"] = RestaurantSnapshot(RESTAURANT_ID, "suspended", True)
+    stub_restaurant["restaurant"] = _restaurant("suspended", True)
     with pytest.raises(NotFoundError):
         await _build_items(_order(("biryani", 1)))
 

@@ -7,12 +7,13 @@ from sfo_common.temporal import WorkerSpec, run_standalone
 from sfo_contracts import TaskQueue
 from sfo_observability import configure_logging
 
+from app.activities import ACTIVITIES
 from app.config import settings
 from app.workflows.ping import WorkerPingWorkflow
 
 WORKERS = [
     WorkerSpec(TaskQueue.ORDER_SAGA, workflows=[WorkerPingWorkflow]),
-    WorkerSpec(TaskQueue.ORDER_ACTIVITIES),
+    WorkerSpec(TaskQueue.ORDER_ACTIVITIES, activities=ACTIVITIES),
 ]
 
 if __name__ == "__main__":

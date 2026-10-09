@@ -28,6 +28,9 @@ class RestaurantSnapshot:
     id: str
     status: str
     is_accepting_orders: bool
+    admin_user_id: str
+    lat: float
+    lng: float
 
 
 @dataclass(frozen=True)
@@ -61,7 +64,12 @@ async def get_quote(
     data = resp.json()
     r = data["restaurant"]
     restaurant = RestaurantSnapshot(
-        id=r["id"], status=r["status"], is_accepting_orders=r["is_accepting_orders"]
+        id=r["id"],
+        status=r["status"],
+        is_accepting_orders=r["is_accepting_orders"],
+        admin_user_id=r["admin_user_id"],
+        lat=r["lat"],
+        lng=r["lng"],
     )
     items = {
         item["id"]: MenuItemSnapshot(

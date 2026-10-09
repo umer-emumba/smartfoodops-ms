@@ -12,6 +12,7 @@ from app import restaurant_client
 from app.api.routes import router
 from app.config import settings
 from app.db import engine
+from app.redis_client import redis
 from app.worker import WORKERS
 
 configure_logging(settings.service_name, settings.log_level)
@@ -22,11 +23,12 @@ async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
     async with embedded_workers(WORKERS, settings, service_name=settings.service_name):
         yield
     await restaurant_client.client.aclose()
+    await redis.aclose()
 
 
 app = create_app(
     title="SmartFoodOps — Order Service",
-    tags_metadata=[{"name": "orders", "description": "Order lifecycle (saga added Week 2)"}],
+    tags_metadata=[{"name": "orders", "description": "Order lifecycle, driven by the order saga"}],
     lifespan=_lifespan,
 )
 

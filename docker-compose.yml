@@ -35,6 +35,8 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: restaurant_db
     volumes: ["restaurant-db-data:/var/lib/postgresql/data"]
+    # Host access for the real-DB tests (scripts/check.sh --with-db), localhost only.
+    ports: ["127.0.0.1:15433:5432"]
 
   order-db:
     <<: *postgres-common
@@ -43,6 +45,8 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: order_db
     volumes: ["order-db-data:/var/lib/postgresql/data"]
+    # Host access for the real-DB tests (scripts/check.sh --with-db), localhost only.
+    ports: ["127.0.0.1:15434:5432"]
 
   delivery-db:
     <<: *postgres-common
@@ -51,6 +55,8 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: delivery_db
     volumes: ["delivery-db-data:/var/lib/postgresql/data"]
+    # Host access for the real-DB tests (scripts/check.sh --with-db), localhost only.
+    ports: ["127.0.0.1:15435:5432"]
 
   payment-db:
     <<: *postgres-common
@@ -59,6 +65,8 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: payment_db
     volumes: ["payment-db-data:/var/lib/postgresql/data"]
+    # Host access for the real-DB tests (scripts/check.sh --with-db), localhost only.
+    ports: ["127.0.0.1:15436:5432"]
 
   notification-db:
     <<: *postgres-common

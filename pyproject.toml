@@ -45,3 +45,8 @@ disallow_untyped_defs = true
 # auto: async tests and fixtures need no @pytest.mark.asyncio marker.
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "db: runs against the compose Postgres (separate *_test databases) — scripts/check.sh --with-db",
+]
+# Plain `pytest` / check.sh skip them; check.sh --with-db runs everything.
+addopts = "-m 'not db'"

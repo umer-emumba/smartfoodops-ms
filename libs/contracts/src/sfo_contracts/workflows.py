@@ -7,6 +7,8 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Literal
 
+from sfo_contracts.activities import Actor
+
 
 class WorkflowName(StrEnum):
     ORDER_SAGA = "OrderSagaWorkflow"
@@ -61,7 +63,7 @@ class RiderDropped:
 
 @dataclass(frozen=True)
 class CancelRequest:
-    actor: str
+    actor: Actor
     reason: str | None = None
 
 
@@ -73,4 +75,4 @@ class OrderRefundInput:
     order_id: str
     amount: Decimal
     reason: str
-    actor: str
+    actor: Actor
