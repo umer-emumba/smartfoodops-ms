@@ -8,7 +8,7 @@ from sfo_common.pagination import Page
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import cache, repository
+from app import cache, owners, repository
 from app.auth_deps import get_current_user_optional, require_roles
 from app.db import get_session
 from app.models import MenuCategory, MenuItem, Promotion, Restaurant, RestaurantStatusHistory
@@ -148,6 +148,7 @@ async def create_restaurant(
         )
     )
     await session.commit()
+    await owners.record(restaurant.id, restaurant.admin_user_id)
     return restaurant
 
 

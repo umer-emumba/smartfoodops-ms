@@ -230,3 +230,26 @@ async def test_record_refund_rejects(
             RecordRefundInput(order_id=order.id, amount=amount, reason="x", actor=Actor())
         )
     assert exc_info.value.type == error
+
+
+async def test_transitions_keep_the_tracking_state_current(
+    session_factory: Factory, tracking_redis
+) -> None:
+    order = await insert_order(session_factory)
+    state_key = f"tracking:order:{order.id}:state"
+    pending = f"tracking:restaurant:{RESTAURANT}:pending"
+
+    await activities.transition_order(_to(order.id, OrderStatus.AWAITING_RESTAURANT_ACCEPTANCE))
+    state = tracking_redis.hashes[state_key]
+    assert (state["status"], state["customer_id"], state["restaurant_admin_id"]) == (
+        "awaiting_restaurant_acceptance",
+        "u-customer",
+        OWNER,
+    )
+    assert tracking_redis.sets[pending] == {order.id}
+    assert tracking_redis.ttls[state_key] == 24 * 3600
+
+    await activities.transition_order(_to(order.id, OrderStatus.REJECTED, "restaurant_timeout"))
+    assert tracking_redis.hashes[state_key]["status_reason"] == "restaurant_timeout"
+    assert tracking_redis.sets[pending] == set()  # no longer waiting on the restaurant
+    assert tracking_redis.ttls[state_key] == 3600  # finished: kept 1h

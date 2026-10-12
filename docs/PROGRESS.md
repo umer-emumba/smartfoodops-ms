@@ -602,7 +602,45 @@ steps 0–8 are the working order.
     logs; smoke test `--deep` 46/46. (Note: a rider who declined an order is never
     re-offered it — with two riders, a decline then a drop-out leaves the saga searching
     until the 10-min limit)
-- [ ] Step 7 — Live feeds (SSE)
+- [x] **Step 7 — Live feeds (SSE)** (2026-10-12)
+  - New **`tracking-service`** (container 20; stateless, Redis only, no database):
+    `GET /v1/tracking/orders/{id}` (ordering customer or system_admin) — `snapshot`, then
+    `status` / `delivery` / `location` events, ends after delivered/cancelled/rejected;
+    `GET /v1/tracking/restaurants/{id}` (owning restaurant admin or system_admin) —
+    `snapshot` of orders awaiting a decision, then `new_order` / `order_cancelled`.
+    Ownership checked before streaming (normal 403/404 JSON); heartbeat comment every 15s
+  - One shared Redis Pub/Sub connection per replica (`app/hub.py`): a channel is subscribed
+    only while a local client watches it; a client whose queue fills (100) is disconnected
+    and reconnects for a fresh snapshot. Subscribes before reading the snapshot (no gap)
+  - State keys kept by the publishers: `tracking:order:{id}:state` hash — order-service
+    (status, owners; at creation and every transition; 24h, 1h once finished) and
+    delivery-service (delivery status, rider, ETAs, rider position; `EXPIRE NX`);
+    `tracking:restaurant:{id}:pending` set; `restaurant:{id}:owner` (restaurant-service, on
+    creation). Fallbacks when a key is missing: order-service
+    `GET /internal/orders/{id}/tracking`, restaurant-service
+    `GET /internal/restaurants/{id}/owner` — both rebuild the key
+  - **api-gateway**: streaming route for `/v1/tracking/*` (relays bytes as they arrive, own
+    pool of 1000 connections, read timeout 45s = 3 missed heartbeats, closes upstream on
+    client disconnect); `?access_token=` accepted on tracking routes (EventSource can't send
+    headers) — moved into the Authorization header and stripped from the forwarded URL
+    (`app/query_token.py`); registry gains `tracking`
+  - `sfo_common.testing.serve` — real local HTTP server for streaming tests
+  - Local setup: `services/tracking-service/.env` (from `env.example`, with the same
+    `JWT_SECRET` as the other services)
+  - Verified: tracking-service 15 tests (real Redis + real server: snapshot → live updates
+    → closes on delivered, heartbeat, 403/404/401 before streaming, missing state rebuilt,
+    disconnect unsubscribes, two clients share one Redis subscription, restaurant feed gets
+    a new order < 1s, slow client flagged); gateway 5 streaming tests (query token, errors
+    pass through, events arrive incrementally — real servers both sides); state-key tests in
+    order/delivery/restaurant services. Mutation check: without the unsubscribe the
+    disconnect test fails. Docker, through the gateway during a real order: restaurant feed
+    (query token) got `new_order` at the same moment as the customer's `awaiting` update;
+    customer saw snapshot → awaiting → confirmed → assigned → picked_up → delivered, delivery
+    updates, ETA and 2 rider positions, stream closed on delivered; another user 403; no
+    Redis subscriptions left; owner key rebuilt via fallback; no tokens in logs; smoke test
+    `--deep` 46/46
+  - Not done: a token revoked mid-stream isn't re-checked (auth is at connect; access
+    tokens last 15 min); no per-user cap on concurrent streams
 - [ ] Step 8 — End-to-end scenarios, seed data, docs
 
 ### Original scope checklist

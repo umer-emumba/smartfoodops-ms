@@ -283,6 +283,20 @@ services:
       timeout: 5s
       retries: 10
 
+  # Live feeds over SSE (docs/week2-plan.md D8): stateless, talks only to
+  # Redis — no database. Long-lived connections stay off the REST services.
+  tracking-service:
+    logging: *default-logging
+    build: { context: ., dockerfile: services/tracking-service/Dockerfile }
+    env_file: [services/tracking-service/.env]
+    depends_on:
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   notification-service:
     logging: *default-logging
     build: { context: ., dockerfile: services/notification-service/Dockerfile }

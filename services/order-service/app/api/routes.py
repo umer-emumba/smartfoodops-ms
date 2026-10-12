@@ -16,7 +16,7 @@ from sfo_events import EventType, new_outbox_row
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import repository, restaurant_client, temporal_client
+from app import repository, restaurant_client, temporal_client, tracking
 from app.auth_deps import get_current_user, require_roles
 from app.config import settings
 from app.db import get_session
@@ -221,6 +221,8 @@ async def create_order(
         if existing is None:
             raise
         return await _replay_or_conflict(existing, request_hash, response)
+    # Trackable at once, before the saga's first status change.
+    await tracking.write_state(order)
     await _start_saga(order)
     return order
 

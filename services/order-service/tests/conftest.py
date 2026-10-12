@@ -4,7 +4,7 @@ Alembic migrations, emptied before each test. Run with
 `scripts/check.sh --with-db` (or `pytest -m db`) while `docker compose up`."""
 
 import os
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 import pytest
@@ -53,22 +53,69 @@ async def session_factory(
 
 
 class RecordingRedis:
+    """Stands in for Redis in app/tracking.py: applies pipelined state writes
+    to dicts and records publishes."""
+
     def __init__(self) -> None:
         self.published: list[tuple[str, str]] = []
+        self.hashes: dict[str, dict[str, str]] = {}
+        self.sets: dict[str, set[str]] = {}
+        self.ttls: dict[str, int] = {}
 
-    async def publish(self, channel: str, message: str) -> int:
-        self.published.append((channel, message))
-        return 1
+    def pipeline(self, transaction: bool = True) -> "RecordingPipeline":
+        return RecordingPipeline(self)
+
+
+class RecordingPipeline:
+    def __init__(self, redis: RecordingRedis) -> None:
+        self._redis = redis
+        self._ops: list[Callable[[], None]] = []
+
+    async def __aenter__(self) -> "RecordingPipeline":
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        return None
+
+    def hset(self, key: str, mapping: dict[str, Any]) -> None:
+        self._ops.append(
+            lambda: self._redis.hashes.setdefault(key, {}).update(
+                {k: str(v) for k, v in mapping.items()}
+            )
+        )
+
+    def expire(self, key: str, seconds: int) -> None:
+        self._ops.append(lambda: self._redis.ttls.__setitem__(key, seconds))
+
+    def sadd(self, key: str, member: str) -> None:
+        self._ops.append(lambda: self._redis.sets.setdefault(key, set()).add(member))
+
+    def srem(self, key: str, member: str) -> None:
+        self._ops.append(lambda: self._redis.sets.setdefault(key, set()).discard(member))
+
+    def publish(self, channel: str, message: str) -> None:
+        self._ops.append(lambda: self._redis.published.append((channel, message)))
+
+    async def execute(self) -> list[Any]:
+        for op in self._ops:
+            op()
+        return []
+
+
+@pytest.fixture(autouse=True)
+def tracking_redis(monkeypatch: pytest.MonkeyPatch) -> RecordingRedis:
+    """Every test gets the recording Redis — none touches a real one."""
+    from app import redis_client
+
+    fake = RecordingRedis()
+    monkeypatch.setattr(redis_client, "redis", fake)
+    return fake
 
 
 @pytest.fixture
-def published(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[tuple[str, str]]]:
-    """Live-tracking publishes, captured instead of sent to Redis."""
-    from app import tracking
-
-    fake = RecordingRedis()
-    monkeypatch.setattr(tracking, "redis", fake)
-    yield fake.published
+def published(tracking_redis: RecordingRedis) -> list[tuple[str, str]]:
+    """Live-tracking publishes as (channel, JSON message)."""
+    return tracking_redis.published
 
 
 @pytest.fixture

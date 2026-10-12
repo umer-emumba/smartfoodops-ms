@@ -4,7 +4,7 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from app import activities, rider_locations
+from app import activities, redis_client, rider_locations
 from app.models import Delivery, DeliveryOffer, DeliveryStatusHistory, OutboxEvent, Rider
 from sfo_contracts import BusinessErrorType
 from sfo_contracts.activities import (
@@ -308,3 +308,27 @@ async def test_cancel_before_create_blocks_a_late_create(env: Env) -> None:
         CreateDeliveryInput(order_id="o-1", customer_id=CUSTOMER, pickup=PICKUP, dropoff=DROPOFF)
     )
     assert result.status == "cancelled"
+
+
+async def test_delivery_updates_write_the_order_tracking_state(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app import tracking
+
+    # The real publisher this time, against the test Redis.
+    monkeypatch.undo()
+    monkeypatch.setattr(activities, "SessionFactory", env.factory)
+    monkeypatch.setattr(redis_client, "redis", env.redis)
+    await add_rider(env, "near", at=km_north(0.5))
+    delivery_id, _ = await assigned(env)
+    await activities.compute_eta(DeliveryRef(delivery_id))
+    await tracking.publish_location("o-1", "near", 24.818, 67.03)
+
+    state = await env.redis.hgetall("tracking:order:o-1:state")
+    assert (state["delivery_status"], state["rider_id"], state["rider_lat"]) == (
+        "assigned",
+        "near",
+        "24.818",
+    )
+    assert state["pickup_eta"] and state["dropoff_eta"]
+    assert 0 < await env.redis.ttl("tracking:order:o-1:state") <= 24 * 3600

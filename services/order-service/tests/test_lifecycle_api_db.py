@@ -302,3 +302,17 @@ async def test_one_refund_per_order(
         f"/v1/orders/{order.id}/refund", json={"reason": "x"}, headers=SYSTEM_ADMIN_H
     )
     assert resp.status_code == 409
+
+
+# ---------- tracking-service fallback ----------
+
+
+async def test_internal_tracking_state_rebuilds_the_key(
+    session_factory: Factory, client: AsyncClient, tracking_redis
+) -> None:
+    order = await insert_order(session_factory, status=OrderStatus.CONFIRMED)
+    resp = await client.get(f"/internal/orders/{order.id}/tracking")
+    assert resp.status_code == 200
+    assert (resp.json()["status"], resp.json()["customer_id"]) == ("confirmed", CUSTOMER)
+    assert tracking_redis.hashes[f"tracking:order:{order.id}:state"]["status"] == "confirmed"
+    assert (await client.get("/internal/orders/nope/tracking")).status_code == 404

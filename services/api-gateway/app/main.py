@@ -8,6 +8,7 @@ from sfo_observability import configure_logging
 
 from app import auth_routes, docs, proxy
 from app.config import settings
+from app.query_token import QueryTokenMiddleware
 from app.redis_client import redis
 
 configure_logging(settings.service_name, settings.log_level)
@@ -35,6 +36,10 @@ app = create_app(
 # registered before the generic /v1/{resource} catch-all, or the catch-all
 # would shadow them. Auth (JWT + deny-list) runs inside forward_request, not
 # as middleware, so its errors get the normal JSON envelope.
+# Outermost: the token must be in the Authorization header before the rate
+# limiter and auth run (app/query_token.py).
+app.add_middleware(QueryTokenMiddleware)
+
 app.include_router(auth_routes.router)
 app.include_router(docs.router)
 app.include_router(proxy.router)

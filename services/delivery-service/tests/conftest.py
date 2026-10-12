@@ -62,7 +62,9 @@ async def env(migrated_database: str, monkeypatch: pytest.MonkeyPatch) -> AsyncI
     monkeypatch.setattr(stale_riders, "SessionFactory", factory)
     monkeypatch.setattr(redis_client, "redis", redis)
 
-    async def _publish(order_id: str, message: dict[str, Any]) -> None:
+    async def _publish(
+        order_id: str, message: dict[str, Any], state: dict[str, Any] | None = None
+    ) -> None:
         test_env.published.append((order_id, message))
 
     async def _signal(order_id: str, signal: str, *args: Any) -> None:

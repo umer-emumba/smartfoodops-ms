@@ -9,6 +9,7 @@ from sfo_common.temporal import embedded_workers
 from sfo_observability import configure_logging
 
 from app import restaurant_client
+from app.api import internal
 from app.api.routes import router
 from app.config import settings
 from app.db import engine
@@ -35,6 +36,7 @@ app = create_app(
 )
 
 app.include_router(router)
+app.include_router(internal.router)
 
 
 async def _readiness() -> bool:
