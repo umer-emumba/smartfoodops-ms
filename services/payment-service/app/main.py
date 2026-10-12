@@ -25,7 +25,7 @@ async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
 app = create_app(
     title="SmartFoodOps — Payment Service",
     tags_metadata=[
-        {"name": "payments", "description": "Authorize/capture/refund simulation (Week 2)"}
+        {"name": "payments", "description": "Simulated card payments, driven by the order saga"}
     ],
     lifespan=_lifespan,
 )

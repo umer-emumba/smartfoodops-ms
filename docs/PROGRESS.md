@@ -466,7 +466,24 @@ steps 0–8 are the working order.
     line order don't deadlock; `max_uses=1` under two concurrent redemptions → one. Mutation
     check: removing the stock guard makes the oversell test fail (20 of 20 succeed). Docker:
     migration applied, worker up, ping workflow and smoke test `--deep` 46/46
-- [ ] Step 3 — payment-service activities
+- [x] **Step 3 — payment-service activities** (2026-10-12)
+  - `app/state_machine.py`: `authorized → captured → refunded`, `authorized → voided`,
+    `declined` (a partial refund also ends `refunded`; `refunded_amount` says how much)
+  - Activities on `payment-activities` (`app/activities.py`): `authorize` (simulated card:
+    `card_simulated` approves, `card_simulated_decline` declines → recorded + non-retryable
+    `PaymentDeclined`; `PaymentSuccessful` outbox on approval), `capture`, `void`, `refund`
+    (full or partial, total ≤ captured, `RefundProcessed` outbox)
+  - Idempotent: one payment per order (`idempotency_key` = order_id), one `refunds` row per
+    refund workflow ID; payment row locked per call. A void before any authorize leaves a
+    `voided` placeholder, so a late authorize returns `status="voided"` (saga: not authorized)
+  - Migration `0002`: `payments.captured_at`/`voided_at`, `refunds` table (beyond the plan's
+    list — makes refunds idempotent per workflow ID)
+  - Verified: 39 tests (transition table + real-DB): authorize ×2 → one row/event; 5
+    concurrent authorizes → one payment (caught a real bug: duplicate failed outside the
+    IntegrityError handler); decline stays declined on retry; capture after void → error;
+    partial refunds; 5 concurrent 300 refunds on 1000 → exactly 3. Mutation check: without
+    the row lock all 5 refunds succeed (1,500 on 1,000). Docker: migration applied, ping
+    workflow, smoke test `--deep` 46/46
 - [ ] Step 4 — Saga part 1
 - [ ] Step 5 — delivery-service: GEO, offers, rider endpoints, ETA
 - [ ] Step 6 — Saga part 2

@@ -3,14 +3,13 @@ from decimal import Decimal
 
 from sfo_common import new_id
 from sfo_events import OutboxEventMixin
-from sqlalchemy import DateTime, Numeric, String
+from sqlalchemy import DateTime, ForeignKey, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
 
-# status: authorized | captured | refunded | failed — full authorize/capture/
-# refund logic lands in Week 2 (docs/PROGRESS.md). Week 1 just establishes the
-# schema and a read path.
+# status: see app/state_machine.py. Changed only by the order saga's
+# activities (app/activities.py).
 
 
 class Payment(Base):
@@ -33,7 +32,26 @@ class Payment(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     authorized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    captured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    voided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     refunded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class Refund(Base):
+    """One row per refund, keyed by the refund workflow's ID — a retried
+    refund activity finds its row instead of refunding twice. The sum over
+    a payment's refunds is `payments.refunded_amount`, never above the
+    captured amount."""
+
+    __tablename__ = "refunds"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)  # refund workflow ID
+    payment_id: Mapped[str] = mapped_column(ForeignKey("payments.id"), index=True)
+    amount: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    reason: Mapped[str] = mapped_column(String)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
 
 
 class OutboxEvent(Base, OutboxEventMixin):
