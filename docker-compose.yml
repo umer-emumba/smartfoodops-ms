@@ -90,6 +90,11 @@ services:
   redis:
     logging: *default-logging
     image: redis:7-alpine
+    # Persistent: the JWT deny-list (revoked tokens) and rate-limit counters
+    # must survive a restart. AOF fsynced every second — at most ~1s of writes
+    # lost on a crash; caches and live rider positions rebuild on their own.
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    volumes: ["redis-data:/data"]
     # Host access for the real-Redis tests (scripts/check.sh --with-db,
     # Redis DB 15), localhost only.
     ports: ["127.0.0.1:16379:6379"]
@@ -298,5 +303,6 @@ volumes:
   payment-db-data:
   notification-db-data:
   temporal-data:
+  redis-data:
   mongo-data:
   kafka-data:
