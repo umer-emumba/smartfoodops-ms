@@ -1,4 +1,4 @@
-"""Seeds a demo restaurant + menu + rider + customer through the gateway.
+"""Seeds a demo restaurant + menu + two riders + customer through the gateway.
 
 Run after `docker compose up` (once all services report healthy):
 
@@ -140,29 +140,28 @@ def main() -> None:
                 },
             ).raise_for_status()
 
-        print("Registering demo rider...")
-        rider_token = register_and_login(
-            client,
-            email="rider@demo.smartfoodops.example",
-            role="rider",
-            full_name="Demo Rider",
-            phone_number="+923000000003",
-        )
-        rider_headers = {"Authorization": f"Bearer {rider_token}"}
-        resp = client.post("/v1/riders", headers=rider_headers, json={"vehicle_type": "bike"})
-        if resp.status_code not in (201, 409):
-            resp.raise_for_status()
-        rider_id = client.get("/v1/riders/me", headers=rider_headers).json()["id"]
-
-        print("Approving demo rider (system_admin)...")
-        client.post(f"/v1/riders/{rider_id}/approve", headers=admin_headers).raise_for_status()
+        # Two riders: reassignment (decline, drop-out) needs someone to fall back to.
+        for email, full_name, phone, vehicle in [
+            ("rider@demo.smartfoodops.example", "Demo Rider", "+923000000003", "bike"),
+            ("rider2@demo.smartfoodops.example", "Demo Rider 2", "+923000000004", "scooter"),
+        ]:
+            print(f"Registering and approving {email}...")
+            rider_token = register_and_login(
+                client, email=email, role="rider", full_name=full_name, phone_number=phone
+            )
+            rider_headers = {"Authorization": f"Bearer {rider_token}"}
+            resp = client.post("/v1/riders", headers=rider_headers, json={"vehicle_type": vehicle})
+            if resp.status_code not in (201, 409):
+                resp.raise_for_status()
+            rider_id = client.get("/v1/riders/me", headers=rider_headers).json()["id"]
+            client.post(f"/v1/riders/{rider_id}/approve", headers=admin_headers).raise_for_status()
 
         print(f"\nDone. Demo restaurant_id={restaurant_id}, approved and active.")
         print("Demo accounts (password for all): " + PASSWORD)
         print("  admin@demo.smartfoodops.example (system_admin)")
         print("  customer@demo.smartfoodops.example")
         print("  restaurant-admin@demo.smartfoodops.example")
-        print("  rider@demo.smartfoodops.example (approved)")
+        print("  rider@demo.smartfoodops.example, rider2@demo.smartfoodops.example (approved)")
 
 
 if __name__ == "__main__":

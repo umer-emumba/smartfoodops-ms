@@ -17,14 +17,22 @@ graph TD
     GW1 -->|REST| DS[delivery-service]
     GW1 -->|REST| PS[payment-service]
     GW1 -->|REST| NS[notification-service]
+    GW1 ==>|"SSE streaming proxy"| TS[tracking-service]
     GW1 -->|deny-list check + rate limit| Redis[(Redis)]
     US -->|deny-list write on block| Redis
-    RS -->|public menu/detail cache| Redis
+    RS -->|"menu cache; restaurant owner key"| Redis
 
-    OS -->|sync REST: live prices + availability at order creation| RS
-    OS -.->|Temporal saga activities - Week 2| PS
-    OS -.->|Temporal saga activities - Week 2| DS
-    OS -.->|saga worker - Week 2| Temporal[(Temporal server)]
+    OS -->|sync REST: quote at order creation| RS
+    OS -->|"saga workflow + order-activities worker"| Temporal[(Temporal server)]
+    RS -->|restaurant-activities worker| Temporal
+    PS -->|payment-activities worker| Temporal
+    DS -->|"delivery-activities worker"| Temporal
+
+    OS -->|"PUBLISH status + state hash"| Redis
+    DS -->|"GEO rider pool; PUBLISH delivery, ETA, location"| Redis
+    Redis -->|"Pub/Sub + state keys"| TS
+    TS -.->|"fallback when a state key is missing"| OS
+    TS -.->|fallback| RS
 
     US --> UserDB[(user_db)]
     RS --> RestDB[(restaurant_db)]
@@ -37,19 +45,170 @@ graph TD
     OS -.->|outbox relay via Celery beat - Week 3| Kafka[(Kafka: order/delivery/payment-events)]
     DS -.->|outbox relay via Celery beat - Week 3| Kafka
     PS -.->|outbox relay via Celery beat - Week 3| Kafka
-    Kafka -.->|DeliveryStatusUpdated → customer WS/SSE - Week 2/3| GW1
     Kafka -.-> NS
     Kafka -.-> AS[analytics-service - Week 3]
     NS -.->|dispatch tasks - Week 3| Rabbit[(RabbitMQ / Celery workers)]
 ```
 
-Solid arrows are built (Week 1); dotted arrows are either Week 2/3 (per
-[PROGRESS.md](./PROGRESS.md)) or, for the `api-gateway` replica line specifically,
-production-only (Kubernetes `Deployment`/`HPA` + `Service` — never built locally, see
+Solid arrows are built; dotted arrows are Week 3 (per [PROGRESS.md](./PROGRESS.md)), the
+tracking-service fallbacks (`/internal/*` calls made only when a Redis state key is
+missing), or, for the `api-gateway` replica line, production-only (Kubernetes
+`Deployment`/`HPA` + `Service` — never built locally, see
 [technical-documentation.md](./technical-documentation.md#gateway-single-entry-point-not-a-spof)
-for why). `restaurant-service` has no Kafka topic: nothing downstream consumes restaurant
-changes in Part A. Every database is a separate Postgres container — database-per-service, no
-shared instance.
+for why). Each service's Temporal worker runs inside the service process in development
+and as a separate process (`python -m app.worker`) in production. Live tracking goes
+through Redis Pub/Sub, not Kafka: it needs sub-second push to whoever is watching, not a
+replayable log. Every database is a separate Postgres container — database-per-service,
+no shared instance.
+
+## Order lifecycle (sequence)
+
+The happy path, as built. Every arrow into "Saga" from an endpoint is a Temporal signal;
+every arrow out of it is an activity on that service's own task queue.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor C as Customer
+    actor A as Restaurant admin
+    actor R as Rider
+    participant GW as api-gateway
+    participant TS as tracking-service
+    participant OS as order-service
+    participant W as Saga (order-saga queue)
+    participant RS as restaurant-service
+    participant PS as payment-service
+    participant DS as delivery-service
+
+    A->>GW: GET /v1/tracking/restaurants/{id} (SSE)
+    GW->>TS: stream
+    C->>GW: POST /v1/orders (Idempotency-Key)
+    GW->>OS: forward
+    OS->>RS: POST /internal/restaurants/{id}/quote
+    OS->>OS: commit order `created` + OrderPlaced outbox
+    OS->>W: start workflow order-{id}
+    OS-->>C: 201 `created`
+    C->>GW: GET /v1/tracking/orders/{id} (SSE)
+    GW->>TS: stream (snapshot, then live)
+    W->>RS: reserve_order (stock + capacity, atomic)
+    W->>RS: redeem_promotion (if a code was given)
+    W->>OS: apply_pricing (tax, delivery fee)
+    W->>PS: authorize (simulated card)
+    W->>OS: transition → awaiting_restaurant_acceptance
+    OS-)TS: Redis PUBLISH → customer `status`, restaurant `new_order`
+    A->>GW: POST /v1/orders/{id}/restaurant-response {accept}
+    GW->>OS: signal restaurant_response
+    W->>OS: transition → confirmed
+    W->>DS: create_delivery (ready_at = now + prep time)
+    W->>DS: offer_to_nearest_rider (GEOSEARCH + atomic claim)
+    R->>GW: GET /v1/riders/me/offer, POST …/accept
+    GW->>DS: forward → signal rider_response
+    W->>DS: transition_delivery → assigned, compute_eta
+    W->>OS: transition → assigned (RiderAssigned)
+    R->>GW: PATCH /v1/riders/me/location (repeated)
+    DS-)TS: Redis PUBLISH → customer `location`
+    R->>GW: POST …/picked-up → signal
+    W->>DS: transition_delivery → picked_up
+    W->>OS: transition → picked_up
+    W->>RS: complete_reservation (capacity freed)
+    R->>GW: POST …/delivered → signal
+    W->>DS: transition_delivery → delivered
+    W->>PS: capture (final settlement)
+    W->>OS: transition → delivered
+    W->>DS: release_rider (rider available again)
+    TS-->>C: `status: delivered`, stream ends
+```
+
+## Rider assignment and reassignment
+
+One offer at a time, nearest first. A rider who declines, lets the offer expire, or drops
+out is never offered that order again.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant W as Saga
+    participant DS as delivery-service
+    participant Redis
+    actor R1 as Rider 1 (nearest)
+    actor R2 as Rider 2
+
+    W->>DS: offer_to_nearest_rider(exclude = [])
+    DS->>Redis: GEOSEARCH riders:available, 5 km, nearest first
+    DS->>DS: UPDATE riders SET status='busy' WHERE id=R1 AND status='available'
+    DS-->>W: offer to R1 (expires in 60s)
+    alt R1 declines, or 60s pass
+        R1->>DS: POST …/decline → signal rider_response(accepted=false)
+        W->>DS: release_rider(declined / expired) → R1 available, reassignment_count + 1
+        W->>DS: offer_to_nearest_rider(exclude = [R1])
+        DS-->>W: offer to R2
+        R2->>DS: POST …/accept → signal
+        W->>DS: transition_delivery → assigned
+    else R1 accepts, then drops out before pickup
+        R1->>DS: POST …/accept → signal
+        W->>DS: transition_delivery → assigned
+        R1->>DS: POST …/drop-out (or no location ping for 3 min → stale-rider detector)
+        DS->>W: signal rider_dropped
+        W->>DS: release_rider(dropped) → R1 offline, reassignment_count + 1
+        W->>DS: offer_to_nearest_rider(exclude = [R1]) → R2 …
+    end
+    Note over W,DS: Nobody free → look again every 30s. After 5 offers or 10 min:<br/>compensate → order `cancelled` (no_rider_available)
+```
+
+## Cancellation and compensation
+
+A customer (or system admin) can cancel until pickup. The saga undoes, in reverse order,
+only what it actually did; every compensation is idempotent and retried until it succeeds.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor C as Customer
+    participant OS as order-service
+    participant W as Saga
+    participant DS as delivery-service
+    participant PS as payment-service
+    participant RS as restaurant-service
+
+    C->>OS: POST /v1/orders/{id}/cancel
+    OS->>OS: can_cancel(status)? else 409
+    OS->>W: signal cancel(actor, reason)
+    OS-->>C: 202
+    opt a delivery was created
+        W->>DS: cancel_delivery (frees the rider)
+    end
+    opt payment was authorized
+        W->>PS: void
+    end
+    opt a promotion was redeemed
+        W->>RS: release_promotion
+    end
+    W->>RS: release_reservation (stock and capacity back)
+    W->>OS: transition → cancelled (status_reason = reason or cancelled_by_customer)
+```
+
+The same compensation runs on every failure before pickup: restaurant rejects or doesn't
+answer in 5 min (`rejected`), out of stock / at capacity / card declined (`rejected`), no
+rider (`cancelled`). After pickup nothing is undone — the remaining steps retry until they
+succeed, and a problem becomes a refund.
+
+## Post-delivery refund
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Admin as System admin
+    participant OS as order-service
+    participant RW as OrderRefundWorkflow (refund-{order_id})
+    participant PS as payment-service
+
+    Admin->>OS: POST /v1/orders/{id}/refund {amount?, reason}
+    OS->>OS: delivered? not refunded yet? amount ≤ paid? else 409 / 422
+    OS->>RW: start
+    OS-->>Admin: 202
+    RW->>PS: refund(refund_id = workflow ID) → payments.refunded_amount, RefundProcessed outbox
+    RW->>OS: record_refund → orders.refunded_amount, history row
+```
 
 ## Entity-relationship diagrams (one per service database)
 
@@ -108,6 +267,8 @@ erDiagram
     MENU_CATEGORIES ||--o{ MENU_ITEMS : groups
     RESTAURANTS ||--o{ PROMOTIONS : issues
     RESTAURANTS ||--o{ RESTAURANT_STATUS_HISTORY : "audit trail"
+    RESTAURANTS ||--o{ STOCK_RESERVATIONS : holds
+    PROMOTIONS ||--o{ PROMOTION_REDEMPTIONS : "redeemed by"
 
     RESTAURANTS {
         string id PK
@@ -122,6 +283,7 @@ erDiagram
         string status "pending_approval | active | suspended"
         boolean is_accepting_orders
         int max_concurrent_orders
+        int active_order_count "reserved, not yet picked up"
         int avg_prep_time_minutes
         datetime created_at
     }
@@ -165,7 +327,25 @@ erDiagram
         string reason
         datetime created_at
     }
+    STOCK_RESERVATIONS {
+        string order_id PK "opaque -> order_db.orders.id; makes reserve/release idempotent"
+        string restaurant_id FK
+        json items "menu_item_id + quantity taken"
+        string status "reserved | released | consumed"
+        datetime created_at
+        datetime updated_at
+    }
+    PROMOTION_REDEMPTIONS {
+        string order_id PK "opaque -> order_db.orders.id"
+        string promotion_id FK
+        string status "redeemed | released"
+        datetime created_at
+        datetime updated_at
+    }
 ```
+
+A release that arrives before its reserve leaves a `released` row (`restaurant_id` /
+`promotion_id` null), so a late reserve is a no-op.
 
 ### `order_db`
 
@@ -179,6 +359,9 @@ erDiagram
         int order_number UK "human-facing sequential ID"
         string customer_id "opaque -> user_db.users.id"
         string restaurant_id "opaque -> restaurant_db.restaurants.id"
+        string restaurant_admin_id "snapshot from the quote: who may accept"
+        float restaurant_lat "snapshot: pickup point, delivery fee"
+        float restaurant_lng
         string status
         string delivery_address_text "snapshotted, not a live ref"
         float delivery_lat
@@ -190,6 +373,9 @@ erDiagram
         decimal discount_amount
         string promo_code
         decimal total_amount
+        string payment_method "card_simulated | card_simulated_decline"
+        decimal refunded_amount
+        datetime refunded_at
         string status_reason
         string idempotency_key "UK with customer_id"
         string request_hash "detects key reuse with a different body"
@@ -199,6 +385,9 @@ erDiagram
         datetime confirmed_at
         datetime rejected_at
         datetime cancelled_at
+        datetime assigned_at
+        datetime picked_up_at
+        datetime delivered_at
     }
     ORDER_ITEMS {
         string id PK
@@ -227,6 +416,9 @@ erDiagram
 erDiagram
     RIDERS ||--o{ DELIVERIES : "assigned to"
     RIDERS ||--o{ RIDER_VERIFICATION_HISTORY : "audit trail"
+    DELIVERIES ||--o{ DELIVERY_OFFERS : "offered to"
+    RIDERS ||--o{ DELIVERY_OFFERS : receives
+    DELIVERIES ||--o{ DELIVERY_STATUS_HISTORY : "audit trail"
 
     RIDERS {
         string id PK
@@ -235,24 +427,30 @@ erDiagram
         string verification_status "pending_approval | approved | suspended"
         string vehicle_type
         string license_plate
-        float last_lat
+        float last_lat "written at most every 30s; live position is in Redis"
         float last_lng
+        datetime last_location_at
         datetime created_at
     }
     DELIVERIES {
         string id PK
         string order_id UK "opaque -> order_db.orders.id"
-        string rider_id FK
-        string status "pending_assignment | offered | assigned | picked_up | delivered | cancelled (Week 2)"
-        float pickup_lat "snapshot at assignment"
+        string customer_id "opaque -> user_db.users.id, for ownership checks"
+        string rider_id FK "current offer or assignment"
+        string status "pending_assignment | offered | assigned | picked_up | delivered | cancelled"
+        float pickup_lat "snapshot at creation"
         float pickup_lng
         float dropoff_lat
         float dropoff_lng
         float distance_km
+        datetime ready_at "food ready: now + restaurant prep time"
+        datetime offer_expires_at
         datetime pickup_eta
+        datetime dropoff_eta
         datetime assigned_at
         datetime picked_up_at
         datetime delivered_at
+        datetime cancelled_at
         int reassignment_count
         int version "optimistic lock"
         datetime created_at
@@ -267,10 +465,30 @@ erDiagram
         string reason
         datetime created_at
     }
+    DELIVERY_OFFERS {
+        string id PK
+        string delivery_id FK
+        string rider_id FK
+        string status "pending | accepted | declined | expired | dropped | cancelled | completed"
+        float distance_km "rider to pickup"
+        datetime offered_at
+        datetime expires_at
+        datetime responded_at
+    }
+    DELIVERY_STATUS_HISTORY {
+        string id PK
+        string delivery_id FK
+        string from_status "null = created"
+        string to_status
+        string rider_id
+        string reason
+        datetime created_at
+    }
 ```
 
 High-frequency rider location pings live in MongoDB, not this diagram —
-`riders.last_lat/last_lng` is only the latest known position used for assignment queries:
+the live position and the assignment pool are in Redis (`rider:{id}:location`, GEO set
+`riders:available`), and `riders.last_lat/last_lng` is a throttled copy:
 
 ```mermaid
 erDiagram
@@ -287,19 +505,30 @@ erDiagram
 
 ```mermaid
 erDiagram
+    PAYMENTS ||--o{ REFUNDS : "refunded by"
+
     PAYMENTS {
         string id PK
         string order_id UK "opaque -> order_db.orders.id"
         string customer_id "opaque -> user_db.users.id, for ownership checks"
         decimal amount
-        string status "authorized | captured | refunded | failed"
+        string status "authorized | captured | voided | refunded | declined"
         string payment_method
         string failure_reason
-        decimal refunded_amount
-        string idempotency_key UK
+        decimal refunded_amount "sum of refunds, never above amount"
+        string idempotency_key UK "= order_id: one payment per order"
         datetime created_at
         datetime authorized_at
+        datetime captured_at
+        datetime voided_at
         datetime refunded_at
+    }
+    REFUNDS {
+        string id PK "refund workflow ID: a retried refund is a no-op"
+        string payment_id FK
+        decimal amount
+        string reason
+        datetime created_at
     }
 ```
 

@@ -7,77 +7,80 @@ on top of this).
 See [docs/PRD.md](docs/PRD.md) for requirements and feature → deliverable traceability,
 [docs/architecture.md](docs/architecture.md) for the full system design,
 [docs/technical-documentation.md](docs/technical-documentation.md) for the reasoning
-behind each decision, [docs/diagrams.md](docs/diagrams.md) for the microservices
-architecture diagram and per-service ER diagrams, and [docs/PROGRESS.md](docs/PROGRESS.md)
+behind each decision, [docs/diagrams.md](docs/diagrams.md) for the component diagram, order-lifecycle
+sequence diagrams and per-service ER diagrams, and [docs/PROGRESS.md](docs/PROGRESS.md)
 for current build status — **read PROGRESS.md first** when picking this project back up in
 a new session.
 
 ## Architecture at a glance
 
 ```
-                         ┌────────────┐
-                         │ api-gateway│  routing, JWT + deny-list check,
-                         │            │  rate limiting, CORS, Swagger index,
-                         └──┬───┬───┬─┘  tracking WebSocket/SSE (Week 2)
-                            │   │   │
-       ┌────────────────────┘   │   └────────────────────┐
-       │                        │                         │
-┌──────▼──────┐          ┌──────▼──────┐           ┌──────▼──────┐
-│ user-service│          │ restaurant- │           │order-service│──► Temporal
-│  (own DB)   │          │  service    │           │  (own DB)   │    (order saga,
-└─────────────┘          │  (own DB)   │           └──────┬──────┘     Week 2)
-                          └─────────────┘                  │
-       ┌─────────────────────────────────┬─────────────────┴──────────┐
-       │                                 │                            │
-┌──────▼──────┐                  ┌───────▼──────┐            ┌────────▼───────┐
-│delivery-svc │                  │payment-service│            │notification-svc│
-│ (DB + Mongo)│                  │   (own DB)    │            │    (own DB)    │
-└─────────────┘                  └───────────────┘            └────────────────┘
+                               clients (REST + SSE)
+                                        │
+                               ┌────────▼────────┐  routing, JWT + deny-list check,
+                               │   api-gateway   │  rate limiting, CORS, Swagger
+                               └────────┬────────┘  index, SSE streaming proxy
+       ┌───────────────┬────────────────┼────────────────┬─────────────────┐
+┌──────▼──────┐ ┌──────▼──────┐ ┌───────▼───────┐ ┌──────▼──────┐ ┌────────▼───────┐
+│ user-service│ │ restaurant- │ │ order-service │ │  delivery-  │ │tracking-service│
+│             │ │   service   │ │ + saga        │ │   service   │ │ SSE, no DB     │
+└─────────────┘ └──────▲──────┘ └───────┬───────┘ └──────▲──────┘ └────────▲───────┘
+                       │                │ start          │                 │
+                       │       ┌────────▼────────┐       │                 │ Pub/Sub +
+                       └───────┤ Temporal server ├───────┘                 │ state keys
+                    activities └────────┬────────┘ activities      ┌───────┴───────┐
+                                        │ activities               │     Redis     │
+                                ┌───────▼───────┐                  └───────▲───────┘
+                                │payment-service│        order- and delivery-service
+                                └───────────────┘        publish status, ETA, location
 
-   The gateway routes to every service (only three are drawn for space).
-   Domain events go to Kafka (order-events / delivery-events / payment-events) via
-   the transactional outbox pattern — outbox rows are written from Week 1; the
-   Kafka relay lands in Week 3.
+   The gateway also routes to payment- and notification-service (not drawn).
+   Each service has its own database and runs its own Temporal worker on its own task
+   queue: the saga in order-service schedules activities next to the data they change.
+   Domain events are written to each service's outbox; the Kafka relay lands in Week 3.
 ```
 
 Every service owns its own database — no service reads another's DB directly.
-Cross-service contact happens only via sync REST (built: order → restaurant for pricing),
-the Temporal order saga (Week 2), Kafka domain events (Week 3), or Celery background jobs
-(Week 3). Full rationale in [docs/architecture.md](docs/architecture.md); component and ER
-diagrams in [docs/diagrams.md](docs/diagrams.md).
+Cross-service contact happens only via sync REST (order → restaurant for the quote), the
+Temporal order saga, Redis Pub/Sub for live tracking, Kafka domain events (Week 3), or
+Celery background jobs (Week 3). Full rationale in [docs/architecture.md](docs/architecture.md);
+component, sequence and ER diagrams in [docs/diagrams.md](docs/diagrams.md).
 
 ### Order + delivery flow
 
-Target Part A flow. Week 1 implements the first step: validate, price, and persist the
-order. The saga that drives the rest starts in Week 2.
+As built. The order is created synchronously; everything after runs in the Temporal saga,
+and the customer and restaurant watch it on live SSE feeds.
 
 ```mermaid
 sequenceDiagram
     autonumber
     actor C as Customer
-    participant GW as api-gateway
+    actor A as Restaurant admin
     participant OS as order-service
+    participant T as Temporal saga
     participant RS as restaurant-service
-    participant T as Temporal saga (W2)
     participant PS as payment-service
     participant DS as delivery-service
     actor R as Rider
 
-    C->>GW: POST /v1/orders (Idempotency-Key)
-    GW->>OS: forward (JWT verified)
-    OS->>RS: GET restaurant + menu (live prices, availability)
-    OS-->>C: 201 order `created` (+ OrderPlaced outbox row)
-    OS->>T: start saga (W2)
-    T->>RS: reserve stock
-    T->>PS: authorize payment
-    T-->>RS: notify restaurant, wait accept/reject (timeout)
-    RS->>T: accept → order `confirmed`
-    T->>DS: create delivery, offer nearest approved rider
-    R->>DS: accept → order `assigned`
-    R->>DS: picked up → `picked_up`
-    R->>DS: delivered → `delivered`
-    T->>PS: capture payment (final settlement)
+    C->>OS: POST /v1/orders (Idempotency-Key), via the gateway
+    OS->>RS: quote (live prices, availability)
+    OS-->>C: 201 order `created`
+    OS->>T: start saga order-{id}
+    T->>RS: reserve stock + capacity
+    T->>PS: authorize payment (simulated card)
+    T-->>A: `new_order` on the restaurant's live feed
+    A->>T: accept (POST …/restaurant-response → signal) → `confirmed`
+    T->>DS: create delivery, offer the nearest available rider
+    R->>T: accept (signal) → `assigned`, ETA
+    R->>T: picked up → `picked_up` (kitchen capacity freed)
+    R->>T: delivered
+    T->>PS: capture payment (final settlement) → `delivered`
 ```
+
+Failures and cancellations before pickup run the saga's compensations (void payment,
+release stock, free the rider); diagrams for reassignment, cancellation and refunds are in
+[docs/diagrams.md](docs/diagrams.md).
 
 ## Core workflows
 
@@ -85,22 +88,23 @@ Full state transitions, compensation matrix and consistency model:
 [docs/technical-documentation.md](docs/technical-documentation.md#order-lifecycle).
 
 - **Order lifecycle**: `created → awaiting_restaurant_acceptance → confirmed → assigned →
-  picked_up → delivered`, plus `rejected`/`cancelled`. Week 1: order creation validates the
-  restaurant and items against `restaurant-service`, prices server-side, requires an
-  `Idempotency-Key`, and records a status-history audit row. Week 2: a Temporal saga in
-  `order-service` drives every later transition.
+  picked_up → delivered`, plus `rejected`/`cancelled`. Creation validates and prices
+  server-side and needs an `Idempotency-Key`; a Temporal saga in `order-service` drives
+  every later transition, with a 5-minute restaurant decision timeout.
 - **Delivery lifecycle**: rider registration, admin vetting, availability and location
-  (Week 1) → proximity-based assignment → pickup → delivery (Week 2), with real-time customer tracking split by traffic shape (REST
-  ingestion from riders, WebSocket/SSE push to customers) — see
-  [architecture.md#real-time-delivery-tracking](docs/architecture.md#real-time-delivery-tracking).
-- **Cancellation/refund**: Temporal signal-driven compensation (release stock, refund
-  payment, unassign rider) depending on how far the order had progressed — Week 2.
+  pings → nearest available rider offered (Redis GEO), 60s to accept → reassignment on
+  decline, expiry or drop-out → pickup → delivery, with ETAs.
+- **Live tracking**: customers follow their order and restaurants get new orders over SSE
+  (`/v1/tracking/...`), served by `tracking-service` from Redis Pub/Sub.
+- **Cancellation/refund**: cancel until pickup — the saga compensates for whatever had
+  happened (release stock, void payment, free the rider). After delivery a system admin
+  can refund all or part of an order.
 
 ## Tech stack
 
-Used by the code today: Python, FastAPI, PostgreSQL (database-per-service), MongoDB, Redis,
-Docker Compose. Already running in Compose, used from Week 2: Temporal. Already running in
-Compose, used from Week 3: Kafka + Schema Registry, Celery + RabbitMQ. Added in Week 3:
+Used by the code today: Python, FastAPI, PostgreSQL (database-per-service), MongoDB, Redis
+(cache, deny-list, rate limits, rider GEO pool, Pub/Sub for live tracking), Temporal (order
+saga), Docker Compose. Already running in Compose, used from Week 3: Kafka + Schema Registry, Celery + RabbitMQ. Added in Week 3:
 Prometheus + Grafana, Jaeger, OpenTelemetry. Dependency management via `uv` workspaces. Full library-level choices
 (ORM, JWT, Kafka client, etc.) with rationale in
 [docs/technical-documentation.md](docs/technical-documentation.md#library--tooling-choices).
@@ -113,7 +117,9 @@ anything outside containers (tests, the seed script).
 1. For each service under `services/`, copy its `env.example` to `.env` (dummy local
    values are already fine for dev — see
    [architecture.md#conventions](docs/architecture.md#conventions) for why these are
-   named `env.example` rather than the more common `.env.example`):
+   named `env.example` rather than the more common `.env.example`). `JWT_SECRET` must be
+   the same in every service's `.env`; if you've changed it in an existing setup, set the
+   same value in `services/tracking-service/.env` too:
 
    ```bash
    for d in services/*/; do [ -f "$d/env.example" ] && cp "$d/env.example" "$d/.env"; done
@@ -131,7 +137,8 @@ anything outside containers (tests, the seed script).
    Each service runs its own Alembic migrations on startup. Wait for `docker compose ps`
    to show everything healthy.
 
-3. Seed demo data (a restaurant, menu, rider, and customer) through the gateway:
+3. Seed demo data (a restaurant, menu, two riders, a customer and an admin) through the
+   gateway:
 
    ```bash
    uv run --group dev python scripts/seed.py
@@ -179,7 +186,8 @@ package.)
 ### Lint, types and tests
 
 ```bash
-./scripts/check.sh          # ruff lint + format check, mypy per service, every service's tests
+./scripts/check.sh            # ruff lint + format check, mypy per service, every service's tests
+./scripts/check.sh --with-db  # + tests against real Postgres/Redis (needs `docker compose up`)
 uvx pre-commit install      # once: ruff + mypy run on every commit
 ```
 
@@ -201,6 +209,7 @@ docker compose logs --no-log-prefix | grep <x-request-id>
 docker compose up -d && uv run --group dev python scripts/seed.py
 uv run --group dev python scripts/smoke_test.py          # API only, through the gateway
 uv run --group dev python scripts/smoke_test.py --deep   # + checks inside local Docker
+uv run --group dev python scripts/smoke_test.py --deep --lifecycle  # + whole orders (~2 min)
 ```
 
 One end-to-end test for the platform, not one per service: it drives the system through
@@ -208,8 +217,11 @@ One end-to-end test for the platform, not one per service: it drives the system 
 catches what per-service tests can't — routing, migrations, config, service-to-service
 calls. `--deep` also checks each service's `/readyz`/`/livez`, the Redis menu cache,
 refresh-token storage, the Mongo location ping, and that one order's trace ID shows up
-in the gateway, order-service and restaurant-service logs. `--base-url` points it at another
-deployment. Safe to re-run; exits non-zero on any failure.
+in the gateway, order-service and restaurant-service logs. `--lifecycle` runs whole orders
+through the saga: the happy path watched on both live feeds, restaurant rejection, card
+decline, cancellation after assignment, rider decline and drop-out (reassignment), two
+orders racing for the last unit of stock, and a partial refund. `--base-url` points it at
+another deployment. Safe to re-run; exits non-zero on any failure.
 
 ## API overview
 
@@ -231,9 +243,10 @@ Resource → owning service:
 | `/v1/auth`, `/v1/users` | user-service |
 | `/v1/restaurants` | restaurant-service |
 | `/v1/orders` | order-service |
-| `/v1/riders` | delivery-service |
+| `/v1/riders`, `/v1/deliveries` | delivery-service |
 | `/v1/payments` | payment-service |
 | `/v1/notifications` | notification-service |
+| `/v1/tracking` (SSE) | tracking-service |
 
 The gateway also serves its own `/livez`, `/readyz` (and `/health`, same as `/readyz`), `/docs`,
 and `/docs/{service}` routes.

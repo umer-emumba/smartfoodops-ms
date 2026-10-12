@@ -8,20 +8,32 @@ service-to-service calls, Redis/Mongo connectivity.
     uv run --group dev python scripts/seed.py        # once: demo accounts + restaurant
     uv run --group dev python scripts/smoke_test.py  # black-box, API only
     uv run --group dev python scripts/smoke_test.py --deep  # + checks inside local Docker
+    uv run --group dev python scripts/smoke_test.py --lifecycle  # + whole orders
 
 By default it only uses the public API (works against any deployment via
 --base-url). --deep also looks inside the local docker compose stack: every
 service's /readyz and /livez, the Redis cache entry, how refresh tokens are
 stored, and the Mongo location ping. Safe to re-run: the one menu change it
 makes is reverted. Exits non-zero if any check fails.
+
+--lifecycle runs whole orders through the saga (docs/week2-plan.md step 8):
+happy path with both live feeds, restaurant rejection, payment decline,
+cancellation, rider decline / drop-out and reassignment, a race for the
+last unit of stock, and a partial refund. Needs the second demo rider from
+seed.py. Each run uses up 3 units of one menu item (the delivered orders);
+everything else — riders, capacity, the stock changed for the race — is put
+back, and any order a failed scenario left open is cancelled.
 """
 
 import argparse
 import json
 import subprocess
 import sys
+import threading
 import time
 import uuid
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import httpx
@@ -207,6 +219,9 @@ def run(base_url: str, deep: bool) -> None:
                 )
                 own = c.get(f"/v1/orders/{order['id']}", headers=customer_h)
                 check("customer reads own order", own.status_code == 200)
+                # Otherwise it holds stock until the 5-minute restaurant timeout.
+                cancel = c.post(f"/v1/orders/{order['id']}/cancel", headers=customer_h, json={})
+                check("customer cancels own order", cancel.status_code == 202, cancel.status_code)
         finally:
             c.patch(item_url, headers=owner_h, json={"price": str(original_price)})
 
@@ -287,15 +302,425 @@ def run(base_url: str, deep: bool) -> None:
         check("reused refresh token rejected", reuse.status_code == 401, reuse.status_code)
 
 
+# --- Lifecycle scenarios (--lifecycle) ---------------------------------------
+# Whole orders through the saga: restaurant decision, rider offers, delivery,
+# compensation and refunds, watched over the live feeds. Each scenario puts
+# both riders on shift first (rider 1 nearest), so they don't depend on each
+# other; anything left open at the end is cancelled.
+
+RIDER_2 = "rider2@demo.smartfoodops.example"
+DONE = {"delivered", "rejected", "cancelled"}
+
+
+class _Timeout(Exception):
+    pass
+
+
+class _WaitOutRateLimit(httpx.HTTPTransport):
+    """The scenarios poll, and the gateway allows 120 requests/min per user —
+    a 429 here means "slow down", not a failed check."""
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        while True:
+            resp = super().handle_request(request)
+            if resp.status_code != 429 or request.url.path.startswith("/v1/auth/"):
+                return resp
+            resp.read()
+            wait_ms = resp.json()["error"]["details"].get("retry_after_ms", 5_000)
+            time.sleep(wait_ms / 1000 + 0.1)
+
+
+class _Stream:
+    """Reads one SSE stream on a background thread, collecting (event, data)."""
+
+    def __init__(self, base_url: str, path: str, headers: dict[str, str] | None = None) -> None:
+        self.events: list[tuple[str, Any]] = []
+        self._client = httpx.Client(base_url=base_url, timeout=httpx.Timeout(10, read=None))
+        self._thread = threading.Thread(target=self._read, args=(path, headers), daemon=True)
+        self._thread.start()
+
+    def _read(self, path: str, headers: dict[str, str] | None) -> None:
+        name = "message"
+        try:
+            with self._client.stream("GET", path, headers=headers) as resp:
+                self.events.append(("http", resp.status_code))
+                for line in resp.iter_lines():
+                    if line.startswith("event: "):
+                        name = line.removeprefix("event: ")
+                    elif line.startswith("data: "):
+                        self.events.append((name, json.loads(line.removeprefix("data: "))))
+        except httpx.HTTPError:
+            pass  # closed by close()
+
+    def of(self, name: str) -> list[Any]:
+        return [data for event, data in self.events if event == name]
+
+    def ended(self, timeout: float) -> bool:
+        self._thread.join(timeout)
+        return not self._thread.is_alive()
+
+    def close(self) -> None:
+        self._client.close()
+
+
+class _Lifecycle:
+    def __init__(self, c: httpx.Client, base_url: str, deep: bool) -> None:
+        self.c, self.base_url, self.deep = c, base_url, deep
+        self.placed: list[str] = []
+        self.owner_token = login(c, RESTAURANT_ADMIN)["access_token"]
+        self.customer = bearer(login(c, CUSTOMER)["access_token"])
+        self.owner = bearer(self.owner_token)
+        self.admin = bearer(login(c, ADMIN)["access_token"])
+        self.rider1 = bearer(login(c, RIDER)["access_token"])
+        self.rider2 = bearer(login(c, RIDER_2)["access_token"])
+        self.rider1_id = c.get("/v1/riders/me", headers=self.rider1).json()["id"]
+        self.rider2_id = c.get("/v1/riders/me", headers=self.rider2).json()["id"]
+        mine = c.get("/v1/restaurants/mine", headers=self.owner).json()
+        self.rest = next(r for r in mine if r["status"] == "active")
+        menu = c.get(f"/v1/restaurants/{self.rest['id']}/menu").json()
+        self.item = next(i for i in menu if i["is_available"] and i["stock_count"])
+
+    # --- reads ---------------------------------------------------------------
+    def order(self, oid: str) -> dict[str, Any]:
+        return self.c.get(f"/v1/orders/{oid}", headers=self.customer).json()
+
+    def payment(self, oid: str) -> dict[str, Any]:
+        return self.c.get(f"/v1/payments/by-order/{oid}", headers=self.customer).json()
+
+    def delivery(self, oid: str) -> dict[str, Any]:
+        return self.c.get(f"/v1/deliveries/by-order/{oid}", headers=self.customer).json()
+
+    def stock(self) -> int:
+        menu = self.c.get(f"/v1/restaurants/{self.rest['id']}/menu").json()
+        return next(i["stock_count"] for i in menu if i["id"] == self.item["id"])
+
+    def capacity_used(self) -> str:
+        return compose(
+            "restaurant-db psql -U postgres -d restaurant_db -tAc "
+            f"\"select active_order_count from restaurants where id='{self.rest['id']}'\""
+        )
+
+    def rider_status(self, rider: dict[str, str]) -> str:
+        return self.c.get("/v1/riders/me", headers=rider).json()["status"]
+
+    def wait(self, fn: Callable[[], Any], label: str, timeout: float = 30) -> Any:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if value := fn():
+                return value
+            time.sleep(0.5)
+        raise _Timeout(f"timed out waiting for {label}")
+
+    def wait_status(self, oid: str, status: str) -> dict[str, Any]:
+        return self.wait(lambda: (o := self.order(oid))["status"] == status and o, status)
+
+    def offer(self, rider: dict[str, str]) -> dict[str, Any]:
+        def poll() -> Any:
+            r = self.c.get("/v1/riders/me/offer", headers=rider)
+            return r.json() if r.status_code == 200 else None
+
+        return self.wait(poll, "a rider offer")
+
+    # --- actions -------------------------------------------------------------
+    def on_shift(self) -> None:
+        """Rider 1 at 0.3 km from the restaurant, rider 2 at 1 km."""
+        for rider, km in ((self.rider1, 0.3), (self.rider2, 1.0)):
+            self.c.patch("/v1/riders/me/status", headers=rider, json={"status": "available"})
+            self.move(rider, km)
+
+    def place(self, payment_method: str = "card_simulated") -> str:
+        r = self.c.post(
+            "/v1/orders",
+            headers={**self.customer, "Idempotency-Key": str(uuid.uuid4())},
+            json={
+                "restaurant_id": self.rest["id"],
+                "delivery_address_text": "1 Lifecycle Lane",
+                "delivery_lat": self.rest["lat"] + 0.02,
+                "delivery_lng": self.rest["lng"] + 0.01,
+                "items": [{"menu_item_id": self.item["id"], "quantity": 1}],
+                "payment_method": payment_method,
+            },
+        )
+        if r.status_code != 201:
+            raise _Timeout(f"order not placed: {r.status_code} {r.text[:200]}")
+        self.placed.append(r.json()["id"])
+        return r.json()["id"]
+
+    def accepted_order(self) -> str:
+        oid = self.place()
+        self.wait_status(oid, "awaiting_restaurant_acceptance")
+        self.respond(oid, "accept")
+        return oid
+
+    def respond(self, oid: str, decision: str) -> None:
+        body = {"decision": decision} | (
+            {"reason": "Kitchen closed"} if decision == "reject" else {}
+        )
+        self.c.post(f"/v1/orders/{oid}/restaurant-response", headers=self.owner, json=body)
+
+    def rider_act(self, rider: dict[str, str], delivery_id: str, action: str) -> None:
+        body = {"reason": "Flat tyre"} if action == "drop-out" else None
+        r = self.c.post(
+            f"/v1/riders/me/deliveries/{delivery_id}/{action}", headers=rider, json=body
+        )
+        if r.is_error:
+            raise _Timeout(f"rider {action}: {r.status_code} {r.text[:200]}")
+
+    def move(self, rider: dict[str, str], km: float) -> None:
+        """A location ping `km` north of the restaurant."""
+        self.c.patch(
+            "/v1/riders/me/location",
+            headers=rider,
+            json={"lat": self.rest["lat"] + km / 111.2, "lng": self.rest["lng"]},
+        )
+
+    def deliver(self, rider: dict[str, str], oid: str, delivery_id: str) -> dict[str, Any]:
+        self.move(rider, 0.1)
+        self.rider_act(rider, delivery_id, "picked-up")
+        self.wait_status(oid, "picked_up")
+        self.move(rider, 1.0)
+        self.rider_act(rider, delivery_id, "delivered")
+        return self.wait_status(oid, "delivered")
+
+    # --- scenarios -----------------------------------------------------------
+    def run(self) -> None:
+        happy = self.scenario("1+9. Happy path, watched on both live feeds", self.happy_path)
+        self.scenario("2. Restaurant rejects", self.restaurant_rejects)
+        self.scenario("3. Payment declined", self.payment_declined)
+        self.scenario("4. Customer cancels after a rider is assigned", self.cancel_assigned)
+        self.scenario("5. Nearest rider declines, next rider delivers", self.rider_declines)
+        self.scenario("6. Two orders race for the last unit", self.last_unit_race)
+        self.scenario("7. Rider drops out after accepting, replaced", self.rider_drops_out)
+        if happy:
+            self.scenario("8. Partial refund after delivery", lambda: self.refund(happy))
+
+    def scenario(self, title: str, fn: Callable[[], Any]) -> Any:
+        section(title)
+        self.on_shift()
+        try:
+            return fn()
+        except (_Timeout, httpx.HTTPError, KeyError, StopIteration) as exc:
+            check(f"scenario completed ({type(exc).__name__}: {exc})", False)
+            return None
+
+    def happy_path(self) -> str:
+        stock, used = self.stock(), self.capacity_used() if self.deep else ""
+        feed = _Stream(
+            self.base_url,
+            f"/v1/tracking/restaurants/{self.rest['id']}?access_token={self.owner_token}",
+        )
+        try:
+            self.wait(lambda: feed.of("snapshot"), "restaurant feed snapshot")
+            oid = self.place()
+            track = _Stream(self.base_url, f"/v1/tracking/orders/{oid}", self.customer)
+            new = self.wait(
+                lambda: [o for o in feed.of("new_order") if o["order_id"] == oid], "new_order"
+            )
+            check("restaurant feed (token in URL) pushed the new order", bool(new))
+        finally:
+            feed.close()
+        self.wait_status(oid, "awaiting_restaurant_acceptance")
+        self.respond(oid, "accept")
+        offer = self.offer(self.rider1)
+        check(
+            "nearest rider offered first",
+            abs(offer["distance_to_pickup_km"] - 0.3) < 0.05,
+            offer["distance_to_pickup_km"],
+        )
+        self.rider_act(self.rider1, offer["delivery_id"], "accept")
+        self.wait_status(oid, "assigned")
+        d = self.delivery(oid)
+        check("pickup and dropoff ETAs set", bool(d["pickup_eta"] and d["dropoff_eta"]), d)
+        self.deliver(self.rider1, oid, offer["delivery_id"])
+
+        check("customer's stream closed itself on delivered", track.ended(15))
+        seen = [s["status"] for s in track.of("snapshot") + track.of("status")]
+        seen = [s for i, s in enumerate(seen) if s != "created" and (i == 0 or s != seen[i - 1])]
+        expected = ["awaiting_restaurant_acceptance", "confirmed", "assigned", "picked_up"]
+        check("customer saw every status in order", seen == [*expected, "delivered"], seen)
+        check("customer got rider locations", bool(track.of("location")), len(track.of("location")))
+        check("payment captured", self.payment(oid)["status"] == "captured", self.payment(oid))
+        check("stock decremented once", self.stock() == stock - 1, (stock, self.stock()))
+        if self.deep:
+            check("capacity released", self.capacity_used() == used, (used, self.capacity_used()))
+        check("rider available again", self.rider_status(self.rider1) == "available")
+        return oid
+
+    def restaurant_rejects(self) -> None:
+        stock = self.stock()
+        oid = self.place()
+        self.wait_status(oid, "awaiting_restaurant_acceptance")
+        self.respond(oid, "reject")
+        o = self.wait_status(oid, "rejected")
+        reason = o["status_reason"]
+        check(
+            "rejected with the restaurant's reason",
+            reason == "restaurant_rejected: Kitchen closed",
+            reason,
+        )
+        check("payment voided", self.payment(oid)["status"] == "voided", self.payment(oid))
+        check("stock restored", self.wait(lambda: self.stock() == stock, "stock", 10))
+
+    def payment_declined(self) -> None:
+        stock = self.stock()
+        oid = self.place("card_simulated_decline")
+        o = self.wait_status(oid, "rejected")
+        check(
+            "rejected as payment_declined",
+            o["status_reason"] == "payment_declined",
+            o["status_reason"],
+        )
+        check("payment declined", self.payment(oid)["status"] == "declined", self.payment(oid))
+        check("stock restored", self.wait(lambda: self.stock() == stock, "stock", 10))
+
+    def cancel_assigned(self) -> None:
+        stock = self.stock()
+        oid = self.accepted_order()
+        offer = self.offer(self.rider1)
+        self.rider_act(self.rider1, offer["delivery_id"], "accept")
+        self.wait_status(oid, "assigned")
+        r = self.c.post(f"/v1/orders/{oid}/cancel", headers=self.customer, json={"reason": "Late"})
+        check("cancel accepted", r.status_code == 202, r.status_code)
+        self.wait_status(oid, "cancelled")
+        check("payment voided", self.payment(oid)["status"] == "voided", self.payment(oid))
+        check("delivery cancelled", self.delivery(oid)["status"] == "cancelled")
+        check("stock restored", self.wait(lambda: self.stock() == stock, "stock", 10))
+        check(
+            "rider available again",
+            self.wait(lambda: self.rider_status(self.rider1) == "available", "rider", 10),
+        )
+
+    def rider_declines(self) -> None:
+        oid = self.accepted_order()
+        first = self.offer(self.rider1)
+        self.rider_act(self.rider1, first["delivery_id"], "decline")
+        second = self.offer(self.rider2)
+        check("same delivery offered to rider 2", second["delivery_id"] == first["delivery_id"])
+        self.rider_act(self.rider2, second["delivery_id"], "accept")
+        self.wait_status(oid, "assigned")
+        self.deliver(self.rider2, oid, second["delivery_id"])
+        d = self.delivery(oid)
+        check(
+            "delivered by rider 2, reassignment_count 1",
+            d["rider_id"] == self.rider2_id and d["reassignment_count"] == 1,
+            d,
+        )
+        check("payment captured", self.payment(oid)["status"] == "captured")
+
+    def last_unit_race(self) -> None:
+        item_url = f"/v1/restaurants/{self.rest['id']}/menu/items/{self.item['id']}"
+        original = self.stock()
+        self.c.patch(item_url, headers=self.owner, json={"stock_count": 1}).raise_for_status()
+        try:
+            gate = threading.Barrier(2)
+
+            def racer() -> str:
+                gate.wait()
+                return self.place()
+
+            with ThreadPoolExecutor(2) as pool:
+                oids = list(pool.map(lambda _: racer(), range(2)))
+
+            def settled() -> Any:
+                states = {oid: self.order(oid) for oid in oids}
+                busy = {"created"}
+                return None if any(o["status"] in busy for o in states.values()) else states
+
+            states = self.wait(settled, "both orders past reservation")
+            got = sorted(o["status"] for o in states.values())
+            check(
+                "one proceeds, one rejected",
+                got == ["awaiting_restaurant_acceptance", "rejected"],
+                got,
+            )
+            loser: dict[str, Any] = next(
+                (o for o in states.values() if o["status"] == "rejected"), {}
+            )
+            reason = loser.get("status_reason")
+            check("loser rejected as out_of_stock", reason == "out_of_stock", reason)
+            check("stock at 0, not negative", self.stock() == 0, self.stock())
+            winner = next((oid for oid, o in states.items() if o["status"] != "rejected"), None)
+            if winner:
+                self.respond(winner, "reject")
+                self.wait_status(winner, "rejected")
+        finally:
+            self.c.patch(item_url, headers=self.owner, json={"stock_count": original})
+
+    def rider_drops_out(self) -> None:
+        oid = self.accepted_order()
+        offer = self.offer(self.rider1)
+        self.rider_act(self.rider1, offer["delivery_id"], "accept")
+        self.wait_status(oid, "assigned")
+        self.rider_act(self.rider1, offer["delivery_id"], "drop-out")
+        replacement = self.offer(self.rider2)
+        check("delivery offered to rider 2", replacement["delivery_id"] == offer["delivery_id"])
+        check("dropped rider goes offline", self.rider_status(self.rider1) == "offline")
+        self.rider_act(self.rider2, replacement["delivery_id"], "accept")
+        self.wait(lambda: self.delivery(oid)["status"] == "assigned", "rider 2 assigned")
+        self.deliver(self.rider2, oid, replacement["delivery_id"])
+        check(
+            "delivered by the replacement, payment captured",
+            self.payment(oid)["status"] == "captured",
+        )
+
+    def refund(self, oid: str) -> None:
+        r = self.c.post(
+            f"/v1/orders/{oid}/refund",
+            headers=self.admin,
+            json={"amount": "5.00", "reason": "Cold"},
+        )
+        check("admin refund accepted", r.status_code == 202, r.status_code)
+        o = self.wait(lambda: (o := self.order(oid))["refunded_at"] and o, "refund recorded")
+        p = self.payment(oid)
+        check(
+            "order refunded_amount 5.00, still delivered",
+            o["refunded_amount"] == 5.0 and o["status"] == "delivered",
+            o,
+        )
+        check("payment refunded_amount matches", p["refunded_amount"] == 5.0, p)
+        if self.deep:
+            rows = compose(
+                'payment-db psql -U postgres -d payment_db -tAc "select count(*) from outbox_events'
+                f" where event_type='RefundProcessed' and payload->>'order_id'='{oid}'\""
+            )
+            check("one RefundProcessed outbox row", rows == "1", rows)
+        again = self.c.post(f"/v1/orders/{oid}/refund", headers=self.admin, json={"reason": "x"})
+        check("second refund -> 409", again.status_code == 409, again.status_code)
+
+    def clean_up(self) -> None:
+        """Ends anything a failed scenario left open, and puts riders back."""
+        for oid in self.placed:
+            status = self.order(oid)["status"]
+            if status in ("created", "awaiting_restaurant_acceptance", "confirmed", "assigned"):
+                self.c.post(f"/v1/orders/{oid}/cancel", headers=self.customer, json={})
+        self.on_shift()
+
+
+def lifecycle(base_url: str, deep: bool) -> None:
+    with httpx.Client(base_url=base_url, timeout=15, transport=_WaitOutRateLimit()) as c:
+        lc = _Lifecycle(c, base_url, deep)
+        try:
+            lc.run()
+        finally:
+            lc.clean_up()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--base-url", default="http://localhost:8080")
     parser.add_argument(
         "--deep", action="store_true", help="also check inside the local docker compose stack"
     )
+    parser.add_argument(
+        "--lifecycle",
+        action="store_true",
+        help="also run whole orders through the saga (about 2 minutes)",
+    )
     args = parser.parse_args()
     try:
         run(args.base_url, args.deep)
+        if args.lifecycle:
+            lifecycle(args.base_url, args.deep)
     except httpx.ConnectError:
         sys.exit(f"Can't reach {args.base_url} — is `docker compose up` running?")
     failed = [name for name, ok in _results if not ok]

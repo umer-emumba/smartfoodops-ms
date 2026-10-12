@@ -5,25 +5,27 @@ event-driven design, failure handling, and data consistency, followed by the *wh
 the decisions in [architecture.md](./architecture.md): key tradeoffs, rejected
 alternatives, and what's implemented vs. explicitly deferred. Requirements and
 traceability are in [PRD.md](./PRD.md); build status is in [PROGRESS.md](./PROGRESS.md).
-Anything not yet built is marked **(Week 2)** or **(Week 3)**.
+Anything not yet built is marked **(Week 3)**.
 
 ## Why microservices, not a modular monolith
 
 Company requirement: true microservices, production-oriented, able to demonstrate handling
-high traffic — not a monolith with internal module boundaries. Each of the 7 services (the
-gateway plus six domain services; `analytics-service` is added in Week 3) is independently deployable with its own database, so no service's failure or scaling need
-is coupled to another's.
+high traffic — not a monolith with internal module boundaries. Each of the 8 services (the
+gateway plus seven domain services; `analytics-service` is added in Week 3) is independently
+deployable with its own datastore, so no service's failure or scaling need is coupled to
+another's.
 
 ## Service breakdown
 
 | Service | Responsibility | Key Week 1 endpoints (all under `/v1`) | Added later |
 |---|---|---|---|
-| `api-gateway` | Single entry point: routing, JWT fast-fail, deny-list, rate limiting, CORS, Swagger index | proxies everything below; `/docs` | tracking WebSocket/SSE (W2) |
+| `api-gateway` | Single entry point: routing, JWT fast-fail, deny-list, rate limiting, CORS, Swagger index, SSE streaming proxy | proxies everything below; `/docs` | — |
 | `user-service` | Accounts, roles, auth tokens, saved addresses | `auth/register`, `auth/login`, `auth/refresh`, `auth/logout`, `auth/bootstrap-admin`, `users/me`, `users/me/addresses`, `users` + `users/{id}` (admin search), `users/{id}/block`, `users/{id}/unblock` | — |
-| `restaurant-service` | Restaurant onboarding + approval, menus, categories, availability, promotions | `restaurants` (CRUD, `mine`, `admin`, `approve`, `suspend`, `status-history`), `.../menu`, `.../menu/categories`, `.../menu/items`, `.../promotions` | stock reservation/release activities (W2) |
-| `order-service` | Order creation, pricing, order history, order state machine | `POST orders` (Idempotency-Key), `GET orders`, `GET orders/{id}`, `GET orders/admin` | saga worker, `restaurant-response`, cancel (W2) |
-| `delivery-service` | Riders, vetting, location, deliveries | `riders`, `riders/me`, `riders/me/status`, `riders/me/location`, `riders/admin`, `approve`, `suspend`, `verification-history` | assignment, ETA, delivery status (W2) |
-| `payment-service` | Payment records, simulated authorize/capture/refund | `GET payments/by-order/{id}` | authorize/capture/refund (W2) |
+| `restaurant-service` | Restaurant onboarding + approval, menus, categories, availability, promotions; stock + capacity reservation | `restaurants` (CRUD, `mine`, `admin`, `approve`, `suspend`, `status-history`), `.../menu`, `.../menu/categories`, `.../menu/items`, `.../promotions`; saga activities | — |
+| `order-service` | Order creation, pricing, history, state machine; the order saga and refund workflows | `POST orders` (Idempotency-Key), `GET orders`, `GET orders/{id}`, `GET orders/admin`, `GET orders/restaurant/{id}`, `orders/{id}/restaurant-response`, `orders/{id}/cancel`, `orders/{id}/refund` | — |
+| `delivery-service` | Riders, vetting, location; deliveries, rider offers, reassignment, ETA | `riders`, `riders/me`, `riders/me/status`, `riders/me/location`, `riders/me/offer`, `riders/me/deliveries/{id}/accept\|decline\|drop-out\|picked-up\|delivered`, `deliveries/by-order/{id}`, `riders/admin`, `approve`, `suspend`, `verification-history` | — |
+| `payment-service` | Simulated card payments: authorize, capture, void, refund | `GET payments/by-order/{id}`; saga activities | — |
+| `tracking-service` | Live SSE feeds for customers and restaurants | `tracking/orders/{id}`, `tracking/restaurants/{id}` | — |
 | `notification-service` | Customer/restaurant/rider notifications | `GET notifications` (mine) | Kafka consumer + Celery dispatch (W3) |
 | `analytics-service` (W3) | Metrics listed in the Part A PRD | — | Kafka consumer + read API (W3) |
 
@@ -34,21 +36,23 @@ The live, authoritative endpoint list is each service's OpenAPI page, indexed at
 
 **States**: `created → awaiting_restaurant_acceptance → confirmed → assigned → picked_up →
 delivered`, plus the terminal states `rejected` and `cancelled`. `order-service` is the only
-writer of `orders.status`. Every transition appends an `order_status_history` row (actor,
-reason, timestamp) in the same transaction, and every write goes through the `version`
-optimistic lock, so a stale concurrent update fails with 409 instead of silently overwriting.
+writer of `orders.status`, and only the saga (through the `transition_order` activity)
+changes it after creation. Every transition appends an `order_status_history` row (actor,
+reason, timestamp) and an outbox event in the same transaction, and goes through the
+`version` optimistic lock; a repeated transition (an activity retry) is a no-op.
 
 ```mermaid
 stateDiagram-v2
     [*] --> created: POST /v1/orders (validated + priced)
-    created --> awaiting_restaurant_acceptance: stock reserved + payment authorized
-    created --> cancelled: stock or payment failure
+    created --> awaiting_restaurant_acceptance: stock + capacity reserved, priced, payment authorized
+    created --> rejected: out of stock / at capacity / card declined
+    created --> cancelled: customer cancels
     awaiting_restaurant_acceptance --> confirmed: restaurant accepts
-    awaiting_restaurant_acceptance --> rejected: restaurant rejects / timeout
+    awaiting_restaurant_acceptance --> rejected: restaurant rejects / 5-min timeout
     awaiting_restaurant_acceptance --> cancelled: customer cancels
     confirmed --> assigned: rider accepts offer
     confirmed --> cancelled: customer cancels / no rider found
-    assigned --> assigned: rider drops out → reassigned
+    assigned --> assigned: rider drops out → replaced
     assigned --> picked_up: rider confirms pickup
     assigned --> cancelled: customer cancels
     picked_up --> delivered: rider confirms delivery
@@ -57,50 +61,56 @@ stateDiagram-v2
     cancelled --> [*]
 ```
 
-| Transition | Trigger | Side effects | Built |
-|---|---|---|---|
-| → `created` | `POST /v1/orders` | server-side price lookup from `restaurant-service`; restaurant must be `active` and accepting orders; items must be on its menu, available, and in stock; `OrderPlaced` outbox row | **Week 1** |
-| `created` → `awaiting_restaurant_acceptance` | saga | capacity check (`max_concurrent_orders`), reserve stock, apply promo/tax/fee, authorize payment | Week 2 |
-| `created` → `cancelled` | saga | stock or payment failure; release whatever was reserved; `status_reason` records why | Week 2 |
-| → `confirmed` / `rejected` | `POST /v1/orders/{id}/restaurant-response` → Temporal signal; or a timeout (auto-reject) | on reject: void payment, release stock | Week 2 |
-| `confirmed` → `assigned` | delivery orchestration (below) | `RiderAssigned` | Week 2 |
-| `assigned` → `picked_up` → `delivered` | rider updates via `delivery-service`, relayed to the saga as signals | on delivered: capture payment (final settlement), rider back to `available` | Week 2 |
-| → `cancelled` | customer cancel (signal) before `picked_up`; or no rider found | compensation depends on how far the order got (see [Failure handling](#failure-handling)) | Week 2 |
+| Transition | Trigger | Side effects |
+|---|---|---|
+| → `created` | `POST /v1/orders` | server-side price lookup from `restaurant-service` (one quote call); restaurant `active` and accepting orders; items on its menu, available, in stock; drop-off within `MAX_DELIVERY_KM`; `OrderPlaced` outbox row; saga started |
+| `created` → `awaiting_restaurant_acceptance` | saga | reserve stock + capacity (atomic), redeem promotion, tax + delivery fee, authorize payment; the restaurant's live feed gets `new_order` |
+| `created` → `rejected` | saga | a business failure (`out_of_stock`, `restaurant_at_capacity`, `restaurant_unavailable`, `promotion_invalid`, `payment_declined`), or `system_error` once retries run out; whatever was done is undone |
+| → `confirmed` / `rejected` | `POST /v1/orders/{id}/restaurant-response` → signal; or no answer in 5 min (`restaurant_timeout`) | on reject: void payment, release promotion and stock (`restaurant_rejected[: reason]`) |
+| `confirmed` → `assigned` | rider accepts an offer ([Delivery orchestration](#delivery-orchestration)) | delivery `assigned`, ETAs, `RiderAssigned` |
+| `assigned` → `picked_up` | rider `POST …/picked-up` → signal | kitchen capacity freed (`complete_reservation`); no more cancelling |
+| `picked_up` → `delivered` | rider `POST …/delivered` → signal | payment captured (final settlement), rider back to `available` |
+| → `cancelled` | customer or system admin cancel (signal) before pickup; or no rider found (`no_rider_available`) | compensation depends on how far the order got ([Failure handling](#failure-handling)) |
+| (stays `delivered`) | `POST /v1/orders/{id}/refund` (system admin) | `OrderRefundWorkflow`: payment refund, `orders.refunded_amount` |
 
-**Week 1 reality**: orders are created in `created` and stay there. There's no saga yet to
-move them on. Creation *checks* stock but doesn't *reserve* it. Reservation is a saga step,
-because a reservation needs a matching release on failure, and only the saga can guarantee
-that.
+Every order event is visible three ways: `GET /v1/orders/{id}` (with `status_history`),
+the live SSE feed, and the outbox (published to Kafka from Week 3).
 
-## Delivery orchestration (Week 2 design)
+## Delivery orchestration
 
-1. **Create delivery**: on `confirmed`, a saga activity creates the `deliveries` row.
-   Idempotent on `deliveries.order_id` (unique), so an activity retry can't create a second
-   delivery. Pickup and dropoff coordinates are snapshotted onto the row.
-2. **Find candidates**: riders with `verification_status = 'approved'` and
-   `status = 'available'`, ordered by straight-line (haversine) distance from
-   `riders.last_lat/lng` to the restaurant, within a search radius.
-3. **Offer and lock**: the nearest candidate is claimed with `SELECT … FOR UPDATE SKIP
-   LOCKED` and set to `busy` in the same transaction, so two concurrent assignments can
-   never claim the same rider. The rider gets an offer and the saga waits on an
-   accept signal with a timeout (~60s).
-4. **Reassignment**: if the rider declines, times out, or drops out later, they're released,
-   `reassignment_count` is incremented, and the next candidate is offered. After a bounded
-   number of attempts (or overall time window) with no rider, the order is cancelled with
-   a full refund (`status_reason = no_rider_available`).
-5. **ETA**: pickup ETA = max(rider travel time to the restaurant, remaining prep time from
-   `avg_prep_time_minutes`). Delivery ETA = pickup ETA + restaurant → dropoff travel time.
-   Travel time = haversine distance ÷ an assumed average speed per `vehicle_type`.
-6. **Pickup and delivery**: the rider marks the delivery `picked_up` then `delivered`. Each
-   update is recorded with a timestamp, emitted as `DeliveryStatusUpdated`, and signalled
-   to the order saga. `delivered` triggers payment capture and returns the rider to
-   `available`.
-7. **Tracking**: location pings (built in Week 1) continue during delivery. Customers
-   receive them via the gateway's WebSocket/SSE endpoint (see
-   [Real-time tracking](#real-time-tracking-why-ingestion-and-fan-out-use-different-transports)).
+1. **Create delivery**: once `confirmed`, the saga creates the `deliveries` row —
+   idempotent on `deliveries.order_id` (unique). Pickup (the restaurant) and dropoff are
+   snapshotted; `ready_at` = now + the restaurant's `avg_prep_time_minutes`.
+2. **Find the nearest rider**: `GEOSEARCH` on the Redis GEO set `riders:available`
+   (riders who are approved, on shift, and pinged recently), within 5 km, nearest first,
+   skipping riders already tried for this delivery.
+3. **Claim and offer**: the candidate is claimed with one atomic
+   `UPDATE riders SET status = 'busy' WHERE id = :id AND status = 'available' AND
+   verification_status = 'approved'` — if another delivery got there first, the next
+   candidate is tried, so two deliveries can never get the same rider. The rider sees the
+   offer at `GET /v1/riders/me/offer` and has 60s to accept or decline.
+4. **Reassignment**: a decline, an expired offer, or a drop-out after accepting (the rider
+   says so, or sends no location ping for 3 min) releases the rider, increments
+   `reassignment_count`, and offers the next-nearest rider. A rider is offered a given
+   order only once. While nobody is free the saga looks again every 30s; after 5 offers
+   or 10 min it gives up: the order is `cancelled` (`no_rider_available`) and the payment
+   voided. A dropped rider is set `offline`. After pickup a drop-out is not reassigned —
+   the food is with the rider, so it's a support case.
+5. **ETA**: pickup ETA = the later of the rider reaching the restaurant and the food being
+   ready (`ready_at`); dropoff ETA = pickup ETA + restaurant → dropoff travel time. Travel
+   time = straight-line distance × 1.3 (road factor) ÷ an average speed per vehicle (bike
+   12, scooter 25, car 30 km/h).
+6. **Pickup and delivery**: the rider marks the delivery picked up, then delivered. The
+   endpoints only check ownership and state and signal the saga; the saga changes the
+   status, so a rider's update can't race a cancellation. Each change writes a
+   `delivery_status_history` row and a `DeliveryStatusUpdated` outbox row, and is pushed
+   to the customer's live feed. `delivered` triggers payment capture and returns the
+   rider to `available`.
+7. **Tracking**: location pings continue during delivery and reach the customer within a
+   second (see [Real-time tracking](#real-time-tracking-why-ingestion-and-fan-out-use-different-transports)).
 
-Delivery states: `pending_assignment → offered → assigned → picked_up → delivered`, plus
-`cancelled`.
+Delivery states: `pending_assignment → offered → assigned → picked_up → delivered`, back to
+`pending_assignment` on decline/expiry/drop-out, and `cancelled` before pickup.
 
 ## Event-driven design: Temporal, Kafka and Celery
 
@@ -108,7 +118,7 @@ Each tool has one job, so no workflow is split ambiguously between two of them:
 
 | Tool | Owns | Example | Why this tool |
 |---|---|---|---|
-| **Temporal** (W2) | Multi-step control flow that must finish or compensate | the order saga; restaurant accept/reject wait; rider offer timeouts | durable state, retries, timers and signals built in; compensation is ordinary code |
+| **Temporal** | Multi-step control flow that must finish or compensate | the order saga; restaurant accept/reject wait; rider offer timeouts | durable state, retries, timers and signals built in; compensation is ordinary code |
 | **Kafka + Schema Registry** (W3) | Facts other services react to, decoupled from the flow that produced them | `OrderPlaced` → notifications, analytics | replayable log, per-aggregate ordering (partition key = aggregate ID), many independent consumers |
 | **Celery + RabbitMQ** (W3) | Short, single-service background jobs | outbox relay (Celery beat), sending one notification | simple task retries; no need for Temporal's durability for a one-shot job |
 
@@ -118,48 +128,66 @@ Each tool has one job, so no workflow is split ambiguously between two of them:
 (`order-events`, `delivery-events`, `payment-events`). Every event carries `event_id`
 (UUIDv7), `aggregate_id`, `occurred_at`, and `correlation_id`.
 
-**Path of an event**: business write + outbox row in one DB transaction (built for
-`OrderPlaced` in Week 1) → Celery-beat relay publishes undispatched rows to Kafka and marks
+**Path of an event**: business write + outbox row in one DB transaction (built: every
+event in the catalog is written this way) → Celery-beat relay publishes undispatched rows to Kafka and marks
 them dispatched (W3) → consumers dedupe on `event_id` via a `processed_events` table and then
 act (W3).
 
 ## Failure handling
 
 **Retries**
-- Saga activities run under Temporal retry policies: exponential backoff, capped attempts,
-  with business errors marked non-retryable (card declined, item out of stock, validation).
+- Saga activities retry 5 times with exponential backoff (1s, doubling). Business failures
+  — out of stock, card declined, restaurant at capacity, invalid promotion — are
+  non-retryable: they go straight to compensation, since retrying can't change the answer.
+  If an activity still fails after 5 attempts the order ends `rejected` (`system_error`)
+  with everything undone.
+- Compensations, and every step after pickup (capture, final transitions), retry until
+  they succeed: the food is already out, so the only acceptable outcome is completing.
 - Celery tasks retry with backoff, and Kafka consumers retry and then dead-letter poison
-  messages (W3).
-- Week 1's one sync call (order → restaurant) has a 5s timeout and fails with a clean 503.
-  It doesn't retry: the client already holds an `Idempotency-Key` and can safely retry
-  itself.
+  messages (Week 3).
+- The one sync call at order creation (order → restaurant quote) has a 5s timeout and
+  fails with a clean 503. It doesn't retry: the client holds an `Idempotency-Key` and can
+  safely retry itself.
+- Temporal itself being down: order creation still returns 201, and a reconciler starts
+  the saga for any `created` order aged 60s–1h once Temporal is back.
 
 **Idempotency**
-| Operation | Mechanism | Built |
-|---|---|---|
-| Create order | `Idempotency-Key` header, unique per customer, plus a request-body hash. Same key + same body → the original order (200); same key + different body → 409; a concurrent duplicate → caught by the unique constraint and replayed | **Week 1** |
-| Create delivery | `deliveries.order_id` unique | schema Week 1, logic W2 |
-| Payment ops | `payments.idempotency_key` = order ID + operation; a retried authorize/capture/refund returns the prior result | W2 |
-| Event consumption | `processed_events` keyed by `event_id` | W3 |
-| Status changes | no-op transitions are ignored; the `version` optimistic lock rejects stale writes with 409 | **Week 1** |
+| Operation | Mechanism |
+|---|---|
+| Create order | `Idempotency-Key` header, unique per customer, plus a request-body hash. Same key + same body → the original order (200); same key + different body → 409; a concurrent duplicate → caught by the unique constraint and replayed |
+| Start the saga | workflow ID `order-{id}` — a second start (replay, reconciler) is a no-op |
+| Reserve / release stock, redeem / release promotion | one `stock_reservations` / `promotion_redemptions` row per order. A release that arrives before its reserve leaves a `released` placeholder, so the late reserve does nothing |
+| Payment ops | one payment per order (`idempotency_key` = order ID); a retried authorize/capture/void returns the prior result; refunds keyed by refund workflow ID. A void before any authorize leaves a `voided` placeholder |
+| Create delivery | `deliveries.order_id` unique |
+| Status changes | a repeated transition is a no-op; the `version` optimistic lock rejects stale writes |
+| Event consumption | `processed_events` keyed by `event_id` (Week 3) |
 
-**Compensation** (Temporal saga, W2). What gets undone depends on how far the order
-progressed:
+**Compensation** (the saga). Each forward step registers its compensation *before* it
+runs — safe because every compensation is idempotent and tolerates "never happened" — and
+on failure or cancellation they run in reverse order:
 
-| Failed or cancelled at | Release stock | Void/refund payment | Unassign rider | Notify |
-|---|---|---|---|---|
-| `created` (stock/payment step failed) | if reserved | if authorized | — | customer |
-| `awaiting_restaurant_acceptance` (reject/timeout/cancel) | ✓ | void authorization | — | customer |
-| `confirmed` (cancel / no rider) | ✓ | void authorization | — | customer, restaurant |
-| `assigned` (cancel) | ✓ | void authorization | ✓ (rider back to `available`) | customer, restaurant, rider |
-| `picked_up` onwards | not customer-cancellable (food is out); handled as a support refund | — | — | — |
+| Failed or cancelled at | Release stock + capacity | Release promotion | Payment | Delivery / rider | Order ends |
+|---|---|---|---|---|---|
+| `created` (a step failed, or cancel) | if reserved | if redeemed | void, if authorized | — | `rejected` (failure) / `cancelled` |
+| `awaiting_restaurant_acceptance` (reject, timeout, cancel) | ✓ | ✓ | void | — | `rejected` / `cancelled` |
+| `confirmed` (cancel, no rider) | ✓ | ✓ | void | delivery cancelled; an offered rider is freed | `cancelled` |
+| `assigned` (cancel) | ✓ | ✓ | void | delivery cancelled; rider back to `available` | `cancelled` |
+| `picked_up` onwards | not cancellable (409) — the food is out; a problem becomes a refund after delivery | | | | |
 
-Compensations are themselves idempotent activities, so a crash mid-compensation just
-resumes.
+Payment is only *captured* at delivery, so every cancellation before then is a void, never
+a refund. Each outcome writes its outbox event (`OrderRejected`, `OrderCancelled`, …);
+notifying customer, restaurant and rider from those is Week 3.
 
-**Partial-failure guarantees today**: order creation validates everything *before* writing,
-and writes the order, its items, its history row and its outbox row in one transaction. A
-failure at any point leaves either a complete order or nothing.
+**Signals that cross**: signals are applied in arrival order. A pickup that arrives just
+before a cancel wins (the order is delivered); a cancel that arrives first wins (the
+pickup is ignored). A late answer from a rider whose offer already expired is ignored
+(signals carry the rider ID).
+
+**Partial-failure guarantees**: order creation validates everything *before* writing, and
+writes the order, its items, its history row and its outbox row in one transaction. After
+that, the saga guarantees each order ends in exactly one terminal state with every
+resource either used or released — verified by the lifecycle scenarios (stock, capacity,
+payment and rider all checked after each one).
 
 ## Data consistency across services
 
@@ -176,10 +204,18 @@ failure at any point leaves either a complete order or nothing.
   change.
 - **No dual writes.** Events are published from the outbox, never "write DB then publish" in
   request code, so a crash can't leave a committed change without its event.
-- **Optimistic locking** (`version` columns on orders, menu items, deliveries) catches
-  concurrent writers, for example a saga step racing a customer cancellation.
-- **MongoDB is never authoritative.** It holds rider location history (Week 1) and analytics
-  rollups (W3), both rebuildable. Losing it degrades tracking history, not correctness.
+- **Only the saga moves an order or delivery forward.** Endpoints for restaurant, rider
+  and customer actions validate and send a signal; the saga applies them one at a time, so
+  a pickup and a cancellation can't both win.
+- **Atomic conditional updates for shared counters.** Stock, capacity, promotion uses and
+  rider claims are single `UPDATE … WHERE <still available>` statements, not
+  read-then-write, so concurrent orders can't oversell or double-assign.
+- **Optimistic locking** (`version` columns on orders, menu items, deliveries) catches any
+  remaining concurrent writers.
+- **MongoDB and Redis are never authoritative.** Mongo holds rider location history and
+  analytics rollups (W3). Redis holds live positions, the rider pool and the tracking
+  state — all rebuilt from pings, status changes or Postgres. Losing either degrades
+  tracking, not correctness.
 
 ## Assumptions
 
@@ -190,10 +226,25 @@ failure at any point leaves either a complete order or nothing.
   There is no routing engine.
 - One delivery per order, and one restaurant per order.
 - Restaurant capacity is a manual `is_accepting_orders` toggle plus a
-  `max_concurrent_orders` cap, not a full opening-hours schedule.
+  `max_concurrent_orders` cap on orders reserved but not yet picked up, not a full
+  opening-hours schedule.
 - Riders report location by periodic REST pings every ~5–15s, which is accurate enough for
   assignment and tracking.
 - Customers can cancel until pickup, not after.
+- **Final settlement = payment capture** on delivery. Splitting the captured amount into
+  restaurant payout, rider earnings and platform commission is a separate finance
+  system, out of scope for Part A.
+- Payment is simulated by method: `card_simulated` approves, `card_simulated_decline`
+  declines — deterministic, so the decline path can be demonstrated and tested.
+- **One refund per order** (`refund-{order_id}`), full or partial, by a system admin after
+  delivery; several partial refunds would need a refund-request ID in the workflow ID.
+- **Drop-out after pickup** is a support case, not an automatic reassignment.
+- A rider who declined or missed an offer isn't offered that order again, and nothing
+  takes a rider off shift for repeatedly ignoring offers (both possible later
+  improvements).
+- Deliveries are limited to 15 km straight line from the restaurant (`MAX_DELIVERY_KM`);
+  the delivery fee is 100 PKR + 30 PKR/km; tax 5%.
+- Riders don't manage routes in-app beyond seeing pickup and dropoff coordinates.
 
 ## Gateway: single entry point, not a SPOF
 
@@ -225,8 +276,11 @@ here as the production (Kubernetes) plan, not something faked locally for its ow
 
 ## Inter-service communication: REST over gRPC
 
-**Decision**: synchronous inter-service calls (mainly the order saga's activities) use
-REST/JSON over async `httpx`, not gRPC.
+**Decision**: synchronous inter-service calls use REST/JSON over async `httpx`, not gRPC.
+As built there are few of them: the quote at order creation (order → restaurant) and
+`tracking-service`'s fallbacks. The saga's steps don't call other services' APIs at all —
+each runs as a Temporal activity inside the service that owns the data, reached through
+its task queue, with Temporal's pydantic converter carrying the same Pydantic models.
 
 **Why REST was chosen**: gRPC's latency/throughput benefit (binary protobuf, HTTP/2
 multiplexing) isn't observable running on local Docker Compose for a mentor demo — there's
@@ -239,10 +293,10 @@ every gRPC boundary needs hand-written conversion glue permanently, not just at 
 Python's gRPC support itself is mature (`grpc.aio` is asyncio-native, fits the async stack
 fine) — the cost is the protobuf/Pydantic mismatch, not gRPC-in-Python maturity.
 
-**Roadmap**: if this ever needed to handle real production-scale QPS, the order saga's
-synchronous activity calls (order→restaurant, order→payment, order→delivery) are the
-specific place to swap REST for gRPC — documented here so the tradeoff is visible, not
-revisited from scratch later.
+**Roadmap**: the hot cross-service path (the saga) already avoids REST, so gRPC would
+only matter for the order-creation quote. If that call ever became a bottleneck at real
+production QPS, it is the specific place to swap REST for gRPC — documented here so the
+tradeoff is visible, not revisited from scratch later.
 
 ## Why both Temporal and Kafka (not just one)
 
@@ -260,15 +314,18 @@ is wrong — a customer's order shouldn't fail because SMS delivery is down.
 in the same DB transaction as its state change, avoiding a dual-write bug without needing a
 CDC tool like Debezium. A Celery-beat periodic task per service polls the outbox and
 publishes to Kafka, marking rows dispatched **(Week 3; outbox rows are already written for
-`OrderPlaced` in Week 1)**.
+every event)**.
 
 ## Restaurant accept/reject: a Temporal signal-with-timeout
 
 The Guidelines explicitly call for a restaurant order acceptance/rejection flow, not just
 automatic confirmation after payment. This is a natural fit for Temporal's signal+timeout
-primitive: the saga notifies the restaurant and waits on an accept/reject signal with a
-bounded timeout; no response in time auto-rejects (treated the same as an explicit
-rejection — same compensation path as a cancellation).
+primitive: once payment is authorized the order moves to `awaiting_restaurant_acceptance`,
+the restaurant's live feed gets `new_order`, and the saga waits for an accept/reject
+signal (from `POST /v1/orders/{id}/restaurant-response`) for up to 5 minutes. No answer in
+time auto-rejects (`restaurant_timeout`) — the same compensation path as an explicit
+rejection or a cancellation. Restaurant ownership is snapshotted onto the order, so
+order-service authorizes the response without asking restaurant-service.
 
 ## ORM: SQLAlchemy 2.0 async, not SQLModel
 
@@ -324,18 +381,32 @@ effort (one shared library call), standard zero-trust-internal-network practice.
 ## Real-time tracking: why ingestion and fan-out use different transports
 
 Riders and customers have different traffic shapes. Rider location pings are
-bounded-frequency (~5–15s) and many-to-one — a plain REST `PATCH` (built Week 1) keeps `delivery-service` fully
-stateless and lets any replica handle any rider's ping, no connection-affinity bookkeeping.
-Making rider ingestion a persistent connection would trade a small HTTP-overhead saving for
-a much bigger cost: `delivery-service` becoming stateful purely to hold thousands of open
-sockets.
+bounded-frequency (~5–15s) and many-to-one — a plain REST `PATCH` keeps `delivery-service`
+fully stateless and lets any replica handle any rider's ping, no connection-affinity
+bookkeeping. Making rider ingestion a persistent connection would trade a small
+HTTP-overhead saving for a much bigger cost: `delivery-service` becoming stateful purely to
+hold thousands of open sockets.
 
-Customer tracking is one-to-one and benefits from push, so it uses WebSocket/SSE — but held
-by `api-gateway` (already the client-facing edge), fed by a Kafka topic `delivery-service`
-publishes to. This keeps `delivery-service` stateless while still giving customers instant
-updates; the only "sticky" state is a customer's live-tracking session on whichever gateway
-replica accepted its handshake, which doesn't affect the gateway's statelessness story for
-plain REST traffic.
+Customers and restaurants want push, so they get **Server-Sent Events** from a separate
+**`tracking-service`**, fed by **Redis Pub/Sub**:
+
+- **SSE, not WebSocket**: the traffic is one-way (server → client). SSE is plain HTTP, so
+  it passes through the gateway, auth and proxies unchanged, and browsers reconnect
+  automatically.
+- **A separate service**: long-lived connections are a different load from short REST
+  requests. Keeping them in their own small, stateless service (no database, Redis only)
+  means they scale on their own and can't exhaust the connection pools of the services
+  that do the real work. The gateway relays the stream from its own dedicated pool.
+- **Redis Pub/Sub, not Kafka** (a change from the original design, where the gateway
+  consumed a Kafka topic): tracking needs sub-second delivery to whoever is connected
+  *right now*, not a durable, replayable log — and with Kafka every gateway replica would
+  read every update for every order. With Pub/Sub, each tracking replica subscribes only
+  to the channels its own clients watch. Missed messages don't matter: on (re)connect the
+  client gets a snapshot of the current state first, kept in Redis by the publishers.
+  Kafka still carries the durable events for notifications and analytics (Week 3).
+- **Ownership from Redis**: the snapshot state includes the order's `customer_id` and the
+  restaurant's owner, so `tracking-service` authorizes a stream without calling another
+  service; if Redis lost a key, it rebuilds it from an `/internal` endpoint once.
 
 ## Primary keys: UUIDv7 generated in Python, not v4, not DB-side
 
@@ -389,9 +460,17 @@ SHA-256 (not argon2) for refresh-token secrets; a single `restaurant-service` ca
 made without holding a DB connection; advisory-locked migrations so replicas can start
 together.
 
-**Planned (Weeks 2–3)**: Temporal activity retry/backoff for inter-service calls, Kafka
-partitioning by aggregate ID for parallel consumer scale-out, Celery worker pools scaled
-independently of API processes. Horizontal replica scaling of domain services is a
+**Implemented (Week 2)**: Temporal activity retry/backoff for every saga step; Temporal
+workers that can run as their own processes (`TEMPORAL_WORKER_MODE=standalone`) and scale
+separately from the APIs; stock, capacity, promotion and rider claims as single atomic
+conditional `UPDATE`s with fixed lock ordering (no overselling, no double-assignment, no
+deadlocks — each proven by concurrency tests against real Postgres); rider proximity
+search in Redis GEO instead of a table scan, with Postgres location writes throttled to
+one per 30s per rider; live tracking in a separate stateless service with one Redis
+subscription per watched channel per replica.
+
+**Planned (Week 3)**: Kafka partitioning by aggregate ID for parallel consumer scale-out,
+Celery worker pools scaled independently of API processes. Horizontal replica scaling of domain services is a
 deployment concern (Kubernetes `Deployment`s) — not demonstrated with `--scale` locally, for
 the same reason given for the gateway above.
 
@@ -410,12 +489,13 @@ for the saga's synchronous calls.
 | Request/response validation | Pydantic v2 | Ships with FastAPI |
 | Config/env loading | pydantic-settings | Typed per-service env config |
 | Sync inter-service HTTP | httpx (async) | See REST-vs-gRPC rationale above |
-| Retry/backoff | Temporal activity retry policies (Week 2) | Week 1's one sync call (order → restaurant) has a timeout and a clean 503 but no retry; the saga's activities get Temporal's retry policies rather than adding a separate `tenacity` layer |
+| Retry/backoff | Temporal activity retry policies | The one sync call at order creation (order → restaurant) has a timeout and a clean 503 but no retry; saga activities use Temporal's retry policies rather than a separate `tenacity` layer |
+| Workflow orchestration | Temporal (`temporalio` Python SDK), pydantic data converter | Durable timers, signals and retries for the order saga; the pydantic converter keeps `Decimal` and `datetime` exact across activities |
 | Password hashing | argon2-cffi (via `pwdlib`) | `passlib` is effectively unmaintained |
 | JWT | PyJWT | Simpler, actively maintained vs. `python-jose` |
 | Redis client | redis-py (`redis.asyncio`) | Official, async-native since v4.2 |
 | MongoDB client | PyMongo `AsyncMongoClient` | Official driver's native async API — replaces Motor, which MongoDB deprecated on 2026-05-14 |
 | Gateway rate limiting | In-house (`app/rate_limit.py`, Redis-backed) | `fastapi-limiter`'s `RateLimiter` dependency crashed against this FastAPI version's routing internals (see docs/PROGRESS.md, "Docker verification"). Replaced with ~40 lines: one atomic Lua `INCR`+`PEXPIRE` per request, keyed by user ID (valid token) or client IP (anonymous) + a caller-supplied bucket name; the script also returns the remaining TTL, so a 429 needs no second round-trip. Needs shared state across gateway replicas either way, which Redis still provides. |
 | Kafka client | confluent-kafka-python (Week 3) | See rationale above |
-| Testing | pytest + pytest-asyncio + httpx.AsyncClient (ASGITransport) | Week 1: per-service health tests, gateway route-classification tests, order-validation unit tests (stubbed `restaurant-service`). testcontainers-backed DB integration tests are planned for Week 2 |
+| Testing | pytest + pytest-asyncio + httpx.AsyncClient (ASGITransport); Temporal's time-skipping test server | Unit tests everywhere; saga tests run the real workflow with faked activities on a time-skipping server (a 10-minute rider search takes milliseconds); `db`-marked tests run against the compose Postgres/Redis in separate `*_test` databases (`scripts/check.sh --with-db`) — used instead of testcontainers since the stack is already running; `scripts/smoke_test.py --lifecycle` drives whole orders through the gateway |
 | Lint/format/types | ruff + mypy | Fast, replaces flake8+isort+black in one tool |

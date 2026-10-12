@@ -11,7 +11,7 @@ not intent. See [PRD.md](./PRD.md) for requirements + traceability,
 | Week | Focus Area | What to Aim For | Done |
 |---|---|---|---|
 | Week 1 | Foundation & Core Services | APIs + DB + architecture setup | ☑ |
-| Week 2 | Order & Delivery Workflow | End-to-end order lifecycle | ☐ |
+| Week 2 | Order & Delivery Workflow | End-to-end order lifecycle | ☑ |
 | Week 3 | Events & Observability | Async processing + monitoring | ☐ |
 
 ## Week 1 — Foundation + Core Services
@@ -641,29 +641,63 @@ steps 0–8 are the working order.
     `--deep` 46/46
   - Not done: a token revoked mid-stream isn't re-checked (auth is at connect; access
     tokens last 15 min); no per-user cap on concurrent streams
-- [ ] Step 8 — End-to-end scenarios, seed data, docs
+- [x] **Step 8 — End-to-end scenarios, seed data, docs** (2026-10-12)
+  - `scripts/smoke_test.py --lifecycle`: whole orders through the gateway — (1) happy path
+    watched on both live feeds (restaurant feed with the token in the URL), nearest rider,
+    ETAs, every status in order, stream closes itself, payment captured, stock −1 once,
+    capacity released, rider available; (2) restaurant rejects; (3) card declined;
+    (4) cancel after assignment; (5) nearest rider declines → rider 2 delivers
+    (`reassignment_count` 1); (6) two orders race for the last unit → one proceeds, one
+    `out_of_stock`, stock 0; (7) rider drops out → rider 2 delivers; (8) partial refund,
+    second refund 409; (9) restaurant feed — folded into (1). Polls wait out the gateway's
+    per-user rate limit; each scenario starts with both riders on shift; anything a failed
+    scenario leaves open is cancelled. With `--deep` also capacity and the
+    `RefundProcessed` outbox row
+  - The quick checks now cancel their own order (it used to hold stock for the 5-minute
+    restaurant timeout)
+  - `seed.py`: a second approved rider (`rider2@demo.smartfoodops.example`, scooter)
+  - Docs updated to as built: `technical-documentation.md` (lifecycle, delivery
+    orchestration, failure handling and compensation, tracking rationale — SSE +
+    Redis Pub/Sub instead of the gateway consuming Kafka, assumptions), `architecture.md`
+    (services, new "Order saga (Temporal)" section with activities, signals, settings and
+    the endpoint table; tracking; data model; conventions; repo layout), `diagrams.md`
+    (component diagram; sequence diagrams for the lifecycle, assignment/reassignment,
+    cancellation, refund; ER diagrams for the new tables and columns), README (diagram,
+    flow, `--lifecycle`, `--with-db`, `JWT_SECRET` note for tracking-service), PRD
+    traceability
+  - Verified: `smoke_test.py --deep --lifecycle` 82/82 in Docker (first run 80/82 — both
+    failures were script bugs: no location pings after accepting, and waiting on
+    `rider_id`, which is set at offer time, instead of `assigned`); afterwards no open
+    orders, both riders available, capacity back to 0
+
+**Week 2 known gaps** (documented in technical-documentation.md#assumptions): a rider who
+declined isn't re-offered that order; nothing takes a rider off shift for ignoring
+offers; a rider replacement keeps the order `assigned` with no second `RiderAssigned`;
+SSE auth is checked at connect only; no per-user cap on concurrent streams; one refund
+per order.
 
 ### Original scope checklist
 
-- [ ] `order-service/worker`: Temporal `OrderSagaWorkflow` (availability/capacity → stock →
+- [x] `order-service`: Temporal `OrderSagaWorkflow` (availability/capacity → stock →
       price → payment → restaurant accept/reject signal+timeout → confirm → assign rider →
-      ETA → notify) with compensation
-- [ ] `POST /v1/orders/{id}/restaurant-response` (accept/reject)
-- [ ] Order state machine: `created → awaiting_restaurant_acceptance → confirmed →
+      ETA; notifications are outbox events, sent in Week 3) with compensation
+- [x] `POST /v1/orders/{id}/restaurant-response` (accept/reject)
+- [x] Order state machine: `created → awaiting_restaurant_acceptance → confirmed →
       assigned → picked_up → delivered` + `rejected`/`cancelled`, `version` optimistic lock
-- [ ] `delivery-service`: proximity rider assignment (`SELECT … FOR UPDATE SKIP LOCKED`,
-      approved + available only), rider offer/accept with timeout, ETA, delivery state
-      machine, reassignment on failure, `DeliveryStatusUpdated` publishing (location-ping
-      ingestion already built in Week 1)
-- [ ] Stock reservation/release activities in `restaurant-service`; capacity check against
+- [x] `delivery-service`: proximity rider assignment (built as Redis GEO + an atomic
+      conditional `UPDATE`, not `SKIP LOCKED`; approved + available only), rider
+      offer/accept with timeout, ETA, delivery state machine, reassignment on failure,
+      `DeliveryStatusUpdated` outbox rows
+- [x] Stock reservation/release activities in `restaurant-service`; capacity check against
       `max_concurrent_orders`; promo/tax/fee pricing step
 - [x] Cursor pagination on list endpoints (`sfo_common.pagination.Page`) — done early, Week 1 production pass
-- [ ] `api-gateway`: customer WebSocket/SSE tracking endpoint
-- [ ] `payment-service`: authorize/capture/refund with idempotency-key handling
-- [ ] Cancellation/refund flow via Temporal signal + compensation
-- [ ] Deliverable check: full order → delivery → completion lifecycle end-to-end, incl. a
+- [x] Customer SSE tracking (built as `tracking-service` behind a gateway streaming proxy)
+- [x] `payment-service`: authorize/capture/void/refund with idempotency-key handling
+- [x] Cancellation/refund flow via Temporal signal + compensation
+- [x] Deliverable check: full order → delivery → completion lifecycle end-to-end, incl. a
       cancellation-after-confirmation path with correct compensation
-- [ ] Docs updated to reflect what was actually built
+      (`smoke_test.py --lifecycle`)
+- [x] Docs updated to reflect what was actually built
 
 ## Week 3 — Event-Driven System + Observability
 
@@ -686,6 +720,6 @@ steps 0–8 are the working order.
       workflows, tech stack, local setup, API overview
 - [x] `docs/technical-documentation.md` has every required section (service breakdown,
       lifecycle flows, event-driven design, failure handling, consistency approach,
-      tradeoffs) — Week 2/3 sections are design, to be updated to match what's built
+      tradeoffs) — Week 2 sections match what's built; Week 3 sections are design
 - [x] `docs/PRD.md`: use cases, functional + non-functional requirements, milestones,
       traceability (update status column each week)
