@@ -13,14 +13,16 @@ from app.api.routes import router
 from app.config import settings
 from app.db import engine
 from app.redis_client import redis
-from app.worker import WORKERS
+from app.worker import BACKGROUND, WORKERS
 
 configure_logging(settings.service_name, settings.log_level)
 
 
 @asynccontextmanager
 async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
-    async with embedded_workers(WORKERS, settings, service_name=settings.service_name):
+    async with embedded_workers(
+        WORKERS, settings, service_name=settings.service_name, background=BACKGROUND
+    ):
         yield
     await restaurant_client.client.aclose()
     await redis.aclose()

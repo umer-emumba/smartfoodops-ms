@@ -484,7 +484,37 @@ steps 0–8 are the working order.
     partial refunds; 5 concurrent 300 refunds on 1000 → exactly 3. Mutation check: without
     the row lock all 5 refunds succeed (1,500 on 1,000). Docker: migration applied, ping
     workflow, smoke test `--deep` 46/46
-- [ ] Step 4 — Saga part 1
+- [x] **Step 4 — Saga part 1** (2026-10-12)
+  - `OrderSagaWorkflow` (`app/workflows/order_saga.py`): reserve → promotion → pricing →
+    authorize → `awaiting_restaurant_acceptance` → wait for accept/reject/cancel/timeout (5 min)
+    → `confirmed`. Every forward step registers its compensation before running (safe:
+    compensations are idempotent and leave placeholders); compensations run in reverse and
+    are retried until they succeed. `status_reason`: `out_of_stock`,
+    `restaurant_at_capacity`, `restaurant_unavailable`, `promotion_invalid`,
+    `payment_declined`, `restaurant_rejected[: reason]`, `restaurant_timeout`,
+    `system_error` (retries exhausted), cancel reason or `cancelled_by_<role>`
+  - Pricing (`app/pricing.py`, pure): discount (percentage / fixed, capped at subtotal), tax
+    5% of (subtotal − discount), delivery fee 100 + 30/km straight-line (`sfo_common.geo`);
+    config captured in the saga input (`OrderSagaInput`, `PricingConfig`)
+  - `POST /v1/orders` starts `order-{id}` after commit (reuse policy: allow only after a
+    failed run); Temporal down → still 201; idempotent replay of a `created` order re-starts it
+  - Reconciler (`app/reconciler.py`, background task next to the workers —
+    `sfo_common.temporal` `background=`): every 30s starts sagas for `created` orders aged
+    60s–1h; older ones are only logged (not restarted hours late)
+  - Restaurant response carries the admin as `actor` (audit trail)
+  - Verified: 11 saga tests (time-skipping, faked activities on real queues: happy path,
+    no promo, out of stock, decline, retries exhausted, released reservation, restaurant
+    reject, timeout, cancel while awaiting, cancel mid-pricing, compensation failing twice);
+    pricing unit tests; real-DB tests for order start + reconciler window. Docker, through
+    the gateway: accept → `confirmed` (0.2s), decline → `rejected`/stock back, restaurant
+    reject → voided/stock back, cancel → `cancelled`/voided, second cancel 409; reconciler
+    picked up an order the step 3 smoke test left in `created`; two unanswered orders hit the
+    real 5-min timeout → `rejected`/`restaurant_timeout`, reservation released, payment
+    voided; smoke test `--deep` 46/46
+  - Max delivery distance: `MAX_DELIVERY_KM` (default 15, straight line restaurant →
+    drop-off); farther orders get 422 at creation, before anything is written. Found in
+    Docker verification: an Islamabad drop-off from a Karachi restaurant (1,144 km) had been
+    accepted with a 34,426 PKR fee
 - [ ] Step 5 — delivery-service: GEO, offers, rider endpoints, ETA
 - [ ] Step 6 — Saga part 2
 - [ ] Step 7 — Live feeds (SSE)

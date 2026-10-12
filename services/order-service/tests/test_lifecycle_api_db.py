@@ -103,7 +103,11 @@ async def test_owner_response_signals_the_saga(
         (
             order.id,
             OrderSagaSignal.RESTAURANT_RESPONSE,
-            RestaurantResponse(decision="reject", reason="Kitchen closed"),
+            RestaurantResponse(
+                decision="reject",
+                reason="Kitchen closed",
+                actor=Actor(id=OWNER, role="restaurant_admin"),
+            ),
         )
     ]
 

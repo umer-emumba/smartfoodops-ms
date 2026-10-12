@@ -1,5 +1,6 @@
 """Orders inserted straight into the test database, in any status."""
 
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from app.models import Order, OrderItem, OrderStatus, OrderStatusHistory
@@ -18,6 +19,7 @@ async def insert_order(
     restaurant_id: str = RESTAURANT,
     restaurant_admin_id: str = OWNER,
     subtotal: Decimal = Decimal("1000.00"),
+    created_at: datetime | None = None,
 ) -> Order:
     async with factory() as session:
         order = Order(
@@ -32,6 +34,7 @@ async def insert_order(
             subtotal=subtotal,
             total_amount=subtotal,
             status=status,
+            created_at=created_at or datetime.now(UTC),
         )
         order.items = [
             OrderItem(

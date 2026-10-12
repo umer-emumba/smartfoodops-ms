@@ -12,7 +12,7 @@ import asyncio
 import contextlib
 import logging
 import signal
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Coroutine, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
@@ -48,6 +48,11 @@ _WORKFLOW_RUNNER = SandboxedWorkflowRunner(
 
 _CONNECT_RETRY_MAX_DELAY_SECONDS = 10.0
 _EMBEDDED_RESTART_DELAY_SECONDS = 5.0
+
+
+# A long-running job that runs alongside a service's workers (same process,
+# same client), e.g. order-service's reconciler. Cancelled on shutdown.
+BackgroundTask = Callable[[Client], Coroutine[Any, Any, None]]
 
 
 @dataclass(frozen=True)
@@ -96,9 +101,15 @@ def _ping_activity(service_name: str, task_queue: str) -> Callable[[], Any]:
     return ping
 
 
-async def run_workers(client: Client, specs: Sequence[WorkerSpec], *, service_name: str) -> None:
-    """Runs one worker per spec until cancelled, then shuts them all down
-    gracefully. Raises if any worker hits a fatal error."""
+async def run_workers(
+    client: Client,
+    specs: Sequence[WorkerSpec],
+    *,
+    service_name: str,
+    background: Sequence[BackgroundTask] = (),
+) -> None:
+    """Runs one worker per spec (plus any background tasks) until cancelled,
+    then shuts them all down gracefully. Raises if any of them fails."""
     workers = [
         Worker(
             client,
@@ -111,16 +122,20 @@ async def run_workers(client: Client, specs: Sequence[WorkerSpec], *, service_na
         for spec in specs
     ]
     runs = [asyncio.create_task(worker.run()) for worker in workers]
+    jobs = [asyncio.create_task(task(client)) for task in background]
     _logger.info(
         "Temporal workers started",
         extra={"extra_fields": {"task_queues": [spec.task_queue for spec in specs]}},
     )
     try:
         # Only returns if a worker fails; otherwise waits until cancelled.
-        done, _ = await asyncio.wait(runs, return_when=asyncio.FIRST_EXCEPTION)
-        for run in done:
-            run.result()
+        done, _ = await asyncio.wait([*runs, *jobs], return_when=asyncio.FIRST_EXCEPTION)
+        for task in done:
+            task.result()
     finally:
+        for job in jobs:
+            job.cancel()
+        await asyncio.gather(*jobs, return_exceptions=True)
         # Explicit shutdown (rather than cancelling run()) is what lets
         # in-flight activities finish within GRACEFUL_SHUTDOWN_TIMEOUT.
         await asyncio.gather(*(worker.shutdown() for worker in workers), return_exceptions=True)
@@ -129,14 +144,17 @@ async def run_workers(client: Client, specs: Sequence[WorkerSpec], *, service_na
 
 
 async def _run_workers_forever(
-    specs: Sequence[WorkerSpec], settings: TemporalSettings, service_name: str
+    specs: Sequence[WorkerSpec],
+    settings: TemporalSettings,
+    service_name: str,
+    background: Sequence[BackgroundTask],
 ) -> None:
     while True:
         try:
             client = await connect_client(
                 settings.temporal_address, namespace=settings.temporal_namespace
             )
-            await run_workers(client, specs, service_name=service_name)
+            await run_workers(client, specs, service_name=service_name, background=background)
         except Exception:
             # The API keeps serving; the worker comes back on its own.
             _logger.exception("Temporal worker failed, restarting")
@@ -145,7 +163,11 @@ async def _run_workers_forever(
 
 @contextlib.asynccontextmanager
 async def embedded_workers(
-    specs: Sequence[WorkerSpec], settings: TemporalSettings, *, service_name: str
+    specs: Sequence[WorkerSpec],
+    settings: TemporalSettings,
+    *,
+    service_name: str,
+    background: Sequence[BackgroundTask] = (),
 ) -> AsyncIterator[None]:
     """For the API's lifespan: in `embedded` mode, runs the workers as a
     background task (restarted if they fail) and stops them on shutdown. A
@@ -153,7 +175,7 @@ async def embedded_workers(
     if settings.temporal_worker_mode != "embedded":
         yield
         return
-    task = asyncio.create_task(_run_workers_forever(specs, settings, service_name))
+    task = asyncio.create_task(_run_workers_forever(specs, settings, service_name, background))
     try:
         yield
     finally:
@@ -163,7 +185,11 @@ async def embedded_workers(
 
 
 def run_standalone(
-    specs: Sequence[WorkerSpec], settings: TemporalSettings, *, service_name: str
+    specs: Sequence[WorkerSpec],
+    settings: TemporalSettings,
+    *,
+    service_name: str,
+    background: Sequence[BackgroundTask] = (),
 ) -> None:
     """Entry point for `python -m app.worker`. Runs until SIGTERM/SIGINT,
     then shuts down gracefully. A fatal worker error exits the process so the
@@ -179,6 +205,6 @@ def run_standalone(
             client = await connect_client(
                 settings.temporal_address, namespace=settings.temporal_namespace
             )
-            await run_workers(client, specs, service_name=service_name)
+            await run_workers(client, specs, service_name=service_name, background=background)
 
     asyncio.run(main())

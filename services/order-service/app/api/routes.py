@@ -1,10 +1,12 @@
 import hashlib
+import logging
 from collections import Counter
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Header, Query, Response
 from sfo_auth import CurrentUser, Role
 from sfo_common.errors import ConflictError, ForbiddenError, NotFoundError, ValidationAppError
+from sfo_common.geo import haversine_km
 from sfo_common.middleware import get_correlation_id
 from sfo_common.pagination import Page
 from sfo_contracts import OrderSagaSignal
@@ -16,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import repository, restaurant_client, temporal_client
 from app.auth_deps import get_current_user, require_roles
+from app.config import settings
 from app.db import get_session
 from app.models import (
     Order,
@@ -33,6 +36,7 @@ from app.schemas import (
 from app.state_machine import can_cancel
 
 router = APIRouter(prefix="/v1", tags=["orders"])
+_logger = logging.getLogger(__name__)
 
 # Status transitions are made only by the Temporal order saga (its
 # transition_order activity, app/activities.py). Endpoints that change an
@@ -46,11 +50,28 @@ def _request_hash(body: OrderCreate) -> str:
     return hashlib.sha256(body.model_dump_json().encode()).hexdigest()
 
 
-def _replay_or_conflict(existing: Order, request_hash: str, response: Response) -> Order:
+async def _replay_or_conflict(existing: Order, request_hash: str, response: Response) -> Order:
     if existing.request_hash != request_hash:
         raise ConflictError("Idempotency-Key was already used with a different request body")
     response.status_code = 200
+    if existing.status == OrderStatus.CREATED:
+        # The original request may have committed without starting the saga.
+        await _start_saga(existing)
     return existing
+
+
+async def _start_saga(order: Order) -> None:
+    """Starts the order's saga (D3, D4). The order is already committed, so a
+    failure here isn't the client's problem: the reconciler starts it within
+    a minute (app/reconciler.py)."""
+    try:
+        await temporal_client.start_order_saga(await temporal_client.get_client(), order)
+    except Exception:
+        _logger.warning(
+            "Order saga not started; the reconciler will start it",
+            exc_info=True,
+            extra={"extra_fields": {"order_id": order.id}},
+        )
 
 
 def _can_supply(item: restaurant_client.MenuItemSnapshot, quantity: int) -> bool:
@@ -77,6 +98,15 @@ async def _build_items(
         raise NotFoundError("Restaurant not found")
     if not restaurant.is_accepting_orders:
         raise ConflictError("Restaurant is not accepting orders right now")
+    distance_km = haversine_km(restaurant.lat, restaurant.lng, body.delivery_lat, body.delivery_lng)
+    if distance_km > settings.max_delivery_km:
+        raise ValidationAppError(
+            "Delivery address is outside this restaurant's delivery area",
+            details={
+                "distance_km": round(distance_km, 1),
+                "max_delivery_km": settings.max_delivery_km,
+            },
+        )
 
     unknown = [item_id for item_id in requested if item_id not in menu]
     if unknown:
@@ -111,13 +141,17 @@ async def create_order(
     current: CurrentUser = Depends(require_roles(Role.CUSTOMER)),
     session: AsyncSession = Depends(get_session),
 ) -> Order:
-    """Requires an `Idempotency-Key` header. Retrying with the same key and
+    """Places the order and returns at once (201, `created`); the order saga
+    then reserves stock, prices, authorizes payment and waits for the
+    restaurant — follow it on GET /v1/orders/{id} or live tracking.
+
+    Requires an `Idempotency-Key` header. Retrying with the same key and
     body returns the original order (200) instead of creating a duplicate —
     safe for a client to retry after a timeout or a double-tap."""
     request_hash = _request_hash(body)
     existing = await repository.get_order_by_idempotency_key(session, current.id, idempotency_key)
     if existing is not None:
-        return _replay_or_conflict(existing, request_hash, response)
+        return await _replay_or_conflict(existing, request_hash, response)
     # End the read transaction before the network call below, so this request
     # doesn't hold a pooled DB connection idle while waiting on
     # restaurant-service. The session starts a fresh transaction for the write.
@@ -185,7 +219,8 @@ async def create_order(
         )
         if existing is None:
             raise
-        return _replay_or_conflict(existing, request_hash, response)
+        return await _replay_or_conflict(existing, request_hash, response)
+    await _start_saga(order)
     return order
 
 
@@ -307,7 +342,11 @@ async def restaurant_response(
         session,
         order,
         OrderSagaSignal.RESTAURANT_RESPONSE,
-        RestaurantResponse(decision=body.decision, reason=body.reason),
+        RestaurantResponse(
+            decision=body.decision,
+            reason=body.reason,
+            actor=Actor(id=current.id, role=current.role.value),
+        ),
     )
 
 

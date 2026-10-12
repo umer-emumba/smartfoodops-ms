@@ -24,7 +24,7 @@ def _order(*items: tuple[str, int]) -> OrderCreate:
 
 
 def _restaurant(status: str, accepting: bool) -> RestaurantSnapshot:
-    return RestaurantSnapshot(RESTAURANT_ID, status, accepting, "u-owner", 33.68, 73.04)
+    return RestaurantSnapshot(RESTAURANT_ID, status, accepting, "u-owner", 24.88, 67.03)
 
 
 @pytest.fixture
@@ -89,6 +89,16 @@ async def test_restaurant_not_accepting_orders(stub_restaurant) -> None:
     stub_restaurant["restaurant"] = _restaurant("active", False)
     with pytest.raises(ConflictError):
         await _build_items(_order(("biryani", 1)))
+
+
+async def test_drop_off_beyond_max_delivery_distance_rejected(stub_restaurant) -> None:
+    # Restaurant in Islamabad, drop-off in Karachi: ~1,140 km.
+    stub_restaurant["restaurant"] = RestaurantSnapshot(
+        RESTAURANT_ID, "active", True, "u-owner", 33.68, 73.04
+    )
+    with pytest.raises(ValidationAppError) as exc_info:
+        await _build_items(_order(("biryani", 1)))
+    assert exc_info.value.details["max_delivery_km"] == 15
 
 
 async def test_inactive_restaurant_rejected(stub_restaurant) -> None:

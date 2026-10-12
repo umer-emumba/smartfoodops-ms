@@ -7,7 +7,7 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Literal
 
-from sfo_contracts.activities import Actor
+from sfo_contracts.activities import SYSTEM, Actor, GeoPoint, PaymentMethod, ReservedItem
 
 
 class WorkflowName(StrEnum):
@@ -47,6 +47,7 @@ def refund_workflow_id(order_id: str) -> str:
 class RestaurantResponse:
     decision: Literal["accept", "reject"]
     reason: str | None = None
+    actor: Actor = SYSTEM
 
 
 @dataclass(frozen=True)
@@ -68,6 +69,31 @@ class CancelRequest:
 
 
 # ---------- Workflow inputs ----------
+
+
+@dataclass(frozen=True)
+class PricingConfig:
+    """Captured when the saga starts, so a settings change doesn't alter an
+    order already in flight (and replays stay deterministic)."""
+
+    tax_rate: Decimal
+    base_delivery_fee: Decimal
+    per_km_fee: Decimal
+
+
+@dataclass(frozen=True)
+class OrderSagaInput:
+    order_id: str
+    customer_id: str
+    restaurant_id: str
+    items: list[ReservedItem]
+    subtotal: Decimal
+    payment_method: PaymentMethod
+    pickup: GeoPoint | None  # None for orders created before it was recorded
+    dropoff: GeoPoint
+    pricing: PricingConfig
+    restaurant_accept_timeout_seconds: int
+    promo_code: str | None = None
 
 
 @dataclass(frozen=True)

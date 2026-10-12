@@ -29,7 +29,7 @@ async def session_factory(
     migrated_database: str, monkeypatch: pytest.MonkeyPatch
 ) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
     """Empty tables, and the activities and API bound to the test database."""
-    from app import activities
+    from app import activities, reconciler
     from app.db import get_session
     from app.main import app
 
@@ -40,6 +40,7 @@ async def session_factory(
             text("TRUNCATE orders, order_items, order_status_history, outbox_events CASCADE")
         )
     monkeypatch.setattr(activities, "SessionFactory", factory)
+    monkeypatch.setattr(reconciler, "SessionFactory", factory)
 
     async def _get_session() -> AsyncIterator[AsyncSession]:
         async with factory() as session:
