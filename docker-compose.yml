@@ -90,6 +90,9 @@ services:
   redis:
     logging: *default-logging
     image: redis:7-alpine
+    # Host access for the real-Redis tests (scripts/check.sh --with-db,
+    # Redis DB 15), localhost only.
+    ports: ["127.0.0.1:16379:6379"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s

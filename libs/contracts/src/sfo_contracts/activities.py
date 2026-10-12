@@ -190,9 +190,12 @@ class RecordRefundInput:
 
 class DeliveryActivity(StrEnum):
     CREATE_DELIVERY = "create_delivery"
-    CANCEL_DELIVERY = "cancel_delivery"  # compensates CREATE_DELIVERY
+    CANCEL_DELIVERY = "cancel_delivery"  # compensates CREATE_DELIVERY; takes OrderRef
     OFFER_TO_NEAREST_RIDER = "offer_to_nearest_rider"
     RELEASE_RIDER = "release_rider"  # compensates OFFER_TO_NEAREST_RIDER
+    # Rider accepted (→ assigned), picked up, delivered — rider endpoints
+    # signal the saga, the saga makes the change.
+    TRANSITION_DELIVERY = "transition_delivery"
     COMPUTE_ETA = "compute_eta"
 
 
@@ -212,13 +215,19 @@ class DeliveryRef:
 @dataclass(frozen=True)
 class CreateDeliveryInput:
     order_id: str
+    customer_id: str  # who may see the delivery (GET /v1/deliveries/by-order/{id})
     pickup: GeoPoint
     dropoff: GeoPoint
+    # When the food is expected to be ready — the pickup ETA is never earlier.
+    ready_at: datetime | None = None
 
 
 @dataclass(frozen=True)
 class CreateDeliveryResult:
     delivery_id: str
+    # "cancelled" if the delivery was cancelled before it was created (a
+    # compensation that ran first) — the saga must not use it.
+    status: str
 
 
 @dataclass(frozen=True)
@@ -232,8 +241,14 @@ class RiderOffer:
     """`offer_to_nearest_rider` returns this, or None when no rider is free."""
 
     rider_id: str
-    distance_km: float
+    distance_km: float  # rider → pickup, straight line
     expires_at: datetime
+
+
+@dataclass(frozen=True)
+class TransitionDeliveryInput:
+    delivery_id: str
+    to_status: Literal["assigned", "picked_up", "delivered"]
 
 
 @dataclass(frozen=True)

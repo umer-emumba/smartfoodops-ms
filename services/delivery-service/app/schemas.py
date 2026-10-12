@@ -48,3 +48,45 @@ class VerificationHistoryResponse(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class DropOutRequest(RequestModel):
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class DeliveryResponse(BaseModel):
+    id: str
+    order_id: str
+    status: str
+    rider_id: str | None
+    pickup_lat: float | None
+    pickup_lng: float | None
+    dropoff_lat: float | None
+    dropoff_lng: float | None
+    distance_km: float | None
+    ready_at: datetime | None
+    offer_expires_at: datetime | None
+    pickup_eta: datetime | None
+    dropoff_eta: datetime | None
+    assigned_at: datetime | None
+    picked_up_at: datetime | None
+    delivered_at: datetime | None
+    cancelled_at: datetime | None
+    reassignment_count: int
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class OfferResponse(BaseModel):
+    """What a rider sees before accepting: where to pick up and drop off."""
+
+    delivery_id: str
+    order_id: str
+    pickup_lat: float
+    pickup_lng: float
+    dropoff_lat: float
+    dropoff_lng: float
+    delivery_distance_km: float  # restaurant → customer
+    distance_to_pickup_km: float  # rider → restaurant, when offered
+    expires_at: datetime

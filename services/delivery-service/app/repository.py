@@ -2,7 +2,8 @@ from sfo_common.pagination import build_page, paginate_newest_first
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Rider, RiderVerificationHistory
+from app.models import Delivery, DeliveryOffer, Rider, RiderVerificationHistory
+from app.state_machine import WITH_RIDER
 
 
 async def get_rider_by_user_id(session: AsyncSession, user_id: str) -> Rider | None:
@@ -41,3 +42,29 @@ async def list_verification_history(
         .order_by(RiderVerificationHistory.created_at)
     )
     return list(result.scalars().all())
+
+
+async def get_active_delivery_for_rider(session: AsyncSession, rider_id: str) -> Delivery | None:
+    """The delivery a rider currently holds (offered, assigned or picked up)."""
+    result = await session.execute(
+        select(Delivery).where(Delivery.rider_id == rider_id, Delivery.status.in_(WITH_RIDER))
+    )
+    return result.scalars().first()
+
+
+async def get_pending_offer(session: AsyncSession, rider_id: str) -> DeliveryOffer | None:
+    result = await session.execute(
+        select(DeliveryOffer).where(
+            DeliveryOffer.rider_id == rider_id, DeliveryOffer.status == "pending"
+        )
+    )
+    return result.scalars().first()
+
+
+async def get_delivery(session: AsyncSession, delivery_id: str) -> Delivery | None:
+    return await session.get(Delivery, delivery_id)
+
+
+async def get_delivery_by_order(session: AsyncSession, order_id: str) -> Delivery | None:
+    result = await session.execute(select(Delivery).where(Delivery.order_id == order_id))
+    return result.scalar_one_or_none()

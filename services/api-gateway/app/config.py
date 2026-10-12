@@ -67,6 +67,7 @@ class Settings(BaseSettings):
             "restaurants": "restaurant-service",
             "orders": "order-service",
             "riders": "delivery-service",
+            "deliveries": "delivery-service",
             "payments": "payment-service",
             "notifications": "notification-service",
         }

@@ -17,14 +17,17 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
+from sfo_contracts import order_workflow_id
 from sfo_contracts.activities import PING, PingResult
 from temporalio import activity
 from temporalio.client import Client
 from temporalio.contrib.pydantic import pydantic_data_converter
+from temporalio.service import RPCError, RPCStatusCode
 from temporalio.worker import Worker
 from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner, SandboxRestrictions
 
 from sfo_common.config import TemporalSettings
+from sfo_common.errors import ConflictError, ServiceUnavailableError
 
 _logger = logging.getLogger(__name__)
 
@@ -91,6 +94,19 @@ async def lazy_client(settings: TemporalSettings) -> Client:
         data_converter=DATA_CONVERTER,
         lazy=True,
     )
+
+
+async def signal_order_saga(client: Client, order_id: str, signal: str, *args: Any) -> None:
+    """Signals workflow `order-{order_id}` from an API endpoint. The caller
+    has checked the current state for a fast 409; the saga re-checks it, since
+    things can move on before the signal arrives."""
+    try:
+        await client.get_workflow_handle(order_workflow_id(order_id)).signal(signal, *args)
+    except RPCError as exc:
+        if exc.status == RPCStatusCode.NOT_FOUND:
+            # Workflow finished, or (before the reconciler restarts it) never started.
+            raise ConflictError("This order is not being processed right now") from exc
+        raise ServiceUnavailableError("Order workflow service is unavailable") from exc
 
 
 def _ping_activity(service_name: str, task_queue: str) -> Callable[[], Any]:

@@ -2,7 +2,7 @@
 The API uses a lazily connected client (`get_client`); the reconciler
 passes the worker's own."""
 
-from sfo_common.errors import ConflictError, ServiceUnavailableError
+from sfo_common import temporal
 from sfo_common.temporal import lazy_client
 from sfo_contracts import OrderSagaSignal, TaskQueue, WorkflowName, order_workflow_id
 from sfo_contracts.activities import GeoPoint, ReservedItem
@@ -10,7 +10,6 @@ from sfo_contracts.workflows import OrderSagaInput, PricingConfig
 from temporalio.client import Client
 from temporalio.common import WorkflowIDReusePolicy
 from temporalio.exceptions import WorkflowAlreadyStartedError
-from temporalio.service import RPCError, RPCStatusCode
 
 from app.config import settings
 from app.models import Order
@@ -26,17 +25,8 @@ async def get_client() -> Client:
 
 
 async def signal_order_saga(order_id: str, signal: OrderSagaSignal, payload: object) -> None:
-    """Signals workflow `order-{order_id}`. The caller has already checked the
-    order's status; the workflow re-checks it, since the order can move on
-    between that check and the signal arriving."""
-    client = await get_client()
-    try:
-        await client.get_workflow_handle(order_workflow_id(order_id)).signal(signal, payload)
-    except RPCError as exc:
-        if exc.status == RPCStatusCode.NOT_FOUND:
-            # Workflow finished, or (before the reconciler restarts it) never started.
-            raise ConflictError("This order is not being processed right now") from exc
-        raise ServiceUnavailableError("Order workflow service is unavailable") from exc
+    """Signals workflow `order-{order_id}` (sfo_common.temporal.signal_order_saga)."""
+    await temporal.signal_order_saga(await get_client(), order_id, signal, payload)
 
 
 def saga_input(order: Order) -> OrderSagaInput:

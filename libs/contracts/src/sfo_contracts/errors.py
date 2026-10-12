@@ -18,6 +18,7 @@ class BusinessErrorType(StrEnum):
     INVALID_PAYMENT_STATE = "InvalidPaymentState"
     REFUND_EXCEEDS_CAPTURED = "RefundExceedsCaptured"
     INVALID_ORDER_TRANSITION = "InvalidOrderTransition"
+    INVALID_DELIVERY_STATE = "InvalidDeliveryState"
     NOT_FOUND = "NotFound"
 
 

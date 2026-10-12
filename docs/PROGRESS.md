@@ -515,7 +515,50 @@ steps 0–8 are the working order.
     drop-off); farther orders get 422 at creation, before anything is written. Found in
     Docker verification: an Islamabad drop-off from a Karachi restaurant (1,144 km) had been
     accepted with a 34,426 PKR fee
-- [ ] Step 5 — delivery-service: GEO, offers, rider endpoints, ETA
+- [x] **Step 5 — delivery-service: GEO, offers, rider endpoints, ETA** (2026-10-12)
+  - Delivery state machine (`app/state_machine.py`): `pending_assignment → offered →
+    assigned → picked_up → delivered`, back to `pending_assignment` on decline/expiry/drop-out,
+    `cancelled` before pickup
+  - Redis (`app/rider_locations.py`): GEO set `riders:available` (assignment pool) +
+    `rider:{id}:location` (latest position, any status, 10-min TTL). Location pings update
+    Redis every time, Postgres `last_lat/lng/last_location_at` at most every 30s, and publish
+    to `tracking:order:{id}` while the rider has the order; status changes add/remove the
+    rider from the pool and are refused (409) while the rider holds a delivery
+  - Activities on `delivery-activities`: `create_delivery`, `offer_to_nearest_rider`
+    (GEOSEARCH 5 km nearest first + atomic `UPDATE riders … WHERE status='available'` claim;
+    stale pool entries skipped and removed), `release_rider` (declined / expired / dropped
+    → back to `pending_assignment`, `reassignment_count + 1`; dropped rider goes offline;
+    completed), `transition_delivery` (assigned / picked_up / delivered), `compute_eta`,
+    `cancel_delivery` (by order; placeholder if not created yet). Every change: history row
+    + `DeliveryStatusUpdated` outbox + tracking publish
+  - **Only the saga changes delivery status** (deviation from the plan, where the picked-up /
+    delivered endpoints wrote it): rider endpoints check ownership/state, signal the saga,
+    return 202 — same pattern as orders, so rider actions can't race a cancellation
+  - Endpoints: `GET /v1/riders/me/offer`, `POST /v1/riders/me/deliveries/{id}/accept |
+    decline | drop-out | picked-up | delivered`, `GET /v1/deliveries/by-order/{order_id}`
+    (customer, holding rider, system_admin); gateway routes `deliveries`
+  - ETA (`app/eta.py`): straight line × 1.3, bike 12 / scooter 25 / car 30 km/h; pickup never
+    before the food's `ready_at` (step 6 passes it from the restaurant's prep time)
+  - Stale-rider detector (`app/stale_riders.py`, background next to the worker): assigned
+    riders silent ≥ 3 min (and assigned ≥ 3 min) → `rider_dropped` signal, once per
+    (delivery, rider) via a Redis marker; never after pickup
+  - Migration `0004`: `riders.last_location_at`; `deliveries.customer_id`, `ready_at`,
+    `offer_expires_at`, `dropoff_eta`, `cancelled_at`; `delivery_offers`,
+    `delivery_status_history`. Contracts: `TransitionDeliveryInput`, `CreateDeliveryInput`
+    gains `customer_id`/`ready_at`, `InvalidDeliveryState`; shared
+    `sfo_common.temporal.signal_order_saga`
+  - Redis published on localhost:16379 for tests (DB 15)
+  - Verified: 78 tests (state machine + ETA unit; real Postgres + Redis: nearest of three,
+    radius, exclusions, stale pool entries, one rider / two concurrent deliveries → one
+    offer, 5 riders / 8 deliveries → 5 distinct, release outcomes, full lifecycle + history +
+    outbox, cancel, ETA; endpoints: 403 other rider, 409 expired, 409 drop-out after pickup,
+    location throttling, tracking publish; detector signals once, never after pickup).
+    Mutation check: without the availability guard both deliveries get the same rider.
+    Docker: migration applied, ping → GEO pool, GEOSEARCH finds the rider 0.17 km from the
+    restaurant, Postgres throttled, offline → out of pool, gateway routes `/v1/deliveries`;
+    smoke test `--deep` 46/46
+  - Note: Redis has no volume in compose — a restart (as when its port was published) drops
+    the JWT deny-list, rate-limit counters and caches
 - [ ] Step 6 — Saga part 2
 - [ ] Step 7 — Live feeds (SSE)
 - [ ] Step 8 — End-to-end scenarios, seed data, docs

@@ -1,14 +1,17 @@
 import logging
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query
+from redis.exceptions import RedisError
 from sfo_auth import CurrentUser, Role
 from sfo_common.errors import ConflictError, ForbiddenError, NotFoundError
 from sfo_common.pagination import Page
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import repository
+from app import repository, rider_locations, tracking
 from app.auth_deps import require_roles
+from app.config import settings
 from app.db import get_session
 from app.models import Rider, RiderVerificationHistory
 from app.mongo import insert_location_ping
@@ -24,9 +27,21 @@ from app.schemas import (
 router = APIRouter(prefix="/v1", tags=["riders"])
 _logger = logging.getLogger(__name__)
 
-# Week 1: rider registration + status + location only. Rider assignment, ETA,
-# and the customer-facing tracking flow land in Week 2 — see
-# docs/architecture.md#real-time-delivery-tracking.
+# Rider registration, vetting, status and location. Delivery offers and the
+# rider's delivery actions: app/api/deliveries.py.
+
+
+async def _sync_pool(rider: Rider) -> None:
+    """Keeps the Redis assignment pool (app/rider_locations.py) in line with
+    the rider's status. Best-effort: assignment re-checks Postgres anyway."""
+    try:
+        if rider.status == "available" and rider.verification_status == "approved":
+            fallback = (rider.last_lat, rider.last_lng) if rider.last_lat is not None else None
+            await rider_locations.make_available(rider.id, fallback)  # type: ignore[arg-type]
+        else:
+            await rider_locations.remove(rider.id)
+    except RedisError:
+        _logger.warning("Rider pool update failed", exc_info=True)
 
 
 def _record_verification_change(
@@ -106,8 +121,15 @@ async def update_my_status(
     # of Week 2's assignment pool at the source. Going offline is always allowed.
     if body.status != "offline" and rider.verification_status != "approved":
         raise ForbiddenError("Rider is not approved to go on shift")
+    # While holding an offer or a delivery the rider is `busy` on the
+    # saga's behalf; going offline mid-delivery is a drop-out instead.
+    if body.status != rider.status and (
+        await repository.get_active_delivery_for_rider(session, rider.id)
+    ):
+        raise ConflictError("You have an active delivery — finish it or drop out first")
     rider.status = body.status
     await session.commit()
+    await _sync_pool(rider)
     return rider
 
 
@@ -118,13 +140,38 @@ async def update_my_location(
     session: AsyncSession = Depends(get_session),
 ) -> Rider:
     """Plain REST POST/PATCH, not a persistent connection — see
-    docs/architecture.md#real-time-delivery-tracking for why."""
+    docs/architecture.md#real-time-delivery-tracking for why. Sent every
+    5–15s while on shift.
+
+    The live position goes to Redis (week2-plan D6) — the assignment pool if
+    the rider is available, and the customer's live tracking if the rider has
+    their order. Postgres keeps it at most every 30s (the stored
+    `last_lat`/`last_lng` in the response may lag by that much)."""
     rider = await repository.get_rider_by_user_id(session, current.id)
     if rider is None:
         raise NotFoundError("Rider profile not found — register first")
-    rider.last_lat = body.lat
-    rider.last_lng = body.lng
+    now = datetime.now(UTC)
+    try:
+        await rider_locations.record(
+            rider.id,
+            body.lat,
+            body.lng,
+            available=rider.status == "available" and rider.verification_status == "approved",
+        )
+    except RedisError:
+        _logger.warning("Rider live location update failed", exc_info=True)
+    db_interval = timedelta(seconds=settings.rider_location_db_interval_seconds)
+    if rider.last_location_at is None or now - rider.last_location_at >= db_interval:
+        rider.last_lat, rider.last_lng, rider.last_location_at = body.lat, body.lng, now
+    active = await repository.get_active_delivery_for_rider(session, rider.id)
+    tracked_order = (
+        active.order_id
+        if active is not None and active.status in ("assigned", "picked_up")
+        else None
+    )
     await session.commit()
+    if tracked_order is not None:
+        await tracking.publish_location(tracked_order, rider.id, body.lat, body.lng)
     # Full ping history goes to Mongo, not delivery_db — Postgres only ever
     # needs the latest position (docs/architecture.md#services). Best-effort:
     # Mongo is non-authoritative, so a Mongo outage loses one history point
@@ -180,6 +227,7 @@ async def suspend_rider(
     # A suspended rider is taken off shift immediately, not left "available".
     rider.status = "offline"
     await session.commit()
+    await _sync_pool(rider)
     return rider
 
 

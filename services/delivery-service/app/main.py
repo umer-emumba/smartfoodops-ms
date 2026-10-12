@@ -8,11 +8,12 @@ from sfo_common.health import add_health_routes
 from sfo_common.temporal import embedded_workers
 from sfo_observability import configure_logging
 
-from app import mongo
+from app import mongo, redis_client
+from app.api import deliveries
 from app.api.routes import router
 from app.config import settings
 from app.db import engine
-from app.worker import WORKERS
+from app.worker import BACKGROUND, WORKERS
 
 configure_logging(settings.service_name, settings.log_level)
 
@@ -20,8 +21,11 @@ configure_logging(settings.service_name, settings.log_level)
 @asynccontextmanager
 async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
     await mongo.ensure_indexes()
-    async with embedded_workers(WORKERS, settings, service_name=settings.service_name):
+    async with embedded_workers(
+        WORKERS, settings, service_name=settings.service_name, background=BACKGROUND
+    ):
         yield
+    await redis_client.redis.aclose()
     await mongo.close()
 
 
@@ -30,13 +34,18 @@ app = create_app(
     tags_metadata=[
         {
             "name": "riders",
-            "description": "Rider registration/availability (assignment added Week 2)",
-        }
+            "description": "Rider registration, availability, location",
+        },
+        {
+            "name": "deliveries",
+            "description": "Delivery offers, rider actions, delivery status and ETAs",
+        },
     ],
     lifespan=_lifespan,
 )
 
 app.include_router(router)
+app.include_router(deliveries.router)
 
 
 async def _readiness() -> bool:
