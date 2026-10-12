@@ -220,7 +220,8 @@ async def offer_to_nearest_rider(data: OfferRiderInput) -> RiderOffer | None:
             return None
 
         rider_id, km = claimed
-        expires_at = _now() + timedelta(seconds=settings.rider_offer_timeout_seconds)
+        timeout = data.offer_timeout_seconds or settings.rider_offer_timeout_seconds
+        expires_at = _now() + timedelta(seconds=timeout)
         session.add(
             DeliveryOffer(
                 delivery_id=delivery.id,

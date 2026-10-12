@@ -4,9 +4,15 @@ passes the worker's own."""
 
 from sfo_common import temporal
 from sfo_common.temporal import lazy_client
-from sfo_contracts import OrderSagaSignal, TaskQueue, WorkflowName, order_workflow_id
+from sfo_contracts import (
+    OrderSagaSignal,
+    TaskQueue,
+    WorkflowName,
+    order_workflow_id,
+    refund_workflow_id,
+)
 from sfo_contracts.activities import GeoPoint, ReservedItem
-from sfo_contracts.workflows import OrderSagaInput, PricingConfig
+from sfo_contracts.workflows import OrderRefundInput, OrderSagaInput, PricingConfig
 from temporalio.client import Client
 from temporalio.common import WorkflowIDReusePolicy
 from temporalio.exceptions import WorkflowAlreadyStartedError
@@ -51,6 +57,10 @@ def saga_input(order: Order) -> OrderSagaInput:
         ),
         restaurant_accept_timeout_seconds=settings.restaurant_accept_timeout_seconds,
         promo_code=order.promo_code,
+        rider_offer_timeout_seconds=settings.rider_offer_timeout_seconds,
+        max_rider_offers=settings.max_rider_offers,
+        rider_search_timeout_seconds=settings.rider_search_timeout_seconds,
+        rider_search_retry_seconds=settings.rider_search_retry_seconds,
     )
 
 
@@ -63,6 +73,23 @@ async def start_order_saga(client: Client, order: Order) -> bool:
             WorkflowName.ORDER_SAGA,
             saga_input(order),
             id=order_workflow_id(order.id),
+            task_queue=TaskQueue.ORDER_SAGA,
+            id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY,
+        )
+    except WorkflowAlreadyStartedError:
+        return False
+    return True
+
+
+async def start_refund(data: OrderRefundInput) -> bool:
+    """Starts workflow `refund-{order_id}` (D13). False if the order already
+    has one — one refund per order (plan §9)."""
+    client = await get_client()
+    try:
+        await client.start_workflow(
+            WorkflowName.ORDER_REFUND,
+            data,
+            id=refund_workflow_id(data.order_id),
             task_queue=TaskQueue.ORDER_SAGA,
             id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY,
         )

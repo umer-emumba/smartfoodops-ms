@@ -559,7 +559,49 @@ steps 0–8 are the working order.
     smoke test `--deep` 46/46
   - Note: Redis has no volume in compose — a restart (as when its port was published) drops
     the JWT deny-list, rate-limit counters and caches
-- [ ] Step 6 — Saga part 2
+- [x] **Step 6 — Saga part 2** (2026-10-12)
+  - `OrderSagaWorkflow` continues after `confirmed`: create delivery (`ready_at` = now +
+    restaurant prep time, from `reserve_order`) → offer to the nearest rider, one at a time;
+    decline / 60s expiry → release and offer the next (each rider offered once; while nobody
+    is free, look again every 30s) → at most 5 offers or 10 min, then `cancelled` /
+    `no_rider_available` → accepted: delivery `assigned`, ETA, order `assigned` → pickup:
+    order `picked_up`, kitchen capacity freed → delivered: payment captured, order
+    `delivered`, rider freed
+  - Rider drop-out (endpoint or stale-rider detector) before pickup → rider off shift,
+    next rider; the order stays `assigned` (reassignment visible in delivery history and
+    `DeliveryStatusUpdated` events — no second `RiderAssigned`, a deviation from the plan)
+  - Cancel until pickup undoes everything (cancel delivery — releases the rider —, void,
+    release promotion, release reservation). After pickup nothing is undone; cancel/drop-out
+    are ignored and every remaining step retries until it succeeds. Signals that arrive
+    together apply in arrival order (pickup-then-cancel → delivered; cancel-then-pickup →
+    cancelled)
+  - Signals carry `rider_id`: a late answer from a rider whose offer expired is ignored
+  - `OrderRefundWorkflow` (`refund-{order_id}`, D13): `payment.refund` (refund ID = workflow
+    ID) → `order.record_refund`; `POST /v1/orders/{id}/refund {amount?, reason}`
+    (system_admin, delivered only, ≤ paid, one per order) — moved here from step 1
+  - Contracts: `ReserveOrderResult.prep_time_minutes`, `OfferRiderInput.offer_timeout_seconds`,
+    rider settings in `OrderSagaInput` (`RIDER_OFFER_TIMEOUT_SECONDS`, `MAX_RIDER_OFFERS`,
+    `RIDER_SEARCH_TIMEOUT_SECONDS`, `RIDER_SEARCH_RETRY_SECONDS` in order-service settings)
+  - Redis persistence: AOF (`everysec`) on a `redis-data` volume — the JWT deny-list and
+    rate-limit counters survive restarts
+  - Verified: 16 new saga tests (time-skipping, faked activities): full lifecycle + single
+    capture, decline → next rider, expiry → next rider, late answer from an expired rider
+    ignored, drop-out replaced, drop-out after pickup ignored, 5 failed offers → cancelled,
+    nobody free for 10 min → cancelled (20 searches), rider found after a wait, cancel while
+    searching / after assignment / after pickup (ignored) / before pickup arrives, capture
+    retried past 5 attempts, refund + failed refund; refund endpoint real-DB tests. Saga test
+    fix: each test terminates the workflows it started (left-over ones hung later tests)
+  - Verified live in Docker through the gateway (two approved riders): nearest rider (0.3 km)
+    offered → accept → ETAs set → pickup frees capacity → cancel after pickup 409 →
+    delivered, payment captured, history `created → … → delivered`, rider back in the pool;
+    decline → second rider offered (`reassignment_count` 1); drop-out → dropped rider
+    offline, other rider assigned, order stays `assigned`; cancel while searching and after
+    assignment → payment voided, delivery cancelled, rider freed, capacity and stock
+    restored; partial refund → order and payment `refunded_amount` 5.00, one
+    `RefundProcessed` row, second refund 409. No workflow-task failures or errors in the
+    logs; smoke test `--deep` 46/46. (Note: a rider who declined an order is never
+    re-offered it — with two riders, a decline then a drop-out leaves the saga searching
+    until the 10-min limit)
 - [ ] Step 7 — Live feeds (SSE)
 - [ ] Step 8 — End-to-end scenarios, seed data, docs
 

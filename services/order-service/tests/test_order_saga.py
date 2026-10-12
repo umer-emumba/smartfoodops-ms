@@ -3,52 +3,37 @@ time-skipping test server, with every service's activities faked on their
 real task queues. Timeouts (restaurant decision, retry backoff) are skipped
 instantly."""
 
-import asyncio
-import uuid
-from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator
 from decimal import Decimal
-from typing import Any
 
 import pytest
 import pytest_asyncio
-from app.workflows.order_saga import OrderSagaWorkflow
-from sfo_common.temporal import DATA_CONVERTER, WorkerSpec, run_workers
-from sfo_contracts import BusinessErrorType, OrderSagaQuery, OrderSagaSignal, TaskQueue
+from sfo_common.temporal import DATA_CONVERTER
+from sfo_contracts import BusinessErrorType, OrderSagaSignal
 from sfo_contracts import business_error as make_business_error
 from sfo_contracts.activities import (
-    Actor,
-    ApplyPricingInput,
-    ApplyPricingResult,
-    AuthorizePaymentInput,
-    GeoPoint,
+    DeliveryActivity,
     OrderActivity,
-    OrderRef,
     PaymentActivity,
-    PaymentResult,
-    RedeemPromotionInput,
-    RedeemPromotionResult,
-    ReservedItem,
-    ReserveOrderInput,
-    ReserveOrderResult,
     RestaurantActivity,
-    TransitionOrderInput,
-    TransitionOrderResult,
 )
-from sfo_contracts.workflows import (
-    CancelRequest,
-    OrderSagaInput,
-    PricingConfig,
-    RestaurantResponse,
-)
-from temporalio import activity
-from temporalio.client import WorkflowHandle
+from sfo_contracts.workflows import CancelRequest, RestaurantResponse
 from temporalio.testing import WorkflowEnvironment
 
-pytestmark = pytest.mark.asyncio(loop_scope="module")
+from tests.saga_fakes import (
+    CUSTOMER,
+    FORWARD,
+    OWNER,
+    UNDO_ALL,
+    FakeServices,
+    final_transition,
+    running,
+    saga_input,
+    start,
+    wait_for_step,
+)
 
-OWNER = Actor(id="u-owner", role="restaurant_admin")
-CUSTOMER = Actor(id="u-customer", role="customer")
+pytestmark = pytest.mark.asyncio(loop_scope="module")
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="module")
@@ -57,156 +42,12 @@ async def env() -> AsyncIterator[WorkflowEnvironment]:
         yield env
 
 
-class FakeServices:
-    """Stand-ins for the restaurant/payment/order activities. Records every
-    call; `fail[name]` is a list of exceptions raised by that activity's next
-    calls (then it succeeds)."""
-
-    def __init__(self) -> None:
-        self.calls: list[tuple[str, Any]] = []
-        self.fail: dict[str, list[Exception]] = {}
-        self.reserve_status = "reserved"
-        self.payment_status = "authorized"
-
-    def names(self) -> list[str]:
-        return [name for name, _ in self.calls]
-
-    def arg(self, name: str) -> Any:
-        return next(a for n, a in self.calls if n == name)
-
-    def _record(self, name: str, arg: Any) -> None:
-        self.calls.append((name, arg))
-        pending = self.fail.get(name)
-        if pending:
-            raise pending.pop(0)
-
-    def specs(self) -> list[WorkerSpec]:
-        def reserve(data: ReserveOrderInput) -> ReserveOrderResult:
-            return ReserveOrderResult(order_id=data.order_id, status=self.reserve_status)
-
-        def redeem(_: RedeemPromotionInput) -> RedeemPromotionResult:
-            return RedeemPromotionResult(
-                promotion_id="p-1", discount_type="percentage", discount_value=Decimal("10")
-            )
-
-        def price(data: ApplyPricingInput) -> ApplyPricingResult:
-            return ApplyPricingResult(
-                total_amount=Decimal("1000") - data.discount + data.tax + data.delivery_fee
-            )
-
-        def authorize(data: AuthorizePaymentInput) -> PaymentResult:
-            return PaymentResult(payment_id="pay-1", status=self.payment_status)
-
-        def transition(data: TransitionOrderInput) -> TransitionOrderResult:
-            return TransitionOrderResult(status=data.to_status, changed=True)
-
-        def none(_: OrderRef) -> None:
-            return None
-
-        # The activity's declared input type drives deserialization.
-        typed = {
-            RestaurantActivity.RESERVE_ORDER: (reserve, ReserveOrderInput),
-            RestaurantActivity.REDEEM_PROMOTION: (redeem, RedeemPromotionInput),
-            RestaurantActivity.RELEASE_RESERVATION: (none, OrderRef),
-            RestaurantActivity.RELEASE_PROMOTION: (none, OrderRef),
-            PaymentActivity.AUTHORIZE: (authorize, AuthorizePaymentInput),
-            PaymentActivity.VOID: (none, OrderRef),
-            OrderActivity.APPLY_PRICING: (price, ApplyPricingInput),
-            OrderActivity.TRANSITION_ORDER: (transition, TransitionOrderInput),
-        }
-
-        def build(name: str) -> Callable[..., Any]:
-            result, input_type = typed[name]
-
-            @activity.defn(name=name)
-            async def run(arg: input_type) -> Any:  # type: ignore[valid-type]
-                self._record(name, arg)
-                return result(arg)
-
-            return run
-
-        return [
-            WorkerSpec(TaskQueue.ORDER_SAGA, workflows=[OrderSagaWorkflow]),
-            WorkerSpec(
-                TaskQueue.RESTAURANT_ACTIVITIES,
-                activities=[build(n) for n in typed if n in set(RestaurantActivity)],
-            ),
-            WorkerSpec(
-                TaskQueue.PAYMENT_ACTIVITIES,
-                activities=[build(n) for n in typed if n in set(PaymentActivity)],
-            ),
-            WorkerSpec(
-                TaskQueue.ORDER_ACTIVITIES,
-                activities=[build(n) for n in typed if n in set(OrderActivity)],
-            ),
-        ]
-
-
-@asynccontextmanager
-async def running(env: WorkflowEnvironment, fakes: FakeServices) -> AsyncIterator[None]:
-    task = asyncio.create_task(run_workers(env.client, fakes.specs(), service_name="test"))
-    try:
-        yield
-    finally:
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-
-
-def saga_input(promo_code: str | None = "WELCOME10") -> OrderSagaInput:
-    return OrderSagaInput(
-        order_id=f"o-{uuid.uuid4()}",
-        customer_id="u-customer",
-        restaurant_id="r-1",
-        items=[ReservedItem(menu_item_id="m-1", quantity=2)],
-        subtotal=Decimal("1000"),
-        payment_method="card_simulated",
-        pickup=GeoPoint(lat=33.6844, lng=73.0479),
-        dropoff=GeoPoint(lat=33.7044, lng=73.0479),
-        pricing=PricingConfig(
-            tax_rate=Decimal("0.05"), base_delivery_fee=Decimal("100"), per_km_fee=Decimal("30")
-        ),
-        restaurant_accept_timeout_seconds=300,
-        promo_code=promo_code,
-    )
-
-
-async def start(env: WorkflowEnvironment, data: OrderSagaInput) -> WorkflowHandle:
-    return await env.client.start_workflow(
-        OrderSagaWorkflow.run, data, id=f"order-{data.order_id}", task_queue=TaskQueue.ORDER_SAGA
-    )
-
-
-async def wait_for_step(handle: WorkflowHandle, step: str) -> None:
-    for _ in range(200):
-        if await handle.query(OrderSagaQuery.STATUS) == step:
-            return
-        await asyncio.sleep(0.02)
-    raise AssertionError(f"saga never reached {step}")
-
-
-def final_transition(fakes: FakeServices) -> TransitionOrderInput:
-    return [a for n, a in fakes.calls if n == OrderActivity.TRANSITION_ORDER][-1]
-
-
-FORWARD = [
-    RestaurantActivity.RESERVE_ORDER,
-    RestaurantActivity.REDEEM_PROMOTION,
-    OrderActivity.APPLY_PRICING,
-    PaymentActivity.AUTHORIZE,
-    OrderActivity.TRANSITION_ORDER,  # → awaiting_restaurant_acceptance
-]
-UNDO_ALL = [
-    PaymentActivity.VOID,
-    RestaurantActivity.RELEASE_PROMOTION,
-    RestaurantActivity.RELEASE_RESERVATION,
-]
-
-
 # ---------- Happy path ----------
 
 
-async def test_accepted_order_is_confirmed(env: WorkflowEnvironment) -> None:
+async def test_accepted_order_is_confirmed_and_handed_to_delivery(
+    env: WorkflowEnvironment,
+) -> None:
     fakes = FakeServices()
     async with running(env, fakes):
         handle = await start(env, saga_input())
@@ -214,9 +55,13 @@ async def test_accepted_order_is_confirmed(env: WorkflowEnvironment) -> None:
         await handle.signal(
             OrderSagaSignal.RESTAURANT_RESPONSE, RestaurantResponse(decision="accept", actor=OWNER)
         )
-        assert await handle.result() == "confirmed"
+        await wait_for_step(handle, "offered:r1")
 
-    assert fakes.names() == [*FORWARD, OrderActivity.TRANSITION_ORDER]
+    assert fakes.names()[: len(FORWARD) + 2] == [
+        *FORWARD,
+        OrderActivity.TRANSITION_ORDER,  # → confirmed
+        DeliveryActivity.CREATE_DELIVERY,
+    ]
     pricing_in = fakes.arg(OrderActivity.APPLY_PRICING)
     assert (pricing_in.discount, pricing_in.tax, pricing_in.delivery_fee) == (
         Decimal("100.00"),
@@ -225,7 +70,7 @@ async def test_accepted_order_is_confirmed(env: WorkflowEnvironment) -> None:
     )
     # Authorized for exactly the priced total.
     assert fakes.arg(PaymentActivity.AUTHORIZE).amount == Decimal("1111.00")
-    confirmed = final_transition(fakes)
+    confirmed = fakes.args(OrderActivity.TRANSITION_ORDER)[1]
     assert (confirmed.to_status, confirmed.actor) == ("confirmed", OWNER)
 
 
@@ -237,7 +82,7 @@ async def test_no_promo_code_skips_the_promotion(env: WorkflowEnvironment) -> No
         await handle.signal(
             OrderSagaSignal.RESTAURANT_RESPONSE, RestaurantResponse(decision="accept", actor=OWNER)
         )
-        await handle.result()
+        await wait_for_step(handle, "offered:r1")
     assert RestaurantActivity.REDEEM_PROMOTION not in fakes.names()
     assert fakes.arg(OrderActivity.APPLY_PRICING).discount == Decimal("0.00")
 

@@ -13,9 +13,13 @@ from app.config import settings
 from app.reconciler import run_reconciler
 from app.workflows.order_saga import OrderSagaWorkflow
 from app.workflows.ping import WorkerPingWorkflow
+from app.workflows.refund import OrderRefundWorkflow
 
 WORKERS = [
-    WorkerSpec(TaskQueue.ORDER_SAGA, workflows=[OrderSagaWorkflow, WorkerPingWorkflow]),
+    WorkerSpec(
+        TaskQueue.ORDER_SAGA,
+        workflows=[OrderSagaWorkflow, OrderRefundWorkflow, WorkerPingWorkflow],
+    ),
     WorkerSpec(TaskQueue.ORDER_ACTIVITIES, activities=ACTIVITIES),
 ]
 BACKGROUND = [run_reconciler]

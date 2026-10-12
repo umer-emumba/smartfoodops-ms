@@ -53,12 +53,16 @@ class RestaurantResponse:
 @dataclass(frozen=True)
 class RiderResponse:
     delivery_id: str
+    # Which rider answered: a late answer from a rider whose offer already
+    # expired must not count as the current rider's.
+    rider_id: str
     accepted: bool
 
 
 @dataclass(frozen=True)
 class RiderDropped:
     delivery_id: str
+    rider_id: str
     reason: str
 
 
@@ -94,6 +98,12 @@ class OrderSagaInput:
     pricing: PricingConfig
     restaurant_accept_timeout_seconds: int
     promo_code: str | None = None
+    # Rider assignment (docs/week2-plan.md §7).
+    rider_offer_timeout_seconds: int = 60
+    max_rider_offers: int = 5
+    rider_search_timeout_seconds: int = 600
+    # How often to look again while no rider is free.
+    rider_search_retry_seconds: int = 30
 
 
 @dataclass(frozen=True)

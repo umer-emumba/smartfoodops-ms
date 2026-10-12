@@ -1,4 +1,5 @@
 from datetime import datetime
+from decimal import Decimal
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -41,6 +42,12 @@ class RestaurantResponseRequest(RequestModel):
 
 class CancelOrderRequest(RequestModel):
     reason: str | None = Field(default=None, min_length=1, max_length=500)
+
+
+class RefundRequest(RequestModel):
+    # Omitted = everything paid (total minus anything already refunded).
+    amount: Decimal | None = Field(default=None, gt=0, max_digits=10, decimal_places=2)
+    reason: str = Field(min_length=1, max_length=500)
 
 
 class OrderItemResponse(BaseModel):

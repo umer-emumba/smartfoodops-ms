@@ -90,7 +90,7 @@ async def _respond(
         session,
         delivery,
         OrderSagaSignal.RIDER_RESPONSE,
-        RiderResponse(delivery_id=delivery.id, accepted=accepted),
+        RiderResponse(delivery_id=delivery.id, rider_id=delivery.rider_id or "", accepted=accepted),
     )
 
 
@@ -137,7 +137,7 @@ async def drop_out(
         session,
         delivery,
         OrderSagaSignal.RIDER_DROPPED,
-        RiderDropped(delivery_id=delivery.id, reason=body.reason),
+        RiderDropped(delivery_id=delivery.id, rider_id=delivery.rider_id or "", reason=body.reason),
     )
 
 

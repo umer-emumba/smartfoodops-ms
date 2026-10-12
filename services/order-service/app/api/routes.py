@@ -11,7 +11,7 @@ from sfo_common.middleware import get_correlation_id
 from sfo_common.pagination import Page
 from sfo_contracts import OrderSagaSignal
 from sfo_contracts.activities import Actor
-from sfo_contracts.workflows import CancelRequest, RestaurantResponse
+from sfo_contracts.workflows import CancelRequest, OrderRefundInput, RestaurantResponse
 from sfo_events import EventType, new_outbox_row
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,6 +31,7 @@ from app.schemas import (
     CancelOrderRequest,
     OrderCreate,
     OrderResponse,
+    RefundRequest,
     RestaurantResponseRequest,
 )
 from app.state_machine import can_cancel
@@ -370,3 +371,40 @@ async def cancel_order(
         OrderSagaSignal.CANCEL,
         CancelRequest(actor=Actor(id=current.id, role=current.role.value), reason=body.reason),
     )
+
+
+@router.post("/orders/{order_id}/refund", response_model=OrderResponse, status_code=202)
+async def refund_order(
+    order_id: str,
+    body: RefundRequest,
+    current: CurrentUser = Depends(require_roles(Role.SYSTEM_ADMIN)),
+    session: AsyncSession = Depends(get_session),
+) -> OrderResponse:
+    """Refunds a delivered order, fully or partly (week2-plan D13) — e.g.
+    after a support complaint. Starts the refund workflow; the order's
+    `refunded_amount` shows it once done. One refund per order."""
+    order = await _get_order_or_404(session, order_id)
+    if order.status != OrderStatus.DELIVERED:
+        raise ConflictError(f"Order is {order.status}; only delivered orders are refunded")
+    if order.refunded_at is not None:
+        raise ConflictError("This order has already been refunded")
+    refundable = order.total_amount - order.refunded_amount
+    amount = body.amount if body.amount is not None else refundable
+    if amount > refundable:
+        raise ValidationAppError(
+            "Refund is more than was paid",
+            details={"amount": str(amount), "refundable": str(refundable)},
+        )
+    snapshot = OrderResponse.model_validate(order)
+    await session.rollback()
+    started = await temporal_client.start_refund(
+        OrderRefundInput(
+            order_id=snapshot.id,
+            amount=amount,
+            reason=body.reason,
+            actor=Actor(id=current.id, role=current.role.value),
+        )
+    )
+    if not started:
+        raise ConflictError("A refund for this order is already in progress or done")
+    return snapshot

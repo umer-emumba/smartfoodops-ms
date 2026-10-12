@@ -15,6 +15,13 @@ class Settings(BaseServiceSettings, TemporalSettings):
     base_delivery_fee: Decimal = Decimal("100")  # PKR
     per_km_fee: Decimal = Decimal("30")  # PKR per straight-line km
     restaurant_accept_timeout_seconds: int = 300
+    # Rider assignment: 60s per offer, at most 5 offers or 10 minutes, then
+    # the order is cancelled (`no_rider_available`). While nobody is free,
+    # look again every 30s.
+    rider_offer_timeout_seconds: int = 60
+    max_rider_offers: int = 5
+    rider_search_timeout_seconds: int = 600
+    rider_search_retry_seconds: int = 30
     # Orders whose drop-off is farther than this (straight line) from the
     # restaurant are refused at creation — beyond it there's no realistic
     # delivery (rider search covers 5 km around the restaurant, step 5).

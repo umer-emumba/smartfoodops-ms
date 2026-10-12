@@ -51,7 +51,7 @@ async def test_silent_assigned_rider_is_signalled_once(env: Env, sent: list) -> 
         (
             "o-1",
             OrderSagaSignal.RIDER_DROPPED,
-            (RiderDropped(delivery_id=delivery_id, reason="no_location_updates"),),
+            (RiderDropped(delivery_id=delivery_id, rider_id="r1", reason="no_location_updates"),),
         )
     ]
 

@@ -68,6 +68,8 @@ class ReserveOrderInput:
 class ReserveOrderResult:
     order_id: str
     status: str
+    # The restaurant's average prep time — when the food will be ready.
+    prep_time_minutes: int = 0
 
 
 @dataclass(frozen=True)
@@ -234,6 +236,8 @@ class CreateDeliveryResult:
 class OfferRiderInput:
     delivery_id: str
     exclude_rider_ids: list[str] = field(default_factory=list)
+    # The saga's offer timer, so the offer's stored expiry matches it.
+    offer_timeout_seconds: int | None = None
 
 
 @dataclass(frozen=True)

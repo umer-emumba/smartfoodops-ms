@@ -2,6 +2,8 @@
 (week2-plan step 1) against a real Postgres; signals to the saga are
 captured (`signals` fixture)."""
 
+from decimal import Decimal
+
 import pytest
 from app.config import settings
 from app.main import app
@@ -198,3 +200,105 @@ async def test_cancel_not_allowed_from_pickup_on(
 async def test_unknown_order_is_404(session_factory: Factory, client: AsyncClient) -> None:
     resp = await client.post("/v1/orders/nope/cancel", json={}, headers=CUSTOMER_H)
     assert resp.status_code == 404
+
+
+# ---------- Post-delivery refund ----------
+
+
+class RefundStarter:
+    """Stands in for temporal_client.start_refund."""
+
+    def __init__(self) -> None:
+        self.started: list = []
+        self.already_exists = False
+
+    async def __call__(self, data: object) -> bool:
+        if self.already_exists:
+            return False
+        self.started.append(data)
+        return True
+
+
+@pytest.fixture
+def refunds(monkeypatch: pytest.MonkeyPatch) -> RefundStarter:
+    from app import temporal_client
+
+    starter = RefundStarter()
+    monkeypatch.setattr(temporal_client, "start_refund", starter)
+    return starter
+
+
+async def test_admin_refunds_a_delivered_order_in_full(
+    session_factory: Factory, client: AsyncClient, refunds: RefundStarter
+) -> None:
+    order = await insert_order(session_factory, status=OrderStatus.DELIVERED)
+    resp = await client.post(
+        f"/v1/orders/{order.id}/refund", json={"reason": "Cold food"}, headers=SYSTEM_ADMIN_H
+    )
+    assert resp.status_code == 202
+    [refund] = refunds.started
+    assert (refund.order_id, refund.amount, refund.reason) == (
+        order.id,
+        Decimal("1000.00"),
+        "Cold food",
+    )
+    assert refund.actor == Actor(id="u-admin", role="system_admin")
+
+
+async def test_partial_refund(
+    session_factory: Factory, client: AsyncClient, refunds: RefundStarter
+) -> None:
+    order = await insert_order(session_factory, status=OrderStatus.DELIVERED)
+    resp = await client.post(
+        f"/v1/orders/{order.id}/refund",
+        json={"amount": "250.50", "reason": "Missing drink"},
+        headers=SYSTEM_ADMIN_H,
+    )
+    assert resp.status_code == 202
+    assert refunds.started[0].amount == Decimal("250.50")
+
+
+@pytest.mark.parametrize(
+    "status,body,expected",
+    [
+        (OrderStatus.CONFIRMED, {"reason": "x"}, 409),  # not delivered yet
+        (OrderStatus.DELIVERED, {"amount": "1000.01", "reason": "x"}, 422),  # more than paid
+        (OrderStatus.DELIVERED, {"amount": "0", "reason": "x"}, 422),
+        (OrderStatus.DELIVERED, {}, 422),  # reason required
+    ],
+)
+async def test_refund_rejected(
+    session_factory: Factory,
+    client: AsyncClient,
+    refunds: RefundStarter,
+    status: OrderStatus,
+    body: dict,
+    expected: int,
+) -> None:
+    order = await insert_order(session_factory, status=status)
+    resp = await client.post(f"/v1/orders/{order.id}/refund", json=body, headers=SYSTEM_ADMIN_H)
+    assert resp.status_code == expected
+    assert refunds.started == []
+
+
+async def test_refund_is_system_admin_only(
+    session_factory: Factory, client: AsyncClient, refunds: RefundStarter
+) -> None:
+    order = await insert_order(session_factory, status=OrderStatus.DELIVERED)
+    for headers in (CUSTOMER_H, OWNER_H):
+        resp = await client.post(
+            f"/v1/orders/{order.id}/refund", json={"reason": "x"}, headers=headers
+        )
+        assert resp.status_code == 403
+    assert refunds.started == []
+
+
+async def test_one_refund_per_order(
+    session_factory: Factory, client: AsyncClient, refunds: RefundStarter
+) -> None:
+    order = await insert_order(session_factory, status=OrderStatus.DELIVERED)
+    refunds.already_exists = True
+    resp = await client.post(
+        f"/v1/orders/{order.id}/refund", json={"reason": "x"}, headers=SYSTEM_ADMIN_H
+    )
+    assert resp.status_code == 409

@@ -94,7 +94,16 @@ async def reserve_order(data: ReserveOrderInput) -> ReserveOrderResult:
             await session.rollback()
             existing = await session.get(StockReservation, data.order_id)
             assert existing is not None
-            return ReserveOrderResult(order_id=data.order_id, status=existing.status)
+            restaurant = (
+                await session.get(Restaurant, existing.restaurant_id)
+                if existing.restaurant_id
+                else None
+            )
+            return ReserveOrderResult(
+                order_id=data.order_id,
+                status=existing.status,
+                prep_time_minutes=restaurant.avg_prep_time_minutes if restaurant else 0,
+            )
 
         taken = await session.execute(
             update(Restaurant)
@@ -105,9 +114,10 @@ async def reserve_order(data: ReserveOrderInput) -> ReserveOrderResult:
                 Restaurant.active_order_count < Restaurant.max_concurrent_orders,
             )
             .values(active_order_count=Restaurant.active_order_count + 1)
-            .returning(Restaurant.id)
+            .returning(Restaurant.avg_prep_time_minutes)
         )
-        if taken.first() is None:
+        prep_time_minutes = taken.scalar_one_or_none()
+        if prep_time_minutes is None:
             reason = await _restaurant_unavailable_reason(session, data.restaurant_id)
             if reason:
                 raise business_error(
@@ -138,7 +148,11 @@ async def reserve_order(data: ReserveOrderInput) -> ReserveOrderResult:
 
         await session.commit()
     await cache.invalidate(data.restaurant_id)
-    return ReserveOrderResult(order_id=data.order_id, status=ReservationStatus.RESERVED)
+    return ReserveOrderResult(
+        order_id=data.order_id,
+        status=ReservationStatus.RESERVED,
+        prep_time_minutes=prep_time_minutes,
+    )
 
 
 @activity.defn(name=RestaurantActivity.RELEASE_RESERVATION)

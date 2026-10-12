@@ -115,7 +115,7 @@ async def test_reserve_takes_stock_and_capacity(session_factory: Factory) -> Non
     result = await activities.reserve_order(
         _reserve("o-1", ("biryani", 2), ("naan", 3), ("biryani", 1))
     )
-    assert result.status == "reserved"
+    assert (result.status, result.prep_time_minutes) == ("reserved", 20)
     assert await _stock(session_factory, "biryani") == 7  # split lines summed
     assert await _stock(session_factory, "naan") is None  # unlimited stays unlimited
     assert await _active_orders(session_factory) == 1

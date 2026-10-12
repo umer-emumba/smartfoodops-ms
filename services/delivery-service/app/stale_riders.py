@@ -61,7 +61,7 @@ async def check_once(client: Client) -> int:
                 client,
                 order_id,
                 OrderSagaSignal.RIDER_DROPPED,
-                RiderDropped(delivery_id=delivery_id, reason=REASON),
+                RiderDropped(delivery_id=delivery_id, rider_id=rider_id, reason=REASON),
             )
             signalled += 1
             _logger.warning(

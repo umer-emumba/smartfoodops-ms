@@ -127,7 +127,7 @@ async def test_rider_sees_and_accepts_their_offer(env: Env, client: AsyncClient)
         (
             "o-1",
             OrderSagaSignal.RIDER_RESPONSE,
-            (RiderResponse(delivery_id=delivery_id, accepted=True),),
+            (RiderResponse(delivery_id=delivery_id, rider_id="r1", accepted=True),),
         )
     ]
 
@@ -139,7 +139,9 @@ async def test_decline_signals_not_accepted(env: Env, client: AsyncClient) -> No
         f"/v1/riders/me/deliveries/{delivery_id}/decline", headers=_as("user-r1")
     )
     assert resp.status_code == 202
-    assert env.signals[0][2] == (RiderResponse(delivery_id=delivery_id, accepted=False),)
+    assert env.signals[0][2] == (
+        RiderResponse(delivery_id=delivery_id, rider_id="r1", accepted=False),
+    )
 
 
 async def test_no_offer_is_404(env: Env, client: AsyncClient) -> None:
@@ -188,7 +190,7 @@ async def test_drop_out_before_pickup(env: Env, client: AsyncClient) -> None:
     assert resp.status_code == 202
     assert env.signals[0][1:] == (
         OrderSagaSignal.RIDER_DROPPED,
-        (RiderDropped(delivery_id=delivery_id, reason="Flat tyre"),),
+        (RiderDropped(delivery_id=delivery_id, rider_id="r1", reason="Flat tyre"),),
     )
 
 
