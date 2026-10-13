@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SmartFoodOps — test UI</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="icon" href="data:,">
+  <script type="module" src="js/main.js"></script>
+</head>
+<body>
+  <header>
+    <strong>SmartFoodOps test UI</strong>
+    <button id="login-all">Log in demo accounts</button>
+    <label>Restaurant <select id="restaurant"></select></label>
+    <span id="header-status" class="muted">Not logged in</span>
+    <a href="http://localhost:8088" target="_blank">Temporal UI</a>
+    <a href="http://localhost:8080/docs" target="_blank">API docs</a>
+  </header>
+
+  <main>
+    <section id="customer" class="panel">
+      <h2>Customer</h2>
+      <div class="row">
+        <select id="c-item"></select>
+        <input id="c-qty" type="number" min="1" max="50" value="1" title="Quantity">
+      </div>
+      <div class="row">
+        <label>Drop-off <input id="c-lat" size="8"> <input id="c-lng" size="8"></label>
+      </div>
+      <div class="row">
+        <select id="c-payment">
+          <option value="card_simulated">Card approves</option>
+          <option value="card_simulated_decline">Card declines</option>
+        </select>
+        <button id="c-place">Place order</button>
+        <button id="c-cancel">Cancel order</button>
+      </div>
+      <div id="c-order" class="box muted">No order yet</div>
+      <div id="c-timeline" class="timeline"></div>
+      <div id="c-details" class="box"></div>
+      <div class="log" id="c-log"></div>
+    </section>
+
+    <section id="restaurant-panel" class="panel">
+      <h2>Restaurant</h2>
+      <div class="muted">Live feed of orders waiting for a decision</div>
+      <div id="r-pending"></div>
+      <div class="log" id="r-log"></div>
+    </section>
+
+    <section id="rider1" class="panel rider"></section>
+    <section id="rider2" class="panel rider"></section>
+
+    <section id="admin" class="panel">
+      <h2>Admin</h2>
+      <div class="muted">Refund the customer's current order (delivered orders only)</div>
+      <div class="row">
+        <input id="a-amount" placeholder="Amount (empty = full)" size="18">
+        <input id="a-reason" placeholder="Reason" value="Cold food" size="14">
+        <button id="a-refund">Refund</button>
+      </div>
+      <div class="log" id="a-log"></div>
+    </section>
+  </main>
+
+  <template id="rider-template">
+    <h2 class="r-title"></h2>
+    <div class="r-status box muted"></div>
+    <div class="row">
+      <label>km from restaurant <input class="r-km" type="number" step="0.1" size="4"></label>
+      <button class="r-shift">Go on shift</button>
+      <button class="r-offline">Go offline</button>
+    </div>
+    <div class="r-offer box"></div>
+    <div class="r-delivery box"></div>
+    <div class="log r-log"></div>
+  </template>
+</body>
+</html>

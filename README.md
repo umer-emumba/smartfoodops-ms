@@ -203,6 +203,16 @@ same ID as `trace_id`. To see one request's whole path:
 docker compose logs --no-log-prefix | grep <x-request-id>
 ```
 
+### Test UI (click through an order by hand)
+
+```bash
+cd demo-ui && python3 -m http.server 3000 --bind 127.0.0.1   # then open http://localhost:3000
+```
+
+A plain HTML/JS page with customer, restaurant, two riders and an admin side by side,
+including the live feeds — see [demo-ui/README.md](demo-ui/README.md). For testing and
+demos only; not part of Docker.
+
 ### Smoke test (whole running system)
 
 ```bash
