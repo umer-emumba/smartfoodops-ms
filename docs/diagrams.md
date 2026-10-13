@@ -61,6 +61,225 @@ through Redis Pub/Sub, not Kafka: it needs sub-second push to whoever is watchin
 replayable log. Every database is a separate Postgres container — database-per-service,
 no shared instance.
 
+## How data moves through one order (REST, Temporal, Pub/Sub, SSE)
+
+A plain-language walkthrough of one order, showing which mechanism carries each piece
+of data. Each mechanism has one job:
+
+| Mechanism | Its job | Kept if nobody is listening? |
+|---|---|---|
+| **REST** (through api-gateway) | A user *does* something: place an order, accept, pick up | — (request/response) |
+| **Temporal task queues** | The saga hands *work* to the service that owns the data | ✅ durable, retried |
+| **Temporal signals** | Tell the waiting saga that a user acted ("restaurant accepted") | ✅ durable |
+| **Redis Pub/Sub** | Announce "something changed" to tracking-service | ❌ — the latest state is saved next to it, sent as a snapshot on connect |
+| **SSE** (Server-Sent Events) | Push those changes to open screens (one-way, plain HTTP) | ❌ — the screen gets a fresh snapshot when it reconnects |
+| **Outbox → Kafka** (Week 3) | Guaranteed notifications: email, SMS, push, analytics | ✅ |
+
+### Overview
+
+Everything in an order travels one of two ways.
+
+**A. Doing things** — a user acts, the saga does the work:
+
+```mermaid
+flowchart LR
+    U["Customer / Restaurant / Rider"] -->|REST| GW[api-gateway]
+    GW -->|REST| API["order-service<br/>delivery-service"]
+    API -->|"start saga, signals"| T[("Temporal<br/>task queues")]
+    T -->|"work (activities)"| W["restaurant-, payment-,<br/>delivery-, order-service<br/>workers"]
+```
+
+**B. Telling screens** — every change is announced and pushed to whoever is watching:
+
+```mermaid
+flowchart LR
+    P["order-service<br/>delivery-service"] -->|"PUBLISH + save latest state"| RD[("Redis<br/>Pub/Sub")]
+    RD -->|SUBSCRIBE| TS[tracking-service]
+    TS -->|SSE| GW[api-gateway]
+    GW -->|SSE| S["Customer app<br/>Restaurant dashboard"]
+```
+
+Guaranteed notifications (email, SMS, push) are a third path, added in Week 3 — see step 7.
+
+### Step 1 — The customer places the order (REST)
+
+The customer's request is answered straight away; the rest happens in the background.
+Order-service checks prices with restaurant-service, saves the order as `created`
+(with an `OrderPlaced` outbox row, in the same transaction), writes the order's live
+state to Redis, starts the saga, and replies `201`.
+
+```mermaid
+sequenceDiagram
+    actor C as Customer
+    participant GW as api-gateway
+    participant OS as order-service
+    participant RS as restaurant-service
+    participant T as Temporal
+
+    C->>GW: POST /v1/orders (REST)
+    GW->>OS: forward
+    OS->>RS: quote: live prices, stock, owner (REST)
+    OS->>OS: save order `created` + outbox row (one DB transaction)
+    OS->>T: start saga order-{id}
+    OS-->>C: 201 created
+```
+
+### Step 2 — The saga prepares the order (Temporal task queues)
+
+The saga runs inside order-service's worker. It doesn't call other services' APIs: it
+puts each job on the task queue of the service that owns the data, and that service's
+worker does it in its own database. Temporal retries a job that fails for a temporary
+reason.
+
+```mermaid
+sequenceDiagram
+    participant S as Saga (order-saga queue)
+    participant RS as restaurant-service worker
+    participant OS as order-service worker
+    participant PS as payment-service worker
+
+    S->>RS: reserve_order (restaurant-activities queue)
+    RS-->>S: stock + kitchen slot reserved
+    S->>OS: apply_pricing (order-activities queue)
+    S->>PS: authorize (payment-activities queue)
+    PS-->>S: money held on the card
+    S->>OS: transition_order → awaiting_restaurant_acceptance
+```
+
+### Step 3 — The restaurant is notified (Redis Pub/Sub → SSE)
+
+Right after the status change is saved, order-service does two things in one Redis
+round-trip: it saves the latest state (and adds the order to the restaurant's
+"waiting" list), and it **publishes** `new_order` on the restaurant's channel.
+tracking-service is subscribed to that channel for every open dashboard, and pushes
+the message down the dashboard's SSE stream within a second.
+
+```mermaid
+sequenceDiagram
+    participant OS as order-service
+    participant RD as Redis
+    participant TS as tracking-service
+    participant GW as api-gateway
+    actor R as Restaurant dashboard
+
+    R->>GW: GET /v1/tracking/restaurants/{id} (SSE, opened earlier)
+    GW->>TS: stream
+    TS->>RD: SUBSCRIBE tracking:restaurant:{id}
+    TS-->>R: snapshot: orders already waiting
+    OS->>RD: save state + PUBLISH new_order
+    RD-->>TS: message
+    TS-->>R: event: new_order (SSE, via the gateway)
+```
+
+If the dashboard was closed at that moment, nothing is lost: when it reconnects, the
+snapshot lists every order still waiting. If nobody answers within 5 minutes, the saga
+rejects the order and undoes steps 1–2.
+
+### Step 4 — The restaurant accepts (REST → Temporal signal)
+
+The accept button doesn't change the order itself. Order-service checks that this
+admin owns the order and that it's still waiting, then **signals** the saga and replies
+`202`. The saga, which was waiting for exactly this, continues.
+
+```mermaid
+sequenceDiagram
+    actor R as Restaurant dashboard
+    participant OS as order-service
+    participant T as Temporal
+    participant S as Saga
+    participant RD as Redis
+    actor C as Customer app
+
+    R->>OS: POST /v1/orders/{id}/restaurant-response {accept} (REST)
+    OS->>T: signal restaurant_response
+    OS-->>R: 202
+    T->>S: wakes the waiting saga
+    S->>OS: transition_order → confirmed (order-activities queue)
+    OS->>RD: PUBLISH status: confirmed
+    RD-->>C: status: confirmed (via tracking-service, SSE)
+```
+
+### Step 5 — A rider is offered the order (Temporal task queue; the rider asks)
+
+The saga asks delivery-service to create the delivery and offer it to the nearest free
+rider (found with Redis GEO, claimed with one atomic database update). The offer
+expires in 60 seconds.
+
+```mermaid
+sequenceDiagram
+    participant S as Saga
+    participant DS as delivery-service
+    actor D as Rider app
+
+    S->>DS: create_delivery (delivery-activities queue)
+    S->>DS: offer_to_nearest_rider
+    DS-->>S: offered to rider X (expires in 60s)
+    loop every few seconds
+        D->>DS: GET /v1/riders/me/offer (REST)
+    end
+    DS-->>D: the offer
+```
+
+**Gap:** nothing is pushed to the rider — the rider app has to keep asking. A rider
+live feed (the same SSE pattern as the restaurant's) would fix this.
+
+### Step 6 — The rider accepts and delivers; the customer watches live (REST → signal → Pub/Sub → SSE)
+
+Every rider action follows the same pattern: REST to delivery-service, which signals
+the saga; the saga makes the change; the change is published and pushed to the
+customer. Location pings skip the saga: delivery-service publishes them directly.
+
+```mermaid
+sequenceDiagram
+    actor D as Rider app
+    participant DS as delivery-service
+    participant S as Saga
+    participant PS as payment-service
+    participant RD as Redis
+    actor C as Customer app
+
+    D->>DS: POST …/accept (REST)
+    DS->>S: signal rider_response
+    S->>DS: delivery → assigned, compute ETA
+    DS->>RD: PUBLISH delivery: assigned + ETA
+    RD-->>C: SSE: assigned, ETA
+    D->>DS: PATCH /v1/riders/me/location (REST, repeated)
+    DS->>RD: PUBLISH location
+    RD-->>C: SSE: rider position
+    D->>DS: POST …/picked-up, then …/delivered (REST)
+    DS->>S: signals picked_up, delivered
+    S->>PS: capture (payment-activities queue)
+    S->>RD: status: delivered (via order-service)
+    RD-->>C: SSE: delivered — the stream closes
+```
+
+### Step 7 — Guaranteed notifications (Week 3: outbox → Kafka)
+
+Live screens are best-effort. Messages that must arrive — email, SMS, push — use the
+outbox: every change above already writes an event row (`OrderPlaced`,
+`OrderConfirmed`, `RiderAssigned`, …) in the same database transaction. Week 3 adds the
+relay and the senders.
+
+```mermaid
+flowchart LR
+    DB[(each service's<br/>outbox_events)] -->|Celery beat relay| K[(Kafka topics)]
+    K --> NS[notification-service]
+    NS -->|Celery / RabbitMQ| Out[email / SMS / push]
+    K --> AS[analytics-service]
+```
+
+### Summary
+
+| # | Step | Mechanism |
+|---|---|---|
+| 1 | Customer places the order | REST |
+| 2 | Saga reserves stock, prices, holds the money | Temporal task queues |
+| 3 | Restaurant sees the new order | Redis Pub/Sub → SSE |
+| 4 | Restaurant accepts | REST → Temporal signal |
+| 5 | Rider gets the offer | Temporal task queue; rider polls over REST |
+| 6 | Rider accepts, moves, delivers; customer watches | REST → signal; Redis Pub/Sub → SSE |
+| 7 | Email / SMS / push (Week 3) | Outbox → Kafka → Celery |
+
 ## Order lifecycle (sequence)
 
 The happy path, as built. Every arrow into "Saga" from an endpoint is a Temporal signal;
