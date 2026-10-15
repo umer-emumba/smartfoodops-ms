@@ -441,7 +441,7 @@
       "id": 10,
       "type": "timeseries",
       "title": "Consumed / s by group and outcome",
-      "description": "",
+      "description": "Duplicates are redeliveries the consumer had already applied \u2014 a no-op, and also counted as processed. A burst means a replay.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -461,6 +461,15 @@
           "expr": "sum by (group, outcome) (rate(kafka_events_consumed_total[5m]))",
           "legendFormat": "{{group}} {{outcome}}",
           "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (group) (rate(kafka_events_duplicates_total[5m]))",
+          "legendFormat": "{{group}} duplicates (already applied)",
+          "refId": "B"
         }
       ],
       "fieldConfig": {

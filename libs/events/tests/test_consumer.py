@@ -8,6 +8,8 @@ from typing import Any
 
 import pytest
 from confluent_kafka import KafkaError, TopicPartition
+from confluent_kafka.serialization import SerializationError
+from prometheus_client import REGISTRY
 from sfo_events import DomainEvent, EventType, idempotent
 from sfo_events.consumer import ConsumerLoop, DeadLetterError, Outcome, is_transient
 from sfo_events.kafka import header_value
@@ -156,6 +158,26 @@ async def test_poison_message_goes_to_dlq_without_retries() -> None:
     assert header_value(dead["headers"], "event_type") == "OrderConfirmed"
 
 
+async def test_bytes_not_in_registry_format_go_to_dlq() -> None:
+    """What the real deserializer raises for them — a KafkaException
+    subclass, which must not be mistaken for an outage (that would block
+    the partition forever)."""
+
+    def deserialize(_: Any) -> dict[str, Any]:
+        raise SerializationError("Invalid magic byte")
+
+    async def process(event: DomainEvent) -> None:
+        raise AssertionError("not reached")
+
+    consumer, producer = FakeConsumer(), FakeProducer()
+    loop = _loop(process, consumer, producer)
+    loop._deserialize = deserialize  # type: ignore[assignment]
+    outcome = await loop.handle(FakeMessage(b'{"not": "framed"}', offset=4))  # type: ignore[arg-type]
+    assert outcome is Outcome.DEAD_LETTERED
+    assert consumer.committed == [4]
+    assert [d["topic"] for d in producer.sent] == ["order-events.dlq"]
+
+
 async def test_failing_handler_is_retried_with_backoff_then_dead_lettered() -> None:
     attempts = 0
 
@@ -261,6 +283,16 @@ def _wrapped(cause: BaseException) -> Exception:
             return outer
 
 
+def _wrapped_in_serialization(cause: BaseException) -> Exception:
+    try:
+        raise cause
+    except BaseException:
+        try:
+            raise SerializationError("couldn't fetch the schema")  # implicit __context__
+        except SerializationError as outer:
+            return outer
+
+
 @pytest.mark.parametrize(
     ("exc", "transient"),
     [
@@ -273,6 +305,10 @@ def _wrapped(cause: BaseException) -> Exception:
         (ValueError("bad payload"), False),
         (IntegrityError("insert", {}, Exception("dup")), False),
         (RegistryHttpError(422), False),
+        # Subclasses KafkaException, but means the bytes aren't ours...
+        (SerializationError("Invalid magic byte"), False),
+        # ...unless an outage is behind it.
+        (_wrapped_in_serialization(ConnectionRefusedError()), True),
         (RuntimeError("handler bug"), False),
     ],
 )
@@ -493,3 +529,59 @@ async def test_other_integrity_errors_are_raised(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(FakeSession, "commit", commit_fails)
     with pytest.raises(IntegrityError):
         await _idempotent(FakeDb())(sample_event(EventType.ORDER_CONFIRMED))
+
+
+# --- lag ----------------------------------------------------------------------
+
+
+class LagConsumer:
+    """Assigned partitions with committed offsets and (low, high) watermarks."""
+
+    def __init__(self, committed: dict[tuple[str, int], int], marks: tuple[int, int]) -> None:
+        self._offsets = committed
+        self._marks = marks
+
+    def assignment(self) -> list[TopicPartition]:
+        return [TopicPartition(t, p) for t, p in self._offsets]
+
+    def committed(self, partitions: list[TopicPartition], timeout: float) -> list[TopicPartition]:
+        return [
+            TopicPartition(tp.topic, tp.partition, self._offsets[tp.topic, tp.partition])
+            for tp in partitions
+        ]
+
+    def get_watermark_offsets(self, tp: TopicPartition, timeout: float) -> tuple[int, int]:
+        return self._marks
+
+
+def _sample(name: str, labels: dict[str, str]) -> float | None:
+    return REGISTRY.get_sample_value(name, labels)
+
+
+def test_lag_is_from_committed_offsets_and_dlq_series_start_at_zero() -> None:
+    # A restarted consumer that hasn't read anything yet has no position;
+    # its committed offsets are what count. -1001: never committed.
+    consumer = LagConsumer(
+        {("order-events", 0): 140, ("order-events", 1): -1001, ("order-events.dlq", 0): -1001},
+        marks=(100, 147),
+    )
+    loop = ConsumerLoop(
+        consumer=consumer,  # type: ignore[arg-type]
+        deserialize=_deserialize,  # type: ignore[arg-type]
+        process=lambda _: asyncio.sleep(0),  # type: ignore[arg-type,return-value]
+        dlq_producer=FakeProducer(),
+        group="lag-group",
+        raw_topics=frozenset({"order-events.dlq"}),
+        process_raw=lambda _: asyncio.sleep(0),  # type: ignore[arg-type,return-value]
+    )
+    loop._record_lag()
+
+    def lag(topic: str, partition: str) -> float | None:
+        labels = {"group": "lag-group", "topic": topic, "partition": partition}
+        return _sample("kafka_consumer_lag", labels)
+
+    assert lag("order-events", "0") == 7
+    assert lag("order-events", "1") == 47  # everything still in the log
+    dead = {"group": "lag-group", "outcome": "dead_lettered"}
+    assert _sample("kafka_events_consumed_total", {**dead, "topic": "order-events"}) == 0
+    assert _sample("kafka_events_consumed_total", {**dead, "topic": "order-events.dlq"}) is None

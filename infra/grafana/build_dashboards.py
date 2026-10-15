@@ -399,9 +399,17 @@ def pipeline() -> dict[str, Any]:
                 (
                     "sum by (group, outcome) (rate(kafka_events_consumed_total[5m]))",
                     "{{group}} {{outcome}}",
-                )
+                ),
+                (
+                    "sum by (group) (rate(kafka_events_duplicates_total[5m]))",
+                    "{{group}} duplicates (already applied)",
+                ),
             ],
             unit="ops",
+            description=(
+                "Duplicates are redeliveries the consumer had already applied — "
+                "a no-op, and also counted as processed. A burst means a replay."
+            ),
         ),
         timeseries(
             lay,

@@ -36,6 +36,12 @@ logger = logging.getLogger(__name__)
 NOTIFICATION_SENDS = Counter(
     "notification_sends_total", "Notification send attempts", ["channel", "result"]
 )
+# Every series from the start, at 0, so the first failure is an increase the
+# NotificationsFailing alert can see (a series born at 1 isn't).
+for _channel in ("email", "sms"):
+    for _result in ("sent", "retry", "failed"):
+        NOTIFICATION_SENDS.labels(_channel, _result)
+NOTIFICATION_SENDS.labels("in_app", "sent")
 
 _SWEEP_BATCH = 500
 

@@ -23,6 +23,12 @@ last unit of stock, and a partial refund. Needs the second demo rider from
 seed.py. Each run uses up 3 units of one menu item (the delivered orders);
 everything else — riders, capacity, the stock changed for the race — is put
 back, and any order a failed scenario left open is cancelled.
+
+--events (docs/week3-plan.md step 6) runs one delivered and one cancelled
+order, then checks what their events caused: the customer's, restaurant's
+and rider's notifications (each once, all sent), the analytics counts, one
+Jaeger trace across >= 8 services, and the outbox backlog back to 0. Local
+stack only (reads order-db, Jaeger on :16686, Prometheus on :9090).
 """
 
 import argparse
@@ -705,6 +711,178 @@ def lifecycle(base_url: str, deep: bool) -> None:
             lc.clean_up()
 
 
+# --- Event pipeline (--events) -----------------------------------------------
+# One delivered and one cancelled order, then what the events caused
+# downstream (docs/week3-plan.md step 6): each person's notifications, the
+# analytics counts, one trace in Jaeger, and the outboxes drained. Needs the
+# local stack: it reads the trace ID from order-db and asks Jaeger and
+# Prometheus directly.
+
+JAEGER_URL = "http://localhost:16686"
+_DEAD_LETTERED = 'sum(kafka_events_consumed_total{outcome="dead_lettered"})'
+PROMETHEUS_URL = "http://localhost:9090"
+_COUNTED = ("total_orders", "confirmed", "delivered", "cancelled")
+
+
+class _Events(_Lifecycle):
+    def run(self) -> None:
+        before = self.steady_analytics()
+        dead_before = self.prometheus(_DEAD_LETTERED)
+        delivered = self.scenario("Delivered order", self.delivered_order)
+        cancelled = self.scenario("Cancelled after a rider is assigned", self.cancelled_order)
+        if not (delivered and cancelled):
+            return
+
+        section("Notifications (rows per channel, each once, all sent)")
+        for role, user, oid, channels in (
+            ("customer", self.customer, delivered, {"in_app": 5, "email": 2, "sms": 1}),
+            ("restaurant_admin", self.owner, delivered, {"in_app": 2, "sms": 1}),
+            ("rider", self.rider1, delivered, {"in_app": 2, "sms": 1}),
+            ("customer", self.customer, cancelled, {"in_app": 4, "email": 2}),
+            ("restaurant_admin", self.owner, cancelled, {"in_app": 2, "sms": 2}),
+            ("rider", self.rider1, cancelled, {"in_app": 3, "sms": 2}),
+        ):
+            self.notified(
+                role, user, oid, channels, "delivered" if oid == delivered else "cancelled"
+            )
+
+        section("Analytics")
+        expected = {"total_orders": 2, "confirmed": 2, "delivered": 1, "cancelled": 1}
+
+        def deltas() -> dict[str, int]:
+            after = self.analytics()
+            return {k: after[k] - before[k] for k in _COUNTED}
+
+        got = self.settle(deltas, lambda d: d == expected, 30)
+        check("summary counts moved by exactly these two orders", got == expected, got)
+
+        section("Tracing and metrics")
+        self.one_trace(delivered)
+        backlog = self.settle(lambda: self.prometheus("sum(outbox_backlog)"), "0".__eq__, 30)
+        check("outbox backlog back to 0 (Prometheus)", backlog == "0", backlog)
+        dead_after = self.prometheus(_DEAD_LETTERED)
+        check("nothing dead-lettered", dead_after == dead_before, (dead_before, dead_after))
+
+    @staticmethod
+    def settle[T](fn: Callable[[], T], ok: Callable[[T], bool], timeout: float) -> T:
+        """Polls until `ok` or the timeout; returns the last value either way
+        (consumers, sends and span export all lag a little)."""
+        deadline = time.monotonic() + timeout
+        value = fn()
+        while not ok(value) and time.monotonic() < deadline:
+            time.sleep(1)
+            value = fn()
+        return value
+
+    def delivered_order(self) -> str:
+        oid = self.accepted_order()
+        offer = self.offer(self.rider1)
+        self.rider_act(self.rider1, offer["delivery_id"], "accept")
+        self.wait_status(oid, "assigned")
+        self.deliver(self.rider1, oid, offer["delivery_id"])
+        check("order delivered", True)
+        return oid
+
+    def cancelled_order(self) -> str:
+        oid = self.accepted_order()
+        offer = self.offer(self.rider1)
+        self.rider_act(self.rider1, offer["delivery_id"], "accept")
+        self.wait_status(oid, "assigned")
+        self.c.post(f"/v1/orders/{oid}/cancel", headers=self.customer, json={"reason": "Late"})
+        self.wait_status(oid, "cancelled")
+        check("order cancelled", True)
+        return oid
+
+    def steady_analytics(self) -> dict[str, int]:
+        """The counts once they stop moving: the basic run's order may still
+        be on its way through the pipeline."""
+        last = [self.analytics()]
+
+        def changed() -> dict[str, int]:
+            time.sleep(3)
+            last.append(self.analytics())
+            return last[-1]
+
+        return self.settle(changed, lambda now: now == last[-2], 30)
+
+    def analytics(self) -> dict[str, int]:
+        r = self.c.get("/v1/analytics/summary", headers=self.admin)
+        r.raise_for_status()
+        return {k: r.json()["orders"][k] for k in _COUNTED}
+
+    def notified(
+        self, role: str, user: dict[str, str], oid: str, channels: dict[str, int], label: str
+    ) -> None:
+        """Every row the order's events made for this recipient, from
+        notification-db (the API lists only in-app ones): the expected
+        channels, none twice, all sent. Email/SMS fail at random
+        (NOTIFY_FAKE_FAILURE_RATE) and are retried, so this waits."""
+        who = f"{role}, {label}"
+
+        def rows() -> list[dict[str, Any]]:
+            out = compose(
+                'notification-db psql -U postgres -d notification_db -tAc "select'
+                " coalesce(json_agg(json_build_object('channel', channel, 'status', status,"
+                " 'type', type, 'content', content)), '[]') from notifications"
+                f" where related_order_id='{oid}' and recipient_role='{role}'\""
+            )
+            return json.loads(out or "[]")
+
+        def settled(got: list[dict[str, Any]]) -> bool:
+            pending = any(n["status"] == "pending" for n in got)
+            return len(got) == sum(channels.values()) and not pending
+
+        got = self.settle(rows, settled, 60)
+        by_channel: dict[str, int] = {}
+        for n in got:
+            by_channel[n["channel"]] = by_channel.get(n["channel"], 0) + 1
+        unique = {(n["type"], n["channel"], n["content"]) for n in got}
+        check(f"{who}: {by_channel}", by_channel == channels, (channels, by_channel))
+        check(f"{who}: no duplicates", len(unique) == len(got), len(got) - len(unique))
+        statuses = sorted({n["status"] for n in got})
+        check(f"{who}: all sent", statuses == ["sent"], statuses)
+        page = self.c.get("/v1/notifications", headers=user, params={"limit": 100}).json()
+        inbox = [n for n in page["items"] if n["related_order_id"] == oid]
+        check(f"{who}: in their inbox", len(inbox) == channels["in_app"], len(inbox))
+
+    def one_trace(self, oid: str) -> None:
+        traceparent = compose(
+            'order-db psql -U postgres -d order_db -tAc "select trace_context from outbox_events'
+            f" where event_type='OrderPlaced' and aggregate_id='{oid}'\""
+        )
+        check("OrderPlaced outbox row carries a traceparent", traceparent.count("-") == 3)
+        trace_id = traceparent.split("-")[1] if traceparent.count("-") == 3 else ""
+
+        def services() -> set[str]:
+            r = httpx.get(f"{JAEGER_URL}/api/v3/traces/{trace_id}", timeout=10)
+            if r.status_code != 200:
+                return set()
+            return {
+                a["value"]["stringValue"]
+                for rs in r.json()["result"]["resourceSpans"]
+                for a in rs["resource"]["attributes"]
+                if a["key"] == "service.name"
+            }
+
+        seen = self.settle(services, lambda s: len(s) >= 8, 30)
+        check(f"one trace spans >= 8 services ({len(seen)})", len(seen) >= 8, sorted(seen))
+
+    @staticmethod
+    def prometheus(query: str) -> str:
+        r = httpx.get(f"{PROMETHEUS_URL}/api/v1/query", params={"query": query}, timeout=10)
+        result = r.json()["data"]["result"]
+        return f"{float(result[0]['value'][1]):g}" if result else "none"
+
+
+def events(base_url: str) -> None:
+    with httpx.Client(base_url=base_url, timeout=15, transport=_WaitOutRateLimit()) as c:
+        ev = _Events(c, base_url, deep=True)
+        try:
+            ev.run()
+        finally:
+            ev.clean_up()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--base-url", default="http://localhost:8080")
@@ -716,11 +894,18 @@ def main() -> None:
         action="store_true",
         help="also run whole orders through the saga (about 2 minutes)",
     )
+    parser.add_argument(
+        "--events",
+        action="store_true",
+        help="also check notifications, analytics, tracing and metrics (local stack only)",
+    )
     args = parser.parse_args()
     try:
         run(args.base_url, args.deep)
         if args.lifecycle:
             lifecycle(args.base_url, args.deep)
+        if args.events:
+            events(args.base_url)
     except httpx.ConnectError:
         sys.exit(f"Can't reach {args.base_url} — is `docker compose up` running?")
     failed = [name for name, ok in _results if not ok]

@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
+from sfo_events import metrics
 from sfo_events.schemas import DomainEvent
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,7 @@ def idempotent(
     async def process(event: DomainEvent) -> None:
         async with session_factory() as session:
             if await session.get(processed_model, event.event_id) is not None:
+                metrics.EVENTS_DUPLICATE.labels(consumer).inc()
                 return
             after_commit = await handler(session, event)
             session.add(processed_model(event_id=event.event_id, consumer=consumer))
@@ -58,6 +60,7 @@ def idempotent(
                 await session.rollback()
                 if await session.get(processed_model, event.event_id) is None:
                     raise
+                metrics.EVENTS_DUPLICATE.labels(consumer).inc()
                 return
         if after_commit is not None:
             try:

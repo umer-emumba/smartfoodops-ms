@@ -80,6 +80,10 @@ class DeadLetterError(RuntimeError):
 # a dependency". By name because the registry client raises errors of a
 # vendored httpx fork, not importable as `httpx`.
 _TRANSIENT_NAMES = {"TransportError", "KafkaException"}
+# ...except these, which subclass KafkaException but mean a bad message
+# (bytes not in the Schema Registry wire format, say). An outage behind one
+# is still found, further down the `__cause__`/`__context__` chain.
+_BAD_MESSAGE_NAMES = {"SerializationError"}
 
 
 def is_transient(exc: BaseException) -> bool:
@@ -96,7 +100,8 @@ def is_transient(exc: BaseException) -> bool:
             or type(current).__name__ in ("OperationalError", "InterfaceError")
         ):
             return True
-        if {cls.__name__ for cls in type(current).__mro__} & _TRANSIENT_NAMES:
+        names = {cls.__name__ for cls in type(current).__mro__}
+        if names & _TRANSIENT_NAMES and not names & _BAD_MESSAGE_NAMES:
             return True
         status = getattr(current, "http_status_code", None)
         if isinstance(status, int) and (status >= 500 or status < 0):
@@ -258,9 +263,14 @@ class ConsumerLoop:
         return self._commit(msg, Outcome.PROCESSED)
 
     def _record_lag(self) -> None:
-        """Messages behind per assigned partition: end offset − position.
-        Blocking (asks the broker for end offsets) — run in a thread. Fakes
-        without these methods (tests) just skip it."""
+        """Messages behind per assigned partition: end offset − committed
+        offset, as `kafka-consumer-groups` reports it. Not the consumer's
+        position: that stays unset until it reads from the partition, so a
+        consumer restarted with nothing new to read would look behind by the
+        whole log. Also creates the dead-lettered series at 0 for each topic,
+        so the first dead letter is an increase an alert can see. Blocking
+        (asks the broker) — run in a thread. Fakes without these methods
+        (tests) just skip it."""
         assignment = getattr(self._consumer, "assignment", None)
         if assignment is None:
             return
@@ -268,12 +278,17 @@ class ConsumerLoop:
             partitions = assignment()
             if not partitions:
                 return
-            for tp in self._consumer.position(partitions):  # type: ignore[attr-defined]
-                _, end = self._consumer.get_watermark_offsets(tp, timeout=2)  # type: ignore[attr-defined]
-                lag = end - tp.offset if tp.offset >= 0 else end
+            for tp in self._consumer.committed(partitions, timeout=2):  # type: ignore[attr-defined]
+                low, end = self._consumer.get_watermark_offsets(tp, timeout=2)  # type: ignore[attr-defined]
+                # Nothing committed yet: everything still in the log is unread.
+                lag = end - (tp.offset if tp.offset >= 0 else low)
                 metrics.CONSUMER_LAG.labels(self._group, tp.topic, str(tp.partition)).set(
                     max(lag, 0)
                 )
+                if tp.topic not in self._raw_topics:
+                    metrics.EVENTS_CONSUMED.labels(
+                        self._group, tp.topic, Outcome.DEAD_LETTERED.value
+                    )
         except Exception:
             logger.debug("Consumer lag sample failed", exc_info=True)
 

@@ -21,6 +21,11 @@ EVENTS_CONSUMED = Counter(
     "Messages a consumer finished with, by outcome",
     ["group", "topic", "outcome"],  # processed | skipped | dead_lettered
 )
+EVENTS_DUPLICATE = Counter(
+    "kafka_events_duplicates_total",
+    "Redelivered events a consumer had already applied (a no-op; counted as processed too)",
+    ["group"],
+)
 EVENT_RETRIES = Counter(
     "kafka_event_retries_total",
     "Retries before a message was finished",

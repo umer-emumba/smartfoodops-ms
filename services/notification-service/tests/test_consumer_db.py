@@ -4,6 +4,7 @@ notification database (week3-plan W3-D4, W3-D7)."""
 import pytest
 from app.consumer import GROUP, handle
 from app.models import Notification, ProcessedEvent
+from prometheus_client import REGISTRY
 from sfo_events import EventType, idempotent
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -13,6 +14,11 @@ from tests.events import CUSTOMER, OWNER, event, order_payload, placed
 pytestmark = pytest.mark.db
 
 Factory = async_sessionmaker[AsyncSession]
+
+
+def _duplicates() -> float:
+    labels = {"group": GROUP}
+    return REGISTRY.get_sample_value("kafka_events_duplicates_total", labels) or 0.0
 
 
 async def _rows(factory: Factory) -> list[Notification]:
@@ -48,10 +54,12 @@ async def test_replayed_event_creates_no_duplicates(
     process = idempotent(session_factory, ProcessedEvent, GROUP, handle)
     ev = placed()
     await process(ev)
+    before = _duplicates()
     await process(ev)  # offsets reset, or redelivery after a crash
 
     assert len(await _rows(session_factory)) == 2  # in-app + email, once
     assert len(enqueued) == 2
+    assert _duplicates() == before + 1  # visible on the dashboard
     async with session_factory() as session:
         processed = await session.get(ProcessedEvent, ev.event_id)
     assert processed is not None and processed.consumer == GROUP
