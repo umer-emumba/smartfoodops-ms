@@ -8,7 +8,7 @@ Counters restart at zero with the process, which Prometheus' rate() and
 increase() handle.
 
 Label values are bounded: reasons are normalized to known codes
-(`reason_label`), so free-text cancellation reasons can't explode the
+(sfo_events.reasons), so free-text cancellation reasons can't explode the
 series count. `restaurant_id` grows with the number of restaurants —
 fine at this scale; aggregate it away at scale."""
 
@@ -37,31 +37,3 @@ RIDER_SHIFT_CHANGES = Counter(
 DEAD_LETTERED = Counter(
     "dead_lettered_events_total", "Messages consumers moved to a DLQ", ["topic", "consumer_group"]
 )
-
-KNOWN_REASONS = frozenset(
-    {
-        "out_of_stock",
-        "restaurant_at_capacity",
-        "restaurant_unavailable",
-        "promotion_invalid",
-        "payment_declined",
-        "restaurant_timeout",
-        "restaurant_rejected",
-        "no_rider_available",
-        "system_error",
-    }
-)
-
-
-def reason_code(reason: str | None) -> str | None:
-    """`restaurant_rejected: kitchen closed` → `restaurant_rejected`."""
-    return reason.split(":", 1)[0].strip() if reason else None
-
-
-def reason_label(reason: str | None) -> str:
-    code = reason_code(reason)
-    if code is None:
-        return ""
-    if code in KNOWN_REASONS or code.startswith("cancelled_by_"):
-        return code
-    return "other"  # free text from whoever cancelled

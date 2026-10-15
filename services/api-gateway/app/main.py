@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from sfo_common import create_app
 from sfo_common.health import add_health_routes
-from sfo_observability import configure_logging, instrument_fastapi
+from sfo_observability import configure_logging, instrument_fastapi, instrument_metrics
 
 from app import auth_routes, docs, proxy
 from app.config import settings
@@ -41,6 +41,7 @@ app = create_app(
 app.add_middleware(QueryTokenMiddleware)
 
 instrument_fastapi(app)
+instrument_metrics(app)
 app.include_router(auth_routes.router)
 app.include_router(docs.router)
 app.include_router(proxy.router)

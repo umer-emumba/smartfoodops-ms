@@ -37,6 +37,7 @@ from sfo_events.payloads import (
     RefundProcessedPayload,
     RiderShiftChangedPayload,
 )
+from sfo_events.reasons import reason_code, reason_label
 
 from app import business_metrics as m
 from app.mongo import FAILED_EVENTS, ORDER_FACTS, RIDER_SHIFT_FACTS
@@ -92,9 +93,9 @@ async def _order_event(
         # carry the final one.
         fields["total_amount"] = _decimal(p.total_amount)
         if event.event_type == EventType.ORDER_REJECTED:
-            fields["reject_reason"] = m.reason_code(p.reason)
+            fields["reject_reason"] = reason_code(p.reason)
         elif event.event_type == EventType.ORDER_CANCELLED:
-            fields["cancel_reason"] = m.reason_code(p.reason)
+            fields["cancel_reason"] = reason_code(p.reason)
             fields["cancelled_from"] = p.from_status
     before = await _upsert(db, ORDER_FACTS, p.order_id, {"$set": fields, "$min": {milestone: at}})
     if not _is_new(before, milestone):
@@ -107,13 +108,13 @@ async def _order_event(
     elif event.event_type == EventType.ORDER_CONFIRMED:
         m.RESTAURANT_RESPONSES.labels(restaurant, "accepted").inc()
     elif event.event_type == EventType.ORDER_REJECTED:
-        m.ORDER_OUTCOMES.labels("rejected", m.reason_label(reason)).inc()
-        code = m.reason_code(reason)
+        m.ORDER_OUTCOMES.labels("rejected", reason_label(reason)).inc()
+        code = reason_code(reason)
         if code in RESTAURANT_REJECTIONS:
             response = "timeout" if code == "restaurant_timeout" else "rejected"
             m.RESTAURANT_RESPONSES.labels(restaurant, response).inc()
     elif event.event_type == EventType.ORDER_CANCELLED:
-        m.ORDER_OUTCOMES.labels("cancelled", m.reason_label(reason)).inc()
+        m.ORDER_OUTCOMES.labels("cancelled", reason_label(reason)).inc()
     elif event.event_type == EventType.ORDER_DELIVERED:
         m.ORDER_OUTCOMES.labels("delivered", "").inc()
         placed_at = before.get("placed_at") if before else None

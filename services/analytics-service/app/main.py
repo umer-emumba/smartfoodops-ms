@@ -2,10 +2,9 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from prometheus_client import make_asgi_app
 from sfo_common import create_app
 from sfo_common.health import add_health_routes
-from sfo_observability import configure_logging, instrument_fastapi
+from sfo_observability import configure_logging, instrument_fastapi, instrument_metrics
 
 from app import mongo
 from app.api.routes import router
@@ -43,9 +42,7 @@ app = create_app(
 )
 
 instrument_fastapi(app)
+instrument_metrics(app)
 app.include_router(router)
-# Prometheus scrapes this on the container network; api-gateway only proxies
-# /v1/{resource}, so it isn't reachable from outside.
-app.mount("/metrics", make_asgi_app())
 
 add_health_routes(app, readiness_check=mongo.check_ready)

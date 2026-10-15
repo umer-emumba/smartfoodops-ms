@@ -11,6 +11,7 @@ runs them as their own process (`run_standalone`, via
 import asyncio
 import contextlib
 import logging
+import os
 import signal
 from collections.abc import AsyncIterator, Callable, Coroutine, Sequence
 from dataclasses import dataclass
@@ -23,6 +24,7 @@ from temporalio import activity
 from temporalio.client import Client
 from temporalio.contrib.opentelemetry import TracingInterceptor
 from temporalio.contrib.pydantic import pydantic_data_converter
+from temporalio.runtime import PrometheusConfig, Runtime, TelemetryConfig
 from temporalio.service import RPCError, RPCStatusCode
 from temporalio.worker import Worker
 from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner, SandboxRestrictions
@@ -68,6 +70,28 @@ _WORKFLOW_RUNNER = SandboxedWorkflowRunner(
 # tracing is off (no tracer provider set).
 _INTERCEPTORS = [TracingInterceptor()]
 
+_runtime: Runtime | None = None
+
+
+def _runtime_kwargs() -> dict[str, Any]:
+    """With TEMPORAL_METRICS_PORT set (docker compose: 9101), the SDK's own
+    metrics — workflow/activity task latency, activity failures, poll and
+    schedule-to-start times — are served for Prometheus on that port. One
+    runtime per process, shared by every client in it (the port can only be
+    bound once)."""
+    global _runtime
+    port = os.environ.get("TEMPORAL_METRICS_PORT")
+    if not port:
+        return {}
+    if _runtime is None:
+        _runtime = Runtime(
+            telemetry=TelemetryConfig(
+                metrics=PrometheusConfig(bind_address=f"0.0.0.0:{port}", durations_as_seconds=True)
+            )
+        )
+    return {"runtime": _runtime}
+
+
 _CONNECT_RETRY_MAX_DELAY_SECONDS = 10.0
 _EMBEDDED_RESTART_DELAY_SECONDS = 5.0
 
@@ -98,6 +122,7 @@ async def connect_client(address: str, *, namespace: str = "default") -> Client:
                 namespace=namespace,
                 data_converter=DATA_CONVERTER,
                 interceptors=_INTERCEPTORS,
+                **_runtime_kwargs(),
             )
         except Exception as exc:
             _logger.warning(
@@ -118,6 +143,7 @@ async def lazy_client(settings: TemporalSettings) -> Client:
         data_converter=DATA_CONVERTER,
         interceptors=_INTERCEPTORS,
         lazy=True,
+        **_runtime_kwargs(),
     )
 
 

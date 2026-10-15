@@ -1,4 +1,5 @@
 from sfo_observability.logging import configure_logging
+from sfo_observability.metrics import instrument_celery_metrics, instrument_metrics
 from sfo_observability.tracing import (
     instrument_celery,
     instrument_engine,
@@ -9,6 +10,8 @@ from sfo_observability.tracing import (
 
 __all__ = [
     "configure_logging",
+    "instrument_celery_metrics",
+    "instrument_metrics",
     "instrument_celery",
     "instrument_engine",
     "instrument_fastapi",

@@ -23,6 +23,7 @@ poll → deserialize → process(event) → commit offset
 import asyncio
 import logging
 import signal
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from enum import StrEnum
@@ -32,11 +33,14 @@ from confluent_kafka import KafkaError, Message, TopicPartition
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
+from sfo_events import metrics
 from sfo_events.kafka import Headers, dlq_headers, header_value
 from sfo_events.schemas import DomainEvent, EventType, dlq_topic
 from sfo_events.tracing import process_span
 
 logger = logging.getLogger(__name__)
+
+_LAG_SAMPLE_SECONDS = 15.0
 
 Process = Callable[[DomainEvent], Awaitable[None]]
 # For topics whose messages aren't events to deserialize — the DLQs.
@@ -158,8 +162,13 @@ class ConsumerLoop:
         (outage, failed DLQ publish or commit) is rewound to and retried
         after a backoff that grows to `max_outage_backoff_seconds`."""
         delay = self._backoff
+        next_lag_sample = 0.0
         while not stop.is_set():
             msg = await asyncio.to_thread(self._consumer.poll, self._poll_timeout)
+            now = time.monotonic()
+            if now >= next_lag_sample:
+                next_lag_sample = now + _LAG_SAMPLE_SECONDS
+                await asyncio.to_thread(self._record_lag)
             if msg is None:
                 continue
             try:
@@ -175,6 +184,7 @@ class ConsumerLoop:
                     exc,
                 )
                 self._rewind(msg)
+                metrics.EVENT_RETRIES.labels(self._group, msg.topic() or "", "outage").inc()
                 await self._sleep(delay)
                 delay = min(delay * 2, self._max_outage_backoff)
 
@@ -229,6 +239,7 @@ class ConsumerLoop:
                     delay,
                     exc,
                 )
+                metrics.EVENT_RETRIES.labels(self._group, msg.topic() or "", "handler").inc()
                 await self._sleep(delay)
                 delay *= 2
         raise AssertionError("unreachable")
@@ -246,6 +257,26 @@ class ConsumerLoop:
             return self._commit(msg, Outcome.SKIPPED)
         return self._commit(msg, Outcome.PROCESSED)
 
+    def _record_lag(self) -> None:
+        """Messages behind per assigned partition: end offset − position.
+        Blocking (asks the broker for end offsets) — run in a thread. Fakes
+        without these methods (tests) just skip it."""
+        assignment = getattr(self._consumer, "assignment", None)
+        if assignment is None:
+            return
+        try:
+            partitions = assignment()
+            if not partitions:
+                return
+            for tp in self._consumer.position(partitions):  # type: ignore[attr-defined]
+                _, end = self._consumer.get_watermark_offsets(tp, timeout=2)  # type: ignore[attr-defined]
+                lag = end - tp.offset if tp.offset >= 0 else end
+                metrics.CONSUMER_LAG.labels(self._group, tp.topic, str(tp.partition)).set(
+                    max(lag, 0)
+                )
+        except Exception:
+            logger.debug("Consumer lag sample failed", exc_info=True)
+
     def _rewind(self, msg: Message) -> None:
         """Next poll returns `msg` again (the consumer's position had moved
         past it; its committed offset never did)."""
@@ -255,6 +286,7 @@ class ConsumerLoop:
 
     def _commit(self, msg: Message, outcome: Outcome) -> Outcome:
         self._consumer.commit(message=msg, asynchronous=False)
+        metrics.EVENTS_CONSUMED.labels(self._group, msg.topic() or "", outcome.value).inc()
         return outcome
 
     def _dead_letter(self, msg: Message, error: BaseException, *, attempts: int) -> None:

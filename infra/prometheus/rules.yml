@@ -1,0 +1,56 @@
+# Alerts (docs/week3-plan.md step 5). Shown in Prometheus (Alerts tab) and
+# on the Grafana dashboards; routing them to people (Alertmanager) is out
+# of scope for Part A.
+groups:
+  - name: smartfoodops
+    rules:
+      - alert: OutboxLagging
+        # Events written but not on Kafka for over 30s: Kafka or the relay
+        # worker is down, or a row can't be published (outbox last_error).
+        expr: max by (service) (outbox_oldest_age_seconds) > 30
+        for: 1m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.service }}: oldest unpublished event is {{ $value | humanizeDuration }} old"
+
+      - alert: EventsDeadLettered
+        expr: sum by (group, topic) (increase(kafka_events_consumed_total{outcome="dead_lettered"}[5m])) > 0
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.group }} dead-lettered messages from {{ $labels.topic }}"
+
+      - alert: ConsumerLagging
+        expr: max by (group) (kafka_consumer_lag) > 100
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.group }} is {{ $value }} messages behind"
+
+      - alert: HighErrorRate
+        expr: |
+          sum by (service) (rate(http_requests_total{status=~"5.."}[5m]))
+            / sum by (service) (rate(http_requests_total[5m])) > 0.01
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "{{ $labels.service }}: {{ $value | humanizePercentage }} of requests fail with 5xx"
+
+      - alert: SagaSystemErrors
+        # An order ended because retries ran out on an infrastructure error.
+        expr: sum(increase(saga_outcomes_total{reason="system_error"}[15m])) > 0
+        labels: { severity: critical }
+        annotations:
+          summary: "Order sagas ended with system_error in the last 15 minutes"
+
+      - alert: NotificationsFailing
+        expr: sum by (channel) (increase(notification_sends_total{result="failed"}[15m])) > 0
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.channel }} notifications failed for good in the last 15 minutes"
+
+      - alert: TargetDown
+        expr: up == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "{{ $labels.service }} ({{ $labels.job }}) isn't serving metrics"

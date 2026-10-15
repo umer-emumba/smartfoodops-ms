@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from sfo_common import create_app
 from sfo_common.db import check_db_ready
 from sfo_common.health import add_health_routes
-from sfo_observability import configure_logging, instrument_fastapi
+from sfo_observability import configure_logging, instrument_fastapi, instrument_metrics
 
 from app.api.routes import router
 from app.config import settings
@@ -33,6 +33,7 @@ app = create_app(
 )
 
 instrument_fastapi(app)
+instrument_metrics(app)
 app.include_router(router)
 
 

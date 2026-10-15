@@ -1,0 +1,52 @@
+// Ships every smartfoodops container's logs to Loki (docs/week3-plan.md
+// W3-D13). Reads them through the Docker socket (mounted read-only — local
+// development only; in Kubernetes a node agent tails pod logs instead).
+
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+}
+
+discovery.relabel "containers" {
+  targets = discovery.docker.containers.targets
+
+  // Only this compose project's containers.
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    regex         = "smartfoodops"
+    action        = "keep"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+}
+
+loki.source.docker "containers" {
+  host          = "unix:///var/run/docker.sock"
+  targets       = discovery.relabel.containers.output
+  relabel_rules = discovery.relabel.containers.rules
+  forward_to    = [loki.process.app_json.receiver]
+}
+
+// The app services log JSON (sfo_observability.logging): `level` becomes a
+// label (few values); `trace_id` is kept as structured metadata, not a
+// label (one value per request would explode Loki's index). Grafana turns
+// it into a link to the trace. Other containers' plain lines pass through.
+loki.process "app_json" {
+  stage.json {
+    expressions = { level = "level", trace_id = "trace_id" }
+  }
+  stage.labels {
+    values = { level = "" }
+  }
+  stage.structured_metadata {
+    values = { trace_id = "" }
+  }
+  forward_to = [loki.write.local.receiver]
+}
+
+loki.write "local" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

@@ -14,15 +14,20 @@ x-logging: &default-logging
 # beat) instead of the API. They start after their service is healthy, i.e.
 # after its migrations ran. Dev-only broker credentials, like the Postgres
 # ones below.
-# Tracing (docs/week3-plan.md W3-D11): every service and worker sends spans
-# over OTLP/HTTP straight to Jaeger. Sample everything in dev.
-x-otel-env: &otel-env
+# Observability (docs/week3-plan.md W3-D11, W3-D14): every service and
+# worker sends spans over OTLP/HTTP straight to Jaeger (sampling everything
+# in dev) and serves Prometheus metrics on an internal port — 9100, plus
+# 9101 for the Temporal SDK's where a Temporal worker runs. Neither port is
+# published.
+x-observability-env: &observability-env
   OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
   OTEL_TRACES_SAMPLER: parentbased_traceidratio
   OTEL_TRACES_SAMPLER_ARG: "1.0"
+  METRICS_PORT: "9100"
+  TEMPORAL_METRICS_PORT: "9101"
 
 x-broker-env: &broker-env
-  <<: *otel-env
+  <<: *observability-env
   CELERY_BROKER_URL: amqp://sfo:sfo@rabbitmq:5672//
 
 x-celery-worker: &celery-worker
@@ -243,6 +248,58 @@ services:
     image: jaegertracing/jaeger:2.22.0
     ports: ["127.0.0.1:16686:16686"]
 
+  # Metrics, dashboards and logs (docs/week3-plan.md step 5). UIs on
+  # localhost only: Prometheus :9090, Grafana :3001 (anonymous read-only
+  # viewer in dev; admin/admin to edit). Loki and Alloy stay internal.
+  prometheus:
+    logging: *default-logging
+    image: prom/prometheus:v3.15.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+    volumes:
+      - ./infra/prometheus:/etc/prometheus:ro
+      - prometheus-data:/prometheus
+    ports: ["127.0.0.1:9090:9090"]
+
+  loki:
+    logging: *default-logging
+    # Single-binary mode with the image's own local config (filesystem
+    # storage, schema v13 — structured metadata for trace_id).
+    image: grafana/loki:3.7.8
+    volumes: ["loki-data:/loki"]
+
+  # Ships every container's logs to Loki (infra/alloy/config.alloy). The
+  # Docker socket is mounted read-only — local development only.
+  alloy:
+    logging: *default-logging
+    image: grafana/alloy:v1.20.1
+    command:
+      - run
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./infra/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on: [loki]
+
+  grafana:
+    logging: *default-logging
+    image: grafana/grafana:13.2.4
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/service-overview.json
+      GF_FEATURE_TOGGLES_ENABLE: jaegerEnableGrpcEndpoint
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    # 3001 on the host: 3000 is the demo UI's static server (demo-ui/).
+    ports: ["127.0.0.1:3001:3000"]
+    depends_on: [prometheus, loki, jaeger]
+
   temporal:
     logging: *default-logging
     # Temporal CLI dev server — Temporal's recommended local setup, replacing the
@@ -257,6 +314,8 @@ services:
       - --ip=0.0.0.0
       - --ui-ip=0.0.0.0
       - --db-filename=/home/temporal/temporal.db
+      # Server metrics for Prometheus (internal network only).
+      - --metrics-port=9100
     # Mounted on the image's own temporal-owned home dir: the container runs as
     # the non-root `temporal` user, and a fresh named volume takes the
     # ownership of the directory it's mounted over (a new /data would be
@@ -278,7 +337,7 @@ services:
     logging: *default-logging
     build: { context: ., dockerfile: services/api-gateway/Dockerfile }
     env_file: [services/api-gateway/.env]
-    environment: *otel-env
+    environment: *observability-env
     depends_on:
       redis: { condition: service_healthy }
     ports: ["127.0.0.1:8080:8000"]
@@ -292,7 +351,7 @@ services:
     logging: *default-logging
     build: { context: ., dockerfile: services/user-service/Dockerfile }
     env_file: [services/user-service/.env]
-    environment: *otel-env
+    environment: *observability-env
     depends_on:
       user-db: { condition: service_healthy }
       redis: { condition: service_healthy }
@@ -306,7 +365,7 @@ services:
     logging: *default-logging
     build: { context: ., dockerfile: services/restaurant-service/Dockerfile }
     env_file: [services/restaurant-service/.env]
-    environment: *otel-env
+    environment: *observability-env
     depends_on:
       restaurant-db: { condition: service_healthy }
       # Public-read cache (app/cache.py). Not strictly required — a Redis
@@ -323,7 +382,7 @@ services:
     logging: *default-logging
     build: { context: ., dockerfile: services/order-service/Dockerfile }
     env_file: [services/order-service/.env]
-    environment: *otel-env
+    environment: *observability-env
     depends_on:
       order-db: { condition: service_healthy }
       temporal: { condition: service_healthy }
@@ -337,7 +396,7 @@ services:
     logging: *default-logging
     build: { context: ., dockerfile: services/delivery-service/Dockerfile }
     env_file: [services/delivery-service/.env]
-    environment: *otel-env
+    environment: *observability-env
     depends_on:
       delivery-db: { condition: service_healthy }
       mongo: { condition: service_healthy }
@@ -352,7 +411,7 @@ services:
     logging: *default-logging
     build: { context: ., dockerfile: services/payment-service/Dockerfile }
     env_file: [services/payment-service/.env]
-    environment: *otel-env
+    environment: *observability-env
     depends_on:
       payment-db: { condition: service_healthy }
       temporal: { condition: service_healthy }
@@ -410,7 +469,7 @@ services:
     logging: *default-logging
     build: { context: ., dockerfile: services/tracking-service/Dockerfile }
     env_file: [services/tracking-service/.env]
-    environment: *otel-env
+    environment: *observability-env
     depends_on:
       redis: { condition: service_healthy }
     healthcheck:
@@ -443,7 +502,7 @@ services:
     logging: *default-logging
     build: { context: ., dockerfile: services/analytics-service/Dockerfile }
     env_file: [services/analytics-service/.env]
-    environment: *otel-env
+    environment: *observability-env
     depends_on:
       mongo: { condition: service_healthy }
       schema-registry: { condition: service_healthy }
@@ -477,3 +536,6 @@ volumes:
   redis-data:
   mongo-data:
   kafka-data:
+  prometheus-data:
+  loki-data:
+  grafana-data:

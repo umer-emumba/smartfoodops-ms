@@ -9,6 +9,7 @@ dependencies = [
     "confluent-kafka[json,schemaregistry]>=2.6",
     "opentelemetry-api>=1.45.1",
     "opentelemetry-instrumentation>=0.66b1",
+    "prometheus-client>=0.21",
 ]
 
 [project.optional-dependencies]

@@ -4,7 +4,7 @@ API; run as the `payment-worker` container (command in docker-compose.yml)."""
 
 from sfo_common.celery import make_celery_app
 from sfo_events.relay import OutboxRelay, register_relay_tasks
-from sfo_observability import configure_logging
+from sfo_observability import configure_logging, instrument_celery_metrics
 
 from app.config import settings
 from app.db import SessionFactory
@@ -15,6 +15,8 @@ app = make_celery_app(
     settings.celery_broker_url,
     configure_logging=lambda: configure_logging(settings.service_name, settings.log_level),
 )
+# Task outcomes and durations; serves the worker's metrics port.
+instrument_celery_metrics()
 register_relay_tasks(
     app,
     OutboxRelay(

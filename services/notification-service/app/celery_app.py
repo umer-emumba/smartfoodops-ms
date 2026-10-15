@@ -4,7 +4,7 @@ tasks in app/tasks.py. The API process only enqueues — by task name, via
 `enqueue_sends` — and never imports the tasks."""
 
 from sfo_common.celery import make_celery_app
-from sfo_observability import configure_logging, instrument_celery
+from sfo_observability import configure_logging, instrument_celery, instrument_celery_metrics
 
 from app.config import settings
 
@@ -16,6 +16,8 @@ app = make_celery_app(
     settings.celery_broker_url,
     configure_logging=lambda: configure_logging(settings.service_name, settings.log_level),
 )
+# Task outcomes and durations; serves the worker's metrics port.
+instrument_celery_metrics()
 app.conf.include = ["app.tasks"]
 # Enqueue (API process) → send (worker) in the event's trace.
 instrument_celery()

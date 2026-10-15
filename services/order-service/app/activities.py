@@ -15,13 +15,15 @@ from sfo_contracts.activities import (
     TransitionOrderInput,
     TransitionOrderResult,
 )
+from sfo_events.reasons import reason_label
 from sqlalchemy.ext.asyncio import AsyncSession
 from temporalio import activity
 
 from app import repository, tracking
 from app.db import SessionFactory
+from app.metrics import SAGA_OUTCOMES
 from app.models import Order, OrderStatus, OrderStatusHistory
-from app.state_machine import can_transition
+from app.state_machine import TERMINAL, can_transition
 
 _CENTS = Decimal("0.01")
 
@@ -59,6 +61,8 @@ async def transition_order(data: TransitionOrderInput) -> TransitionOrderResult:
             reason=data.reason,
         )
         await session.commit()
+        if to_status in TERMINAL:
+            SAGA_OUTCOMES.labels(to_status.value, reason_label(data.reason)).inc()
         await tracking.publish_status(order)
         return TransitionOrderResult(status=order.status, changed=True)
 

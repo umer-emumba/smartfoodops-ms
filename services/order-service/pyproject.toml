@@ -10,6 +10,7 @@ dependencies = [
     "alembic>=1.13",
     "httpx>=0.27",
     "redis>=5.0",
+    "prometheus-client>=0.21",
     "temporalio>=1.34",
     "sfo-common[temporal]",
     "sfo-contracts",

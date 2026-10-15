@@ -32,9 +32,10 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from confluent_kafka import KafkaError, Message, Producer
-from sqlalchemy import delete, select, text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sfo_events import metrics
 from sfo_events.kafka import EventSerializer, event_headers, make_producer, make_registry_client
 from sfo_events.schemas import EVENT_TOPICS, DomainEvent, EventType
 from sfo_events.tracing import current_traceparent, publish_span, quiet
@@ -115,7 +116,28 @@ class OutboxRelay:
         would start a trace each time; each published row gets a span in
         the trace that wrote it instead."""
         with quiet():
-            return await self._relay_once()
+            result = await self._relay_once()
+            if not result.locked_out:
+                await self._record_backlog()
+        metrics.OUTBOX_PUBLISHED.inc(result.published)
+        metrics.OUTBOX_PUBLISH_FAILURES.inc(result.failed)
+        return result
+
+    async def _record_backlog(self) -> None:
+        """What's still waiting after this tick — the outbox-lag alert's
+        input (cheap: the partial index on undispatched rows)."""
+        model = self._model
+        async with self._session_factory() as session:
+            count, oldest = (
+                await session.execute(
+                    select(func.count(), func.min(model.created_at)).where(
+                        model.dispatched_at.is_(None)
+                    )
+                )
+            ).one()
+        metrics.OUTBOX_BACKLOG.set(count)
+        age = (datetime.now(UTC) - oldest).total_seconds() if oldest is not None else 0.0
+        metrics.OUTBOX_OLDEST_AGE.set(max(age, 0.0))
 
     async def _relay_once(self) -> RelayResult:
         producer, serializer = self._connect()

@@ -24,6 +24,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
+from prometheus_client import Gauge
 from sfo_auth import CurrentUser, Role
 from sfo_common.errors import ForbiddenError, NotFoundError
 
@@ -31,6 +32,8 @@ from app import sse, state
 from app.auth_deps import get_current_user
 from app.config import settings
 from app.hub import hub
+
+ACTIVE_STREAMS = Gauge("tracking_active_streams", "Open live-tracking streams", ["feed"])
 
 router = APIRouter(prefix="/v1/tracking", tags=["tracking"])
 
@@ -60,6 +63,8 @@ async def _stream(
     Unsubscribes however the stream ends — including the client
     disconnecting, which cancels this generator."""
     subscription = await hub.subscribe(channel)
+    feed = channel.split(":")[1]  # tracking:order:{id} / tracking:restaurant:{id}
+    ACTIVE_STREAMS.labels(feed).inc()
     try:
         first = await snapshot()
         yield sse.event("snapshot", first)
@@ -78,6 +83,7 @@ async def _stream(
             if ends(message):
                 return
     finally:
+        ACTIVE_STREAMS.labels(feed).dec()
         await hub.unsubscribe(subscription)
 
 

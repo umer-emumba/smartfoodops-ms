@@ -1,7 +1,7 @@
 import pytest
-from app.business_metrics import reason_code, reason_label
 from app.main import app
 from httpx import ASGITransport, AsyncClient
+from sfo_events.reasons import reason_code, reason_label
 
 
 async def test_health_reports_status() -> None:

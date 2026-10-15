@@ -19,6 +19,7 @@ import random
 from datetime import UTC, datetime, timedelta
 
 from celery import Task
+from prometheus_client import Counter
 from sfo_common.celery import run_async
 from sqlalchemy import func, select
 
@@ -29,6 +30,12 @@ from app.db import SessionFactory
 from app.models import Notification
 
 logger = logging.getLogger(__name__)
+
+# Each send attempt's result, by channel: sent, retry (will be tried again)
+# or failed (gave up after notify_max_attempts).
+NOTIFICATION_SENDS = Counter(
+    "notification_sends_total", "Notification send attempts", ["channel", "result"]
+)
 
 _SWEEP_BATCH = 500
 
@@ -63,6 +70,7 @@ async def deliver(notification_id: str) -> float | None:
             notification.last_error = str(exc)[:1000]
             if notification.retry_count >= settings.notify_max_attempts:
                 notification.status = "failed"
+                NOTIFICATION_SENDS.labels(notification.channel, "failed").inc()
                 logger.error(
                     "Notification %s (%s) failed after %d attempts: %s",
                     notification.id,
@@ -72,9 +80,11 @@ async def deliver(notification_id: str) -> float | None:
                 )
             else:
                 delay = retry_delay(notification.retry_count)
+                NOTIFICATION_SENDS.labels(notification.channel, "retry").inc()
         else:
             notification.status = "sent"
             notification.sent_at = now
+            NOTIFICATION_SENDS.labels(notification.channel, "sent").inc()
         await session.commit()
         return delay
 
