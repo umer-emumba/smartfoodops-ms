@@ -45,3 +45,20 @@ class TemporalSettings(BaseSettings):
     # `python -m app.worker` as its own process from the same image
     # (production — API and workers get their own CPU and scale separately).
     temporal_worker_mode: Literal["embedded", "standalone"] = "embedded"
+
+
+class OutboxRelaySettings(BaseSettings):
+    """Mixed into the Settings of services whose Celery worker relays their
+    outbox to Kafka (order, payment, delivery) — see sfo_events.relay and
+    docs/week3-plan.md W3-D1/W3-D2."""
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    kafka_bootstrap_servers: str = "kafka:9092"
+    schema_registry_url: str = "http://schema-registry:8081"
+    # Only the worker needs it (the API never talks to RabbitMQ); compose
+    # sets it on the worker containers.
+    celery_broker_url: str = ""
+    outbox_relay_interval_seconds: float = 1.0
+    outbox_relay_batch_size: int = 200
+    outbox_retention_days: int = 7

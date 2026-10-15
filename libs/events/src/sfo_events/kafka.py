@@ -39,7 +39,8 @@ HEADER_DLQ_ERROR_TYPE = "dlq.error.type"
 HEADER_DLQ_ERROR = "dlq.error.message"
 HEADER_DLQ_ATTEMPTS = "dlq.attempts"
 
-Headers = list[tuple[str, bytes]]
+# confluent-kafka's header type (values may be str, bytes or None).
+Headers = list[tuple[str, str | bytes | None]]
 
 
 def make_producer(bootstrap_servers: str, **overrides: Any) -> Producer:
@@ -133,7 +134,7 @@ class EventDeserializer:
 
 
 def event_headers(event: DomainEvent) -> Headers:
-    headers = [
+    headers: Headers = [
         (HEADER_EVENT_ID, event.event_id.encode()),
         (HEADER_EVENT_TYPE, event.event_type.value.encode()),
     ]
@@ -147,7 +148,7 @@ def header_value(headers: Headers | None, name: str) -> str | None:
     value = None
     for key, raw in headers or []:
         if key == name and raw is not None:
-            value = raw.decode(errors="replace")
+            value = raw if isinstance(raw, str) else raw.decode(errors="replace")
     return value
 
 

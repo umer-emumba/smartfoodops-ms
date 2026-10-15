@@ -13,7 +13,7 @@ dependencies = [
     "sfo-common[temporal]",
     "sfo-contracts",
     "sfo-auth",
-    "sfo-events",
+    "sfo-events[relay]",
     "sfo-observability",
 ]
 

@@ -9,6 +9,26 @@ x-logging: &default-logging
     max-size: "10m"
     max-file: "3"
 
+# Outbox relay workers (docs/week3-plan.md W3-D1): the service's own image,
+# running Celery (worker + beat) instead of the API. They start after their
+# service is healthy, i.e. after its migrations ran. Dev-only broker
+# credentials, like the Postgres ones below.
+x-outbox-worker: &outbox-worker
+  logging: *default-logging
+  command:
+    - celery
+    - -A
+    - app.celery_app
+    - worker
+    - --beat
+    - --pool=solo
+    # Both rely on remote control, which is off (sfo_common.celery).
+    - --without-mingle
+    - --without-gossip
+    - --loglevel=INFO
+  environment:
+    CELERY_BROKER_URL: amqp://sfo:sfo@rabbitmq:5672//
+
 x-postgres-common: &postgres-common
   logging: *default-logging
   image: postgres:16-alpine
@@ -109,6 +129,11 @@ services:
     # 4.3: the community-supported series (3.13 is commercial-support only).
     # Pinned to a patch so builds are reproducible.
     image: rabbitmq:4.3.6-management-alpine
+    # The default `guest` user may only connect from localhost, so the
+    # workers get their own (dev-only) user.
+    environment:
+      RABBITMQ_DEFAULT_USER: sfo
+      RABBITMQ_DEFAULT_PASS: sfo
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 5s
@@ -306,6 +331,39 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  order-worker:
+    <<: *outbox-worker
+    build: { context: ., dockerfile: services/order-service/Dockerfile }
+    env_file: [services/order-service/.env]
+    depends_on:
+      order-service: { condition: service_healthy }
+      order-db: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      schema-registry: { condition: service_healthy }
+      kafka-init: { condition: service_completed_successfully }
+
+  payment-worker:
+    <<: *outbox-worker
+    build: { context: ., dockerfile: services/payment-service/Dockerfile }
+    env_file: [services/payment-service/.env]
+    depends_on:
+      payment-service: { condition: service_healthy }
+      payment-db: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      schema-registry: { condition: service_healthy }
+      kafka-init: { condition: service_completed_successfully }
+
+  delivery-worker:
+    <<: *outbox-worker
+    build: { context: ., dockerfile: services/delivery-service/Dockerfile }
+    env_file: [services/delivery-service/.env]
+    depends_on:
+      delivery-service: { condition: service_healthy }
+      delivery-db: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      schema-registry: { condition: service_healthy }
+      kafka-init: { condition: service_completed_successfully }
 
   # Live feeds over SSE (docs/week2-plan.md D8): stateless, talks only to
   # Redis — no database. Long-lived connections stay off the REST services.

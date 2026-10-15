@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sfo_common import new_id
-from sqlalchemy import JSON, DateTime, String
+from sqlalchemy import JSON, DateTime, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from sfo_events.payloads import validate_payload
@@ -28,6 +28,13 @@ class OutboxEventMixin:
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     dispatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # W3C `traceparent` of the writing request/activity, carried to Kafka
+    # headers so consumers continue the trace (filled from Week 3 step 4).
+    trace_context: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Failed relay attempts and the latest error — a row that keeps failing
+    # is visible here (and in the outbox-age alert) instead of only in logs.
+    publish_attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    last_error: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 def new_outbox_row[T](

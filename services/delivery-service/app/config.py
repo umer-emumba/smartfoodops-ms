@@ -1,8 +1,8 @@
 from sfo_common import BaseServiceSettings
-from sfo_common.config import TemporalSettings
+from sfo_common.config import OutboxRelaySettings, TemporalSettings
 
 
-class Settings(BaseServiceSettings, TemporalSettings):
+class Settings(BaseServiceSettings, TemporalSettings, OutboxRelaySettings):
     mongo_url: str = "mongodb://mongo:27017"
 
     # Rider assignment (docs/week2-plan.md §7, D6). Placeholders like the

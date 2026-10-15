@@ -9,6 +9,10 @@ dependencies = [
     "confluent-kafka[json,schemaregistry]>=2.6",
 ]
 
+[project.optional-dependencies]
+# sfo_events.relay's Celery tasks — only the services that relay an outbox.
+relay = ["sfo-common[celery]"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
