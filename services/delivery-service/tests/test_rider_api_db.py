@@ -15,7 +15,7 @@ from sfo_contracts.activities import TransitionDeliveryInput
 from sfo_contracts.workflows import RiderDropped, RiderResponse
 
 from tests.conftest import Env
-from tests.helpers import CUSTOMER, add_rider, assigned, km_north, offered
+from tests.helpers import CUSTOMER, add_rider, assigned, km_north, offered, outbox_payloads
 
 pytestmark = pytest.mark.db
 
@@ -106,6 +106,24 @@ async def test_status_change_updates_the_pool_but_not_mid_delivery(
     await offered(env)
     resp = await client.patch("/v1/riders/me/status", json={"status": "offline"}, headers=me)
     assert resp.status_code == 409
+    # Off and back on shift; the offer's available → busy isn't a shift change.
+    shifts = await outbox_payloads(env, "RiderShiftChanged")
+    assert [(s["to_status"], s["on_shift"], s["reason"]) for s in shifts] == [
+        ("offline", False, "rider"),
+        ("available", True, "rider"),
+    ]
+
+
+async def test_suspension_ends_the_shift(env: Env, client: AsyncClient) -> None:
+    await add_rider(env, "r1", at=km_north(0.5))
+    resp = await client.post("/v1/riders/r1/suspend", headers=_as("admin", Role.SYSTEM_ADMIN))
+    assert resp.status_code == 200
+    [shift] = await outbox_payloads(env, "RiderShiftChanged")
+    assert (shift["from_status"], shift["on_shift"], shift["reason"]) == (
+        "available",
+        False,
+        "suspended",
+    )
 
 
 # ---------- Offer, accept, decline ----------

@@ -6,6 +6,7 @@ dependencies = [
     "pydantic>=2.9",
     "sqlalchemy[asyncio]>=2.0.35",
     "sfo-common",
+    "confluent-kafka[json,schemaregistry]>=2.6",
 ]
 
 [build-system]

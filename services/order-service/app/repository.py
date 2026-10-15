@@ -9,9 +9,12 @@ from sqlalchemy.orm import selectinload
 from app.models import Order, OrderStatus, OrderStatusHistory, OutboxEvent
 from app.state_machine import ENTERED_AT_COLUMN
 
-# The domain event each status emits (Week 3 publishes them to Kafka).
-# `awaiting_restaurant_acceptance` is an internal step — no event.
+# The domain event each status emits (the outbox relay publishes them to
+# Kafka). The restaurant's "new order" notification comes from
+# OrderAwaitingRestaurant, not OrderPlaced: by then stock is reserved and
+# payment authorized (week3-plan W3-D8a).
 _TRANSITION_EVENTS: dict[OrderStatus, EventType] = {
+    OrderStatus.AWAITING_RESTAURANT_ACCEPTANCE: EventType.ORDER_AWAITING_RESTAURANT,
     OrderStatus.CONFIRMED: EventType.ORDER_CONFIRMED,
     OrderStatus.REJECTED: EventType.ORDER_REJECTED,
     OrderStatus.CANCELLED: EventType.ORDER_CANCELLED,
@@ -151,6 +154,8 @@ def apply_transition(
                     "order_number": order.order_number,
                     "customer_id": order.customer_id,
                     "restaurant_id": order.restaurant_id,
+                    "restaurant_admin_id": order.restaurant_admin_id,
+                    "total_amount": order.total_amount,
                     "from_status": from_status,
                     "to_status": to_status.value,
                     "reason": reason,

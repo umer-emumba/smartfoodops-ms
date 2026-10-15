@@ -150,6 +150,30 @@ services:
       timeout: 10s
       retries: 10
 
+  kafka-init:
+    logging: *default-logging
+    # One-shot: creates the topics explicitly instead of relying on
+    # auto-create (week3-plan W3-D15) — 3 partitions each (keyed by aggregate
+    # ID, so consumers can scale out to 3), 7-day retention. Idempotent
+    # (--if-not-exists); exits 0 when done. Workers depend on it completing.
+    image: confluentinc/cp-kafka:8.3.2
+    depends_on:
+      kafka: { condition: service_healthy }
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        for topic in order-events delivery-events payment-events; do
+          for name in "$$topic" "$$topic.dlq"; do
+            kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists \
+              --topic "$$name" --partitions 3 --replication-factor 1 \
+              --config retention.ms=604800000
+          done
+        done
+        kafka-topics --bootstrap-server kafka:9092 --describe \
+          --topic 'order-events|delivery-events|payment-events' --exclude-internal
+
   schema-registry:
     logging: *default-logging
     image: confluentinc/cp-schema-registry:8.3.2

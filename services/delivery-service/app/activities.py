@@ -33,7 +33,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from temporalio import activity
 
-from app import eta, rider_locations, tracking
+from app import eta, repository, rider_locations, tracking
 from app.config import settings
 from app.db import SessionFactory
 from app.models import Delivery, DeliveryOffer, DeliveryStatusHistory, OutboxEvent, Rider
@@ -67,11 +67,18 @@ def _invalid(delivery: Delivery, action: str) -> Exception:
     )
 
 
-def _set_status(
+async def _set_status(
     session: AsyncSession, delivery: Delivery, to_status: DeliveryStatus, reason: str | None = None
 ) -> None:
-    """Status + history row + outbox event, in the caller's transaction."""
+    """Status + history row + outbox event, in the caller's transaction. The
+    event names the rider's user account so notification-service can reach
+    them without asking this service (week3-plan W3-D8)."""
     from_status = delivery.status
+    rider_user_id = (
+        await session.scalar(select(Rider.user_id).where(Rider.id == delivery.rider_id))
+        if delivery.rider_id is not None
+        else None
+    )
     delivery.status = to_status
     session.add(
         DeliveryStatusHistory(
@@ -90,7 +97,9 @@ def _set_status(
             payload={
                 "delivery_id": delivery.id,
                 "order_id": delivery.order_id,
+                "customer_id": delivery.customer_id,
                 "rider_id": delivery.rider_id,
+                "rider_user_id": rider_user_id,
                 "from_status": from_status,
                 "to_status": to_status.value,
                 "reason": reason,
@@ -232,7 +241,7 @@ async def offer_to_nearest_rider(data: OfferRiderInput) -> RiderOffer | None:
         )
         delivery.rider_id = rider_id
         delivery.offer_expires_at = expires_at
-        _set_status(session, delivery, D.OFFERED)
+        await _set_status(session, delivery, D.OFFERED)
         await session.commit()
     # Out of the pool now; riders whose claim failed were stale entries.
     for stale_or_claimed in [rider_id, *unavailable]:
@@ -263,6 +272,8 @@ async def release_rider(data: ReleaseRiderInput) -> None:
             offer.rider_id,
             to_status="offline" if data.outcome == RiderReleaseOutcome.DROPPED else "available",
         )
+        if rider is not None:
+            repository.record_shift_change(session, rider, "busy", reason="dropped_out")
         if data.outcome in _REASSIGN:
             if delivery.status not in (D.OFFERED, D.ASSIGNED):
                 raise _invalid(delivery, f"release ({data.outcome})")
@@ -270,7 +281,9 @@ async def release_rider(data: ReleaseRiderInput) -> None:
             delivery.offer_expires_at = None
             delivery.pickup_eta = delivery.dropoff_eta = None
             delivery.reassignment_count += 1
-            _set_status(session, delivery, D.PENDING_ASSIGNMENT, reason=f"rider_{data.outcome}")
+            await _set_status(
+                session, delivery, D.PENDING_ASSIGNMENT, reason=f"rider_{data.outcome}"
+            )
         await session.commit()
     await _after_release(rider)
     await tracking.publish_delivery(delivery)
@@ -300,7 +313,7 @@ async def transition_delivery(data: TransitionDeliveryInput) -> None:
             delivery.picked_up_at = now
         elif to_status == D.DELIVERED:
             delivery.delivered_at = now
-        _set_status(session, delivery, to_status)
+        await _set_status(session, delivery, to_status)
         await session.commit()
     await tracking.publish_delivery(delivery)
 
@@ -364,7 +377,7 @@ async def cancel_delivery(data: OrderRef) -> None:
             offer.responded_at = offer.responded_at or _now()
             rider = await _free_rider(session, offer.rider_id, to_status="available")
         delivery.cancelled_at = _now()
-        _set_status(session, delivery, D.CANCELLED, reason="order_cancelled")
+        await _set_status(session, delivery, D.CANCELLED, reason="order_cancelled")
         await session.commit()
     await _after_release(rider)
     await tracking.publish_delivery(delivery)

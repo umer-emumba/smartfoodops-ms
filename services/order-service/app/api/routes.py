@@ -192,7 +192,7 @@ async def create_order(
     try:
         order = await repository.create_order(session, order)
         # Same transaction as the order insert — the transactional outbox.
-        # Week 3's relay publishes undispatched rows to Kafka.
+        # The outbox relay publishes undispatched rows to Kafka.
         session.add(
             new_outbox_row(
                 OutboxEvent,
@@ -203,7 +203,8 @@ async def create_order(
                     "order_number": order.order_number,
                     "customer_id": order.customer_id,
                     "restaurant_id": order.restaurant_id,
-                    "total_amount": str(order.total_amount),
+                    "restaurant_admin_id": order.restaurant_admin_id,
+                    "total_amount": order.total_amount,
                     "items": [
                         {"menu_item_id": i.menu_item_id, "quantity": i.quantity} for i in items
                     ],

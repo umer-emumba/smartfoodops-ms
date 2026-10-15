@@ -1,0 +1,119 @@
+{
+  "$defs": {
+    "OrderTransitionPayload": {
+      "additionalProperties": false,
+      "description": "Every order status event after OrderPlaced. `reason` is set on\nrejections and cancellations (e.g. `restaurant_rejected`).",
+      "properties": {
+        "customer_id": {
+          "title": "Customer Id",
+          "type": "string"
+        },
+        "from_status": {
+          "title": "From Status",
+          "type": "string"
+        },
+        "order_id": {
+          "title": "Order Id",
+          "type": "string"
+        },
+        "order_number": {
+          "title": "Order Number",
+          "type": "integer"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        },
+        "restaurant_admin_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Restaurant Admin Id"
+        },
+        "restaurant_id": {
+          "title": "Restaurant Id",
+          "type": "string"
+        },
+        "to_status": {
+          "title": "To Status",
+          "type": "string"
+        },
+        "total_amount": {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "title": "Total Amount",
+          "type": "string"
+        }
+      },
+      "required": [
+        "order_id",
+        "order_number",
+        "customer_id",
+        "restaurant_id",
+        "restaurant_admin_id",
+        "total_amount",
+        "from_status",
+        "to_status"
+      ],
+      "title": "OrderTransitionPayload",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "aggregate_id": {
+      "title": "Aggregate Id",
+      "type": "string"
+    },
+    "correlation_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Correlation Id"
+    },
+    "event_id": {
+      "title": "Event Id",
+      "type": "string"
+    },
+    "event_type": {
+      "const": "OrderAwaitingRestaurant",
+      "title": "Event Type",
+      "type": "string"
+    },
+    "occurred_at": {
+      "format": "date-time",
+      "title": "Occurred At",
+      "type": "string"
+    },
+    "payload": {
+      "$ref": "#/$defs/OrderTransitionPayload"
+    }
+  },
+  "required": [
+    "event_id",
+    "aggregate_id",
+    "occurred_at",
+    "event_type",
+    "payload"
+  ],
+  "title": "OrderAwaitingRestaurant",
+  "type": "object"
+}

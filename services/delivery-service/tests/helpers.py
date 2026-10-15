@@ -2,9 +2,10 @@
 activities where possible."""
 
 from datetime import UTC, datetime
+from typing import Any
 
 from app import activities, rider_locations
-from app.models import Rider
+from app.models import OutboxEvent, Rider
 from sfo_contracts.activities import (
     CreateDeliveryInput,
     GeoPoint,
@@ -12,6 +13,7 @@ from sfo_contracts.activities import (
     RiderOffer,
     TransitionDeliveryInput,
 )
+from sqlalchemy import select
 
 from tests.conftest import Env
 
@@ -73,3 +75,14 @@ async def assigned(env: Env, order_id: str = "o-1") -> tuple[str, RiderOffer]:
         TransitionDeliveryInput(delivery_id=delivery_id, to_status="assigned")
     )
     return delivery_id, offer
+
+
+async def outbox_payloads(env: Env, event_type: str) -> list[dict[str, Any]]:
+    """Payloads of `event_type` outbox rows, oldest first."""
+    async with env.factory() as session:
+        rows = await session.execute(
+            select(OutboxEvent.payload)
+            .where(OutboxEvent.event_type == event_type)
+            .order_by(OutboxEvent.created_at)
+        )
+        return list(rows.scalars().all())

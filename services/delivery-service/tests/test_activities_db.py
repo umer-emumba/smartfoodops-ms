@@ -29,6 +29,7 @@ from tests.helpers import (
     km_north,
     new_delivery,
     offered,
+    outbox_payloads,
 )
 
 pytestmark = pytest.mark.db
@@ -184,6 +185,11 @@ async def test_dropped_rider_goes_off_shift_and_delivery_is_reoffered(env: Env) 
     offer = await _offer(delivery_id, exclude=["first"])
     assert offer is not None and offer.rider_id == "second"
     assert (await _delivery(env, delivery_id)).reassignment_count == 1
+    # Dropping out ends the shift (week3-plan W3-D8c); being claimed doesn't.
+    [shift] = await outbox_payloads(env, "RiderShiftChanged")
+    assert (shift["rider_id"], shift["rider_user_id"]) == ("first", "user-first")
+    assert (shift["from_status"], shift["to_status"]) == ("busy", "offline")
+    assert (shift["on_shift"], shift["reason"]) == (False, "dropped_out")
 
 
 async def test_full_delivery_then_rider_is_free_again(env: Env) -> None:
@@ -222,6 +228,10 @@ async def test_full_delivery_then_rider_is_free_again(env: Env) -> None:
         "delivered",
     ]
     assert events == 4  # one DeliveryStatusUpdated per change after creation
+    # Enriched with the recipients (week3-plan W3-D8).
+    updates = await outbox_payloads(env, "DeliveryStatusUpdated")
+    assert [u["to_status"] for u in updates] == ["offered", "assigned", "picked_up", "delivered"]
+    assert {(u["rider_user_id"], u["customer_id"]) for u in updates} == {("user-near", CUSTOMER)}
 
 
 async def test_transition_is_idempotent_and_checked(env: Env) -> None:

@@ -5,6 +5,7 @@ from sfo_common import new_id
 from sqlalchemy import JSON, DateTime, String
 from sqlalchemy.orm import Mapped, mapped_column
 
+from sfo_events.payloads import validate_payload
 from sfo_events.schemas import EventType
 
 
@@ -13,8 +14,8 @@ class OutboxEventMixin:
     service's own declarative Base — no shared table across services, that
     would violate database-per-service). The business-row write and this
     row's write happen in the *same* DB transaction — that's what makes the
-    outbox pattern reliable. A Celery-beat task (added Week 3) polls
-    `dispatched_at IS NULL` rows and publishes them to Kafka.
+    outbox pattern reliable. Each service's Celery-beat relay polls
+    `dispatched_at IS NULL` rows and publishes them to Kafka (week3-plan W3-D2).
     See docs/technical-documentation.md for the full rationale.
     """
 
@@ -38,11 +39,13 @@ def new_outbox_row[T](
     correlation_id: str | None = None,
 ) -> T:
     """`session.add(new_outbox_row(MyOutboxEvent, ...))` inside the same
-    transaction as the business-entity write."""
+    transaction as the business-entity write. The payload is validated
+    against its event type's model (sfo_events.payloads) — a malformed event
+    raises here and fails the write, rather than reaching consumers."""
     return model_cls(
         id=new_id(),
         aggregate_id=aggregate_id,
         event_type=event_type.value,
-        payload=payload,
+        payload=validate_payload(event_type, payload),
         correlation_id=correlation_id,
     )  # type: ignore[call-arg]

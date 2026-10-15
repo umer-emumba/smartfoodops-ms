@@ -127,7 +127,9 @@ async def update_my_status(
         await repository.get_active_delivery_for_rider(session, rider.id)
     ):
         raise ConflictError("You have an active delivery — finish it or drop out first")
+    from_status = rider.status
     rider.status = body.status
+    repository.record_shift_change(session, rider, from_status, reason="rider")
     await session.commit()
     await _sync_pool(rider)
     return rider
@@ -225,7 +227,9 @@ async def suspend_rider(
         raise NotFoundError("Rider not found")
     _record_verification_change(session, rider, "suspended", current, body.reason if body else None)
     # A suspended rider is taken off shift immediately, not left "available".
+    from_status = rider.status
     rider.status = "offline"
+    repository.record_shift_change(session, rider, from_status, reason="suspended")
     await session.commit()
     await _sync_pool(rider)
     return rider

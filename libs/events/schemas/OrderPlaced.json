@@ -1,0 +1,123 @@
+{
+  "$defs": {
+    "OrderItemRef": {
+      "additionalProperties": false,
+      "properties": {
+        "menu_item_id": {
+          "title": "Menu Item Id",
+          "type": "string"
+        },
+        "quantity": {
+          "title": "Quantity",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "menu_item_id",
+        "quantity"
+      ],
+      "title": "OrderItemRef",
+      "type": "object"
+    },
+    "OrderPlacedPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "customer_id": {
+          "title": "Customer Id",
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/OrderItemRef"
+          },
+          "title": "Items",
+          "type": "array"
+        },
+        "order_id": {
+          "title": "Order Id",
+          "type": "string"
+        },
+        "order_number": {
+          "title": "Order Number",
+          "type": "integer"
+        },
+        "restaurant_admin_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Restaurant Admin Id"
+        },
+        "restaurant_id": {
+          "title": "Restaurant Id",
+          "type": "string"
+        },
+        "total_amount": {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "title": "Total Amount",
+          "type": "string"
+        }
+      },
+      "required": [
+        "order_id",
+        "order_number",
+        "customer_id",
+        "restaurant_id",
+        "restaurant_admin_id",
+        "total_amount",
+        "items"
+      ],
+      "title": "OrderPlacedPayload",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "aggregate_id": {
+      "title": "Aggregate Id",
+      "type": "string"
+    },
+    "correlation_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Correlation Id"
+    },
+    "event_id": {
+      "title": "Event Id",
+      "type": "string"
+    },
+    "event_type": {
+      "const": "OrderPlaced",
+      "title": "Event Type",
+      "type": "string"
+    },
+    "occurred_at": {
+      "format": "date-time",
+      "title": "Occurred At",
+      "type": "string"
+    },
+    "payload": {
+      "$ref": "#/$defs/OrderPlacedPayload"
+    }
+  },
+  "required": [
+    "event_id",
+    "aggregate_id",
+    "occurred_at",
+    "event_type",
+    "payload"
+  ],
+  "title": "OrderPlaced",
+  "type": "object"
+}

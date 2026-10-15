@@ -38,7 +38,9 @@ async def _history(factory: Factory, order_id: str) -> list[tuple[str | None, st
 async def _events(factory: Factory, order_id: str) -> list[str]:
     async with factory() as session:
         rows = await session.execute(
-            select(OutboxEvent.event_type).where(OutboxEvent.aggregate_id == order_id)
+            select(OutboxEvent.event_type)
+            .where(OutboxEvent.aggregate_id == order_id)
+            .order_by(OutboxEvent.created_at)
         )
         return list(rows.scalars().all())
 
@@ -63,8 +65,8 @@ async def test_transition_writes_history_event_and_publishes(
         _to(order.id, OrderStatus.AWAITING_RESTAURANT_ACCEPTANCE)
     )
     assert (result.status, result.changed) == (OrderStatus.AWAITING_RESTAURANT_ACCEPTANCE, True)
-    # Internal step: no domain event, but the restaurant's feed hears about it.
-    assert await _events(session_factory, order.id) == []
+    # The restaurant's "new order" event (week3-plan W3-D8a), and its live feed.
+    assert await _events(session_factory, order.id) == ["OrderAwaitingRestaurant"]
     assert [channel for channel, _ in published] == [
         f"tracking:order:{order.id}",
         f"tracking:restaurant:{RESTAURANT}",
@@ -79,7 +81,19 @@ async def test_transition_writes_history_event_and_publishes(
     assert stored.status == OrderStatus.CONFIRMED
     assert stored.confirmed_at is not None
     assert stored.version == 3
-    assert await _events(session_factory, order.id) == ["OrderConfirmed"]
+    assert await _events(session_factory, order.id) == [
+        "OrderAwaitingRestaurant",
+        "OrderConfirmed",
+    ]
+    # Enriched so consumers never call back (week3-plan W3-D8).
+    async with session_factory() as session:
+        payload = (
+            await session.execute(
+                select(OutboxEvent.payload).where(OutboxEvent.event_type == "OrderConfirmed")
+            )
+        ).scalar_one()
+    assert payload["restaurant_admin_id"] == stored.restaurant_admin_id
+    assert payload["total_amount"] == str(stored.total_amount)
     assert await _history(session_factory, order.id) == [
         (None, "created"),
         ("created", "awaiting_restaurant_acceptance"),
