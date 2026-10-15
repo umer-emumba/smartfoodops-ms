@@ -47,18 +47,39 @@ class TemporalSettings(BaseSettings):
     temporal_worker_mode: Literal["embedded", "standalone"] = "embedded"
 
 
-class OutboxRelaySettings(BaseSettings):
-    """Mixed into the Settings of services whose Celery worker relays their
-    outbox to Kafka (order, payment, delivery) — see sfo_events.relay and
-    docs/week3-plan.md W3-D1/W3-D2."""
+class KafkaSettings(BaseSettings):
+    """Kafka and Schema Registry addresses — for relays and consumers."""
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     kafka_bootstrap_servers: str = "kafka:9092"
     schema_registry_url: str = "http://schema-registry:8081"
-    # Only the worker needs it (the API never talks to RabbitMQ); compose
-    # sets it on the worker containers.
+
+
+class CelerySettings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    # Set by docker-compose.yml on the containers that use RabbitMQ (dev-only
+    # credentials there); empty elsewhere — sfo_common.celery refuses to
+    # start without it.
     celery_broker_url: str = ""
+
+
+class OutboxRelaySettings(KafkaSettings, CelerySettings):
+    """Mixed into the Settings of services whose Celery worker relays their
+    outbox to Kafka (order, payment, delivery) — see sfo_events.relay and
+    docs/week3-plan.md W3-D1/W3-D2."""
+
     outbox_relay_interval_seconds: float = 1.0
     outbox_relay_batch_size: int = 200
     outbox_retention_days: int = 7
+
+
+class KafkaConsumerSettings(KafkaSettings):
+    """Mixed into the Settings of services that consume events
+    (sfo_events.consumer, docs/week3-plan.md W3-D6)."""
+
+    # embedded: the consumer runs inside the API process, started from its
+    # lifespan (development). standalone: run `python -m app.consumer` as its
+    # own process from the same image (production).
+    kafka_consumer_mode: Literal["embedded", "standalone"] = "embedded"

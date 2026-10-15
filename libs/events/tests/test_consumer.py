@@ -1,16 +1,17 @@
 """The consumer loop and the idempotency wrapper, with fake Kafka and a fake
 session — no broker or database needed."""
 
+import asyncio
 import json
 from collections.abc import Callable
 from typing import Any
 
 import pytest
-from confluent_kafka import KafkaError
+from confluent_kafka import KafkaError, TopicPartition
 from sfo_events import DomainEvent, EventType, idempotent
-from sfo_events.consumer import ConsumerLoop, DeadLetterError, Outcome
+from sfo_events.consumer import ConsumerLoop, DeadLetterError, Outcome, is_transient
 from sfo_events.kafka import header_value
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from tests.samples import sample_event
 
@@ -42,15 +43,30 @@ class FakeMessage:
 
 
 class FakeConsumer:
-    def __init__(self) -> None:
-        self.committed: list[int] = []
+    """Serves `messages` in order; seek() rewinds like Kafka would."""
 
-    def poll(self, timeout: float) -> None:
-        return None
+    def __init__(self, messages: list[FakeMessage] | None = None) -> None:
+        self.committed: list[int] = []
+        self.seeks: list[int] = []
+        self._messages = messages or []
+        self._position = 0
+
+    def poll(self, timeout: float) -> FakeMessage | None:
+        if self._position >= len(self._messages):
+            return None
+        msg = self._messages[self._position]
+        self._position += 1
+        return msg
 
     def commit(self, *, message: FakeMessage, asynchronous: bool) -> None:
         assert asynchronous is False
         self.committed.append(message.offset())
+
+    def seek(self, partition: TopicPartition) -> None:
+        self.seeks.append(partition.offset)
+        self._position = next(
+            i for i, m in enumerate(self._messages) if m.offset() == partition.offset
+        )
 
 
 class FakeProducer:
@@ -218,6 +234,110 @@ async def test_kafka_errors_are_not_committed() -> None:
     assert consumer.committed == []
 
 
+# --- outages vs bad messages ----------------------------------------------
+
+
+class RegistryDown(Exception):
+    """Named like the registry client's (vendored httpx) error."""
+
+
+class TransportError(RegistryDown):
+    pass
+
+
+class RegistryHttpError(Exception):
+    def __init__(self, status: int) -> None:
+        super().__init__(f"HTTP {status}")
+        self.http_status_code = status
+
+
+def _wrapped(cause: BaseException) -> Exception:
+    try:
+        raise cause
+    except BaseException as inner:
+        try:
+            raise ValueError("wrapper") from inner
+        except ValueError as outer:
+            return outer
+
+
+@pytest.mark.parametrize(
+    ("exc", "transient"),
+    [
+        (ConnectionRefusedError(), True),
+        (TimeoutError(), True),
+        (OperationalError("SELECT 1", {}, Exception("connection refused")), True),
+        (TransportError("refused"), True),
+        (RegistryHttpError(503), True),
+        (_wrapped(ConnectionResetError()), True),
+        (ValueError("bad payload"), False),
+        (IntegrityError("insert", {}, Exception("dup")), False),
+        (RegistryHttpError(422), False),
+        (RuntimeError("handler bug"), False),
+    ],
+)
+def test_is_transient(exc: BaseException, transient: bool) -> None:
+    assert is_transient(exc) is transient
+
+
+async def test_outage_is_not_dead_lettered_or_committed() -> None:
+    async def process(event: DomainEvent) -> None:
+        raise ConnectionRefusedError("postgres down")
+
+    consumer, producer = FakeConsumer(), FakeProducer()
+    with pytest.raises(ConnectionRefusedError):
+        await _loop(process, consumer, producer).handle(
+            _message(sample_event(EventType.ORDER_CONFIRMED))  # type: ignore[arg-type]
+        )
+    assert consumer.committed == [] and producer.sent == []
+
+
+async def test_registry_outage_while_deserializing_is_not_dead_lettered() -> None:
+    def deserialize(msg: FakeMessage) -> dict[str, Any]:
+        raise TransportError("registry down")
+
+    consumer, producer = FakeConsumer(), FakeProducer()
+    loop = ConsumerLoop(
+        consumer=consumer,
+        deserialize=deserialize,  # type: ignore[arg-type]
+        process=lambda e: asyncio.sleep(0),
+        dlq_producer=producer,
+        group="g",
+    )
+    with pytest.raises(TransportError):
+        await loop.handle(FakeMessage(b"{}"))  # type: ignore[arg-type]
+    assert consumer.committed == [] and producer.sent == []
+
+
+async def test_run_rewinds_and_retries_until_the_outage_ends() -> None:
+    stop = asyncio.Event()
+    failures = 3
+    seen: list[str] = []
+
+    async def process(event: DomainEvent) -> None:
+        nonlocal failures
+        if failures:
+            failures -= 1
+            raise ConnectionRefusedError("postgres down")
+        seen.append(event.event_id)
+        if len(seen) == 2:
+            stop.set()
+
+    first, second = (
+        sample_event(EventType.ORDER_CONFIRMED, "e1"),
+        sample_event(EventType.ORDER_DELIVERED, "e2"),
+    )
+    consumer = FakeConsumer([_message(first, offset=0), _message(second, offset=1)])
+    sleeps: list[float] = []
+    loop = _loop(process, consumer, FakeProducer(), sleeps)
+    await asyncio.wait_for(loop.run(stop), timeout=5)
+
+    assert seen == ["e1", "e2"]  # nothing skipped, order kept
+    assert consumer.seeks == [0, 0, 0]
+    assert sleeps == [0.5, 1.0, 2.0]  # backoff, reset after success
+    assert consumer.committed == [0, 1]
+
+
 # --- idempotency ------------------------------------------------------------
 
 
@@ -294,6 +414,26 @@ async def test_concurrent_duplicate_commit_is_swallowed() -> None:
     db.commit_conflict = True
     await _idempotent(db)(sample_event(EventType.ORDER_CONFIRMED))
     assert db.effects == []
+
+
+async def test_after_commit_runs_once_and_its_failure_is_contained() -> None:
+    db = FakeDb()
+    ran: list[str] = []
+
+    async def handler(session: Any, event: DomainEvent) -> Any:
+        session.add("effect")
+
+        async def after() -> None:
+            ran.append(f"committed={db.effects == ['effect']}")
+            raise RuntimeError("rabbitmq down")
+
+        return after
+
+    process = idempotent(lambda: FakeSession(db), Processed, "c", handler)
+    event = sample_event(EventType.ORDER_CONFIRMED)
+    await process(event)  # the failing action doesn't fail the event
+    await process(event)  # duplicate: no second action
+    assert ran == ["committed=True"]
 
 
 async def test_other_integrity_errors_are_raised(monkeypatch: pytest.MonkeyPatch) -> None:

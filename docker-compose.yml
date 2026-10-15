@@ -9,11 +9,15 @@ x-logging: &default-logging
     max-size: "10m"
     max-file: "3"
 
-# Outbox relay workers (docs/week3-plan.md W3-D1): the service's own image,
-# running Celery (worker + beat) instead of the API. They start after their
-# service is healthy, i.e. after its migrations ran. Dev-only broker
-# credentials, like the Postgres ones below.
-x-outbox-worker: &outbox-worker
+# Celery workers (docs/week3-plan.md W3-D1, W3-D7) — the outbox relays and
+# notification sending: the service's own image, running Celery (worker +
+# beat) instead of the API. They start after their service is healthy, i.e.
+# after its migrations ran. Dev-only broker credentials, like the Postgres
+# ones below.
+x-broker-env: &broker-env
+  CELERY_BROKER_URL: amqp://sfo:sfo@rabbitmq:5672//
+
+x-celery-worker: &celery-worker
   logging: *default-logging
   command:
     - celery
@@ -26,8 +30,7 @@ x-outbox-worker: &outbox-worker
     - --without-mingle
     - --without-gossip
     - --loglevel=INFO
-  environment:
-    CELERY_BROKER_URL: amqp://sfo:sfo@rabbitmq:5672//
+  environment: *broker-env
 
 x-postgres-common: &postgres-common
   logging: *default-logging
@@ -95,6 +98,8 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: notification_db
     volumes: ["notification-db-data:/var/lib/postgresql/data"]
+    # Host access for the real-DB tests (scripts/check.sh --with-db), localhost only.
+    ports: ["127.0.0.1:15437:5432"]
 
   # ---------- Infra: shared stores/brokers ----------
   mongo:
@@ -333,7 +338,7 @@ services:
       retries: 10
 
   order-worker:
-    <<: *outbox-worker
+    <<: *celery-worker
     build: { context: ., dockerfile: services/order-service/Dockerfile }
     env_file: [services/order-service/.env]
     depends_on:
@@ -344,7 +349,7 @@ services:
       kafka-init: { condition: service_completed_successfully }
 
   payment-worker:
-    <<: *outbox-worker
+    <<: *celery-worker
     build: { context: ., dockerfile: services/payment-service/Dockerfile }
     env_file: [services/payment-service/.env]
     depends_on:
@@ -355,7 +360,7 @@ services:
       kafka-init: { condition: service_completed_successfully }
 
   delivery-worker:
-    <<: *outbox-worker
+    <<: *celery-worker
     build: { context: ., dockerfile: services/delivery-service/Dockerfile }
     env_file: [services/delivery-service/.env]
     depends_on:
@@ -383,13 +388,28 @@ services:
     logging: *default-logging
     build: { context: ., dockerfile: services/notification-service/Dockerfile }
     env_file: [services/notification-service/.env]
+    # The Kafka consumer runs in this process (KAFKA_CONSUMER_MODE=embedded)
+    # and enqueues sends on RabbitMQ.
+    environment: *broker-env
     depends_on:
       notification-db: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      schema-registry: { condition: service_healthy }
+      kafka-init: { condition: service_completed_successfully }
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 5s
       timeout: 5s
       retries: 10
+
+  notification-worker:
+    <<: *celery-worker
+    build: { context: ., dockerfile: services/notification-service/Dockerfile }
+    env_file: [services/notification-service/.env]
+    depends_on:
+      notification-service: { condition: service_healthy }
+      notification-db: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
 
 volumes:
   user-db-data:

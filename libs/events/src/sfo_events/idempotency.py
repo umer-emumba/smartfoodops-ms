@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
@@ -9,7 +10,12 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from sfo_events.schemas import DomainEvent
 
-SessionHandler = Callable[[AsyncSession, DomainEvent], Awaitable[None]]
+logger = logging.getLogger(__name__)
+
+# Runs after the handler's writes are committed — e.g. enqueueing work that
+# reads them. Not run for a duplicate.
+AfterCommit = Callable[[], Awaitable[None]]
+SessionHandler = Callable[[AsyncSession, DomainEvent], Awaitable[AfterCommit | None]]
 
 
 class ProcessedEventMixin:
@@ -33,13 +39,16 @@ def idempotent(
 ) -> Callable[[DomainEvent], Awaitable[None]]:
     """Wraps `handler(session, event)` so its writes and the
     `processed_events` row commit together, once per event_id. The handler
-    adds to the session and must not commit."""
+    adds to the session and must not commit; it may return an AfterCommit
+    action. If that action fails, the event still counts as processed (the
+    effect is committed) — the error is logged, and the service must have
+    its own way to catch up (notification-service's sweep, for one)."""
 
     async def process(event: DomainEvent) -> None:
         async with session_factory() as session:
             if await session.get(processed_model, event.event_id) is not None:
                 return
-            await handler(session, event)
+            after_commit = await handler(session, event)
             session.add(processed_model(event_id=event.event_id, consumer=consumer))
             try:
                 await session.commit()
@@ -49,5 +58,11 @@ def idempotent(
                 await session.rollback()
                 if await session.get(processed_model, event.event_id) is None:
                     raise
+                return
+        if after_commit is not None:
+            try:
+                await after_commit()
+            except Exception:
+                logger.exception("After-commit action for event %s failed", event.event_id)
 
     return process

@@ -8,7 +8,7 @@ dependencies = [
     "asyncpg>=0.29",
     "sqlalchemy[asyncio]>=2.0.35",
     "alembic>=1.13",
-    "sfo-common",
+    "sfo-common[celery]",
     "sfo-auth",
     "sfo-events",
     "sfo-observability",
