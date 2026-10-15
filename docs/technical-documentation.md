@@ -5,14 +5,15 @@ event-driven design, failure handling, and data consistency, followed by the *wh
 the decisions in [architecture.md](./architecture.md): key tradeoffs, rejected
 alternatives, and what's implemented vs. explicitly deferred. Requirements and
 traceability are in [PRD.md](./PRD.md); build status is in [PROGRESS.md](./PROGRESS.md).
-Anything not yet built is marked **(Week 3)**.
+Everything described here is built (Part A, Weeks 1–3); what's deliberately left out is in
+[Production/high-traffic](#productionhigh-traffic-implemented-vs-documented-roadmap) and
+[Assumptions](#assumptions).
 
 ## Why microservices, not a modular monolith
 
 Company requirement: true microservices, production-oriented, able to demonstrate handling
-high traffic — not a monolith with internal module boundaries. Each of the 8 services (the
-gateway plus seven domain services; `analytics-service` is added in Week 3) is independently
-deployable with its own datastore, so no service's failure or scaling need is coupled to
+high traffic — not a monolith with internal module boundaries. Each of the 9 services (the
+gateway plus eight domain services) is independently deployable with its own datastore, so no service's failure or scaling need is coupled to
 another's.
 
 ## Service breakdown
@@ -26,8 +27,13 @@ another's.
 | `delivery-service` | Riders, vetting, location; deliveries, rider offers, reassignment, ETA | `riders`, `riders/me`, `riders/me/status`, `riders/me/location`, `riders/me/offer`, `riders/me/deliveries/{id}/accept\|decline\|drop-out\|picked-up\|delivered`, `deliveries/by-order/{id}`, `riders/admin`, `approve`, `suspend`, `verification-history` | — |
 | `payment-service` | Simulated card payments: authorize, capture, void, refund | `GET payments/by-order/{id}`; saga activities | — |
 | `tracking-service` | Live SSE feeds for customers and restaurants | `tracking/orders/{id}`, `tracking/restaurants/{id}` | — |
-| `notification-service` | Customer/restaurant/rider notifications | `GET notifications` (mine) | Kafka consumer + Celery dispatch (W3) |
-| `analytics-service` (W3) | Metrics listed in the Part A PRD | — | Kafka consumer + read API (W3) |
+| `notification-service` | Customer/restaurant/rider notifications: in-app, simulated email and SMS | `GET notifications` (mine) | `POST notifications/{id}/read`; Kafka consumer; `notification-worker` (Celery) sends (W3) |
+| `analytics-service` | The nine Part A metrics, from events | — | `analytics/summary`, `analytics/restaurants/{id}`, `analytics/peak-hours` (W3) |
+
+Background processes run from the same images: `order-worker`, `payment-worker` and
+`delivery-worker` relay their service's outbox to Kafka, and `notification-worker` sends
+notifications — each a Celery worker with its own beat schedule
+([Event-driven design](#event-driven-design-temporal-kafka-and-celery)).
 
 The live, authoritative endpoint list is each service's OpenAPI page, indexed at
 `http://localhost:8080/docs`.
@@ -74,7 +80,7 @@ stateDiagram-v2
 | (stays `delivered`) | `POST /v1/orders/{id}/refund` (system admin) | `OrderRefundWorkflow`: payment refund, `orders.refunded_amount` |
 
 Every order event is visible three ways: `GET /v1/orders/{id}` (with `status_history`),
-the live SSE feed, and the outbox (published to Kafka from Week 3).
+the live SSE feed, and Kafka (from the outbox — what notifications and analytics read).
 
 ## Delivery orchestration
 
@@ -119,19 +125,146 @@ Each tool has one job, so no workflow is split ambiguously between two of them:
 | Tool | Owns | Example | Why this tool |
 |---|---|---|---|
 | **Temporal** | Multi-step control flow that must finish or compensate | the order saga; restaurant accept/reject wait; rider offer timeouts | durable state, retries, timers and signals built in; compensation is ordinary code |
-| **Kafka + Schema Registry** (W3) | Facts other services react to, decoupled from the flow that produced them | `OrderPlaced` → notifications, analytics | replayable log, per-aggregate ordering (partition key = aggregate ID), many independent consumers |
-| **Celery + RabbitMQ** (W3) | Short, single-service background jobs | outbox relay (Celery beat), sending one notification | simple task retries; no need for Temporal's durability for a one-shot job |
+| **Kafka + Schema Registry** | Facts other services react to, decoupled from the flow that produced them | `OrderPlaced` → notifications, analytics | replayable log, per-aggregate ordering (partition key = aggregate ID), many independent consumers |
+| **Celery + RabbitMQ** | Short, single-service background jobs | the outbox relay (every second), sending one notification | simple task retries and schedules; no need for Temporal's durability for a one-shot job |
 
-**Event catalog** (`libs/events/src/sfo_events/schemas.py`): `OrderPlaced`, `OrderConfirmed`,
-`OrderRejected`, `OrderCancelled`, `PaymentSuccessful`, `RefundProcessed`, `RiderAssigned`,
-`OrderPickedUp`, `OrderDelivered`, `DeliveryStatusUpdated`. Topics are one per aggregate
-(`order-events`, `delivery-events`, `payment-events`). Every event carries `event_id`
-(UUIDv7), `aggregate_id`, `occurred_at`, and `correlation_id`.
+### Events and topics
 
-**Path of an event**: business write + outbox row in one DB transaction (built: every
-event in the catalog is written this way) → Celery-beat relay publishes undispatched rows to Kafka and marks
-them dispatched (W3) → consumers dedupe on `event_id` via a `processed_events` table and then
-act (W3).
+Twelve event types (`libs/events/src/sfo_events/schemas.py`), one topic per aggregate,
+3 partitions each, 7-day retention, plus a `.dlq` twin per topic (created by the one-shot
+`kafka-init` container):
+
+| Topic | Events | Written by |
+|---|---|---|
+| `order-events` | `OrderPlaced`, `OrderAwaitingRestaurant`, `OrderConfirmed`, `OrderRejected`, `OrderCancelled`, `RiderAssigned`, `OrderPickedUp`, `OrderDelivered` | order-service (creation; every saga transition) |
+| `payment-events` | `PaymentSuccessful`, `RefundProcessed` | payment-service activities |
+| `delivery-events` | `DeliveryStatusUpdated`, `RiderShiftChanged` | delivery-service (every delivery status; a rider going on or off shift) |
+
+Every event has the same envelope — `event_id` (UUIDv7, the dedup key), `event_type`,
+`aggregate_id` (the partition key), `occurred_at` (the outbox row's `created_at`),
+`correlation_id` (the request ID) — and a typed payload (Pydantic, `payloads.py`).
+Payloads carry what consumers need, so no consumer calls another service: order events
+include `customer_id`, `restaurant_admin_id`, `total_amount` and the reason; delivery
+events include `rider_user_id` and `customer_id`.
+
+Two events were added for Week 3's consumers. `OrderAwaitingRestaurant` is what tells
+the restaurant about a new order: `OrderPlaced` fires before stock and payment are
+checked, so the restaurant would hear about orders that then fail. `RiderShiftChanged`
+(only offline ↔ on shift, not the saga's busy/available flips) gives analytics the time
+on shift that rider utilization needs.
+
+**Schemas**: the JSON Schema of each payload is generated from its Pydantic model and
+registered in Schema Registry (`TopicRecordNameStrategy`, so a topic can carry several
+event types) with `BACKWARD` compatibility, so a breaking change is refused at
+registration. A snapshot of every schema is checked into `libs/events/schemas/`, and a
+test fails if a model change would break compatibility with it. Payloads are also
+validated when the outbox row is written, so a bad payload fails the business
+transaction instead of reaching Kafka.
+
+### Path of an event
+
+1. **Outbox write.** The business change and its `outbox_events` row commit in one
+   transaction (no dual write). The row also stores the W3C `traceparent` of the request
+   that wrote it.
+2. **Relay** (`sfo_events.relay`, Celery beat every 1s in `order-worker`,
+   `payment-worker`, `delivery-worker`). In one transaction: take
+   `pg_try_advisory_xact_lock` (one relay per service, even with several worker
+   replicas — a tick that can't get it does nothing), read up to 200 undispatched rows
+   oldest first, produce them (idempotent producer, `acks=all`, key = `aggregate_id`),
+   `flush()`, then set `dispatched_at` on the acknowledged rows. A row Kafka refused gets
+   `publish_attempts + 1` and `last_error` and is retried next tick; later rows of the
+   same aggregate wait behind it, so they can't overtake it. Dispatched rows are purged
+   after 7 days (hourly task).
+3. **Consumers** (`sfo_events.consumer.ConsumerLoop`): poll → deserialize → process →
+   commit the offset. Two consumer groups read all three topics: `notification-service`
+   and `analytics-service`.
+
+Delivery is at-least-once (a crash after Kafka acknowledged but before the relay's
+commit re-publishes those rows), so consumers dedupe:
+
+- **notification-service** writes its notification rows and a `processed_events
+  (event_id)` row in one transaction (`sfo_events.idempotency.idempotent`); a
+  redelivered event finds the row and does nothing.
+- **analytics-service** needs no such table: every write is an idempotent upsert
+  (`$min` for "first time" timestamps, `$set`, `$max`, `$addToSet`), so applying an
+  event twice leaves the document the same.
+
+**Consumer failures** (W3-D5):
+
+| What went wrong | What happens |
+|---|---|
+| The handler raised | retried 3 times in-process (0.5s doubling), then the message goes to `<topic>.dlq` with error headers, the offset is committed, and the partition moves on |
+| The bytes don't deserialize or validate | straight to the DLQ (retrying can't fix it) |
+| An event type this consumer doesn't know (a newer producer) | skipped and committed |
+| An outage — Postgres, Schema Registry or the network unreachable | **not** dead-lettered: nothing is committed, the consumer rewinds to the message and retries with backoff (capped at 30s) until the dependency is back |
+| The DLQ publish or the offset commit failed | the same rewind — the message is redelivered, never lost |
+
+The outage rule matters: without it, every event during a database restart would land
+in the DLQ. analytics-service also reads the `.dlq` topics (as raw bytes) and records
+each dead letter, which is the "failed events" metric.
+
+Consumers run inside their service's API process by default (`KAFKA_CONSUMER_MODE=
+embedded`, started from the lifespan; the blocking poll runs in a thread) or as their
+own process (`standalone`: `python -m app.consumer`) — the same switch Week 2 uses for
+Temporal workers.
+
+### Notifications
+
+`notification-service` turns events into messages (`app/templates.py`), each in-app
+and, where someone must act or would want a record, by email or SMS:
+
+| Event | Who is told |
+|---|---|
+| `OrderPlaced` | customer (in-app, email) |
+| `OrderAwaitingRestaurant` | restaurant admin: new order to accept (in-app, SMS) |
+| `OrderConfirmed`, `RiderAssigned` | customer (in-app) |
+| `OrderRejected` | customer, with wording by reason (in-app, email) |
+| `OrderPickedUp` | customer (in-app, SMS) |
+| `OrderDelivered` | customer (in-app, email), restaurant admin (in-app) |
+| `OrderCancelled` | customer (in-app, email); restaurant admin if it had seen the order (in-app, SMS) |
+| `RefundProcessed` | customer (in-app, email) |
+| `DeliveryStatusUpdated` | rider: `offered` (in-app, SMS), `assigned` (in-app), `cancelled` (in-app, SMS) |
+
+One row per recipient and channel is written `pending` (with `processed_events`, in one
+transaction); after the commit, one Celery task per row is enqueued on RabbitMQ.
+`notification-worker` sends it: in-app needs nothing, email and SMS go through a
+simulated provider that fails a configurable share of sends (`NOTIFY_FAKE_FAILURE_RATE`,
+0.1), so the retry path is real. A failed send is retried with exponential backoff (2s,
+4s, 8s, 16s, ±20% jitter); after 5 attempts the row is `failed`. Attempts are counted
+in the row, under a `SELECT … FOR UPDATE SKIP LOCKED`, so a duplicate task can't send
+twice at once. Tasks are acknowledged late and rejected if the worker dies, so a killed
+worker's tasks go back to the queue. A sweep every 30s re-enqueues rows still `pending`
+after 60s — that covers a crash between the commit and the enqueue, or a lost task.
+
+### Analytics
+
+`analytics-service` keeps a read model in MongoDB (`analytics` database), built only
+from events: one `order_facts` document per order (when it was placed, sent to the
+restaurant, confirmed/rejected/cancelled and why, picked up, delivered; its restaurant,
+amount and refunds; the current delivery's rider, when they accepted and when it ended,
+and reassignments), `rider_shift_facts` (one document per rider going on or off shift)
+and `failed_events` (one per dead letter). The nine metrics are computed at read
+time with aggregation pipelines over a time window (default: the last 7 days):
+
+| Metric | Definition |
+|---|---|
+| Total orders | orders placed in the window |
+| Orders per restaurant | the same, grouped by restaurant |
+| Peak-hour load | orders per hour of day, in `ANALYTICS_TIMEZONE` (Asia/Karachi) |
+| Average delivery time | placed → delivered |
+| Rider utilization | time on deliveries ÷ time on shift |
+| Cancellation rate | cancelled ÷ placed |
+| Restaurant acceptance rate | confirmed ÷ (confirmed + rejected by the restaurant or timed out there) — `out_of_stock`, `payment_declined` and the like never reach the restaurant, so they don't count against it |
+| Delivery success rate | delivered ÷ deliveries a rider accepted |
+| Failed events | dead-lettered messages + sagas that ended `system_error` |
+
+Endpoints: `GET /v1/analytics/summary` and `/peak-hours` (system admin),
+`/restaurants/{id}` (system admin or that restaurant's admin). Notification sends that
+ended `failed` aren't in this API — they live only in notification-service — but are on
+the Grafana dashboards. The consumer also updates Prometheus business counters (orders
+placed, outcomes by reason, restaurant responses, delivery duration, shift changes, dead
+letters) the first time an event changes a document, so a replay doesn't double-count
+them.
 
 ## Failure handling
 
@@ -143,8 +276,10 @@ act (W3).
   with everything undone.
 - Compensations, and every step after pickup (capture, final transitions), retry until
   they succeed: the food is already out, so the only acceptable outcome is completing.
-- Celery tasks retry with backoff, and Kafka consumers retry and then dead-letter poison
-  messages (Week 3).
+- Celery notification sends retry with exponential backoff, 5 attempts. Kafka consumers
+  retry a failing handler 3 times and then dead-letter the message; an outage is waited
+  out instead ([Event-driven design](#event-driven-design-temporal-kafka-and-celery)). The
+  outbox relay retries a row Kafka refused every second until it goes through.
 - The one sync call at order creation (order → restaurant quote) has a 5s timeout and
   fails with a clean 503. It doesn't retry: the client holds an `Idempotency-Key` and can
   safely retry itself.
@@ -160,7 +295,9 @@ act (W3).
 | Payment ops | one payment per order (`idempotency_key` = order ID); a retried authorize/capture/void returns the prior result; refunds keyed by refund workflow ID. A void before any authorize leaves a `voided` placeholder |
 | Create delivery | `deliveries.order_id` unique |
 | Status changes | a repeated transition is a no-op; the `version` optimistic lock rejects stale writes |
-| Event consumption | `processed_events` keyed by `event_id` (Week 3) |
+| Publish an event | the relay may re-publish after a crash; every event keeps its `event_id` |
+| Consume an event | notification-service: `processed_events` keyed by `event_id`, in the same transaction as the notification rows. analytics-service: idempotent Mongo upserts |
+| Send a notification | the row's status is checked and updated under a row lock; a duplicate task finds it `sent` and does nothing |
 
 **Compensation** (the saga). Each forward step registers its compensation *before* it
 runs — safe because every compensation is idempotent and tolerates "never happened" — and
@@ -175,8 +312,8 @@ on failure or cancellation they run in reverse order:
 | `picked_up` onwards | not cancellable (409) — the food is out; a problem becomes a refund after delivery | | | | |
 
 Payment is only *captured* at delivery, so every cancellation before then is a void, never
-a refund. Each outcome writes its outbox event (`OrderRejected`, `OrderCancelled`, …);
-notifying customer, restaurant and rider from those is Week 3.
+a refund. Each outcome writes its outbox event (`OrderRejected`, `OrderCancelled`, …),
+from which notification-service tells the customer, restaurant and rider.
 
 **Signals that cross**: signals are applied in arrival order. A pickup that arrives just
 before a cancel wins (the order is delivered); a cancel that arrives first wins (the
@@ -213,9 +350,113 @@ payment and rider all checked after each one).
 - **Optimistic locking** (`version` columns on orders, menu items, deliveries) catches any
   remaining concurrent writers.
 - **MongoDB and Redis are never authoritative.** Mongo holds rider location history and
-  analytics rollups (W3). Redis holds live positions, the rider pool and the tracking
+  the analytics read model (rebuildable by replaying the topics). Redis holds live positions, the rider pool and the tracking
   state — all rebuilt from pings, status changes or Postgres. Losing either degrades
   tracking, not correctness.
+
+## Observability
+
+Three signals, all tied together by the trace ID. Everything runs in Compose; the UIs
+are on localhost only (URLs in the [README](../README.md#observability)).
+
+| Signal | Produced by | Stored in | Looked at in |
+|---|---|---|---|
+| Logs | every process: one JSON line per event on stdout (`timestamp`, `level`, `service`, `logger`, `message`, `request_id`, `trace_id`, `span_id`) | Loki — Grafana Alloy tails every container's Docker log; `service` and `level` are labels, `trace_id` is structured metadata | Grafana → *Logs* dashboard, or Explore |
+| Traces | OpenTelemetry SDK in every process, OTLP/HTTP | Jaeger v2 (in memory) | Jaeger UI, or Grafana (Jaeger data source) |
+| Metrics | `prometheus-client` in every process, on internal port 9100 (Temporal SDK: 9101) | Prometheus, scraped every 15s, 7-day retention | Grafana dashboards; Prometheus *Alerts* |
+
+Grafana links them: a log line's `trace_id` opens the trace in Jaeger, and a span opens
+its logs in Loki.
+
+**Logs.** The `X-Request-ID` the gateway assigns stays as `request_id` (one HTTP
+request and the calls it makes); `trace_id`/`span_id` come from the active OTel span, so
+background work that no request started — a relay publish, a consumer handling an
+event, a Celery send — is still findable. Passwords, tokens and card details are
+redacted before a line is written (`libs/observability`).
+
+**Traces: one order is one trace.** The trace context crosses every hop:
+
+| Hop | How |
+|---|---|
+| HTTP (gateway → services, service → service) | FastAPI and httpx instrumentation; httpx adds the `traceparent` header |
+| Temporal (API → saga → activities in four services) | `TracingInterceptor` on every client and worker (`sfo_common.temporal`) |
+| Outbox → Kafka | the outbox row stores the writer's `traceparent`; the relay's `publish` span continues it and puts it in the message headers |
+| Kafka → consumer | the consumer's `process` span continues the trace from the headers |
+| Consumer → Celery send | the Celery instrumentation carries the context in the task message |
+
+Database (SQLAlchemy), Redis and MongoDB calls are child spans. Health probes, metrics
+scrapes, the relay's every-second poll and long SSE streams are not traced — otherwise
+every container would start a trace every few seconds and bury the real ones. Measured:
+one delivered order is a single trace across 11 services (gateway, order-, restaurant-,
+payment-, delivery-, notification-, analytics-service, the three relay workers and
+`notification-worker`). Sampling is 100% in dev (`OTEL_TRACES_SAMPLER_ARG`).
+
+**Metrics.** Served on an internal port, never through the gateway:
+
+| Family | Metrics |
+|---|---|
+| HTTP (every API) | `http_requests_total{method, route, status}`, `http_request_duration_seconds` — by route *template* (`/v1/orders/{order_id}`), so IDs can't create a series each |
+| Outbox (relay workers) | `outbox_backlog`, `outbox_oldest_age_seconds`, `outbox_published_total`, `outbox_publish_failures_total` |
+| Consumers | `kafka_events_consumed_total{group, topic, outcome}` (processed / skipped / dead_lettered), `kafka_events_duplicates_total{group}`, `kafka_event_retries_total{group, topic, kind}` (handler / outage), `kafka_consumer_lag{group, topic, partition}` (from committed offsets) |
+| Celery | `celery_tasks_total{task, outcome}`, `celery_task_duration_seconds` |
+| Business | `saga_outcomes_total{status, reason}` (order-service), `notification_sends_total{channel, result}`, `riders{status}`, `tracking_active_streams{feed}`, and from analytics: `orders_placed_total`, `order_outcomes_total`, `restaurant_responses_total`, `delivery_duration_seconds`, `rider_shift_changes_total`, `dead_lettered_events_total` |
+| Infrastructure | Temporal SDK (per worker) and server, RabbitMQ (built-in plugin), Prometheus itself |
+
+Four dashboards are provisioned from JSON (generated by
+`infra/grafana/build_dashboards.py`): **Service overview** (requests, 5xx ratio, p95
+latency per service, slowest routes, targets up, firing alerts), **Orders & deliveries**
+(orders, outcomes, acceptance, delivery time, saga outcomes, rider pool, live streams),
+**Event pipeline** (outbox age and backlog, consumer outcomes, duplicates, lag and
+retries, dead letters, Celery tasks, notification sends, RabbitMQ queue depth, Temporal
+activity failures and latency) and **Logs**.
+
+**Alerts** (`infra/prometheus/rules.yml`; shown in Prometheus and on the Service
+overview dashboard — routing them to people is out of scope):
+
+| Alert | Fires when |
+|---|---|
+| `OutboxLagging` | a service's oldest unpublished event is over 30s old for 1 min (Kafka or the relay is down) |
+| `EventsDeadLettered` | any message was dead-lettered in the last 5 min |
+| `ConsumerLagging` | a consumer group is over 100 messages behind for 5 min |
+| `HighErrorRate` | over 1% of a service's requests are 5xx for 5 min |
+| `SagaSystemErrors` | any order ended `system_error` in the last 15 min |
+| `NotificationsFailing` | any email/SMS ended `failed` in the last 15 min |
+| `TargetDown` | a process hasn't served metrics for 2 min |
+
+The counters these alerts watch are created at 0 when each process starts: a series
+that first appears at 1 has no increase Prometheus can see, so the first failure would
+otherwise go unnoticed (found by the failure drills below).
+
+**Where to look, by flow** (Part A §6):
+
+| Something's wrong with… | Start at |
+|---|---|
+| Ordering | Service overview (order-service 5xx/latency) → Orders & deliveries (saga outcomes by reason) → the order's trace |
+| Payment | saga outcomes `payment_declined` vs `system_error`; Temporal activity failures; payment-service spans in the trace |
+| Rider assignment | Orders & deliveries (rider pool, `no_rider_available` cancellations); delivery-service logs by `trace_id` |
+| Tracking | live tracking streams; tracking-service 5xx |
+| Notifications | Event pipeline: notification sends (retry/failed), notification-service consumer lag and dead letters; the row's `last_error` |
+| Background jobs | Event pipeline: outbox age/backlog, Celery task outcomes, RabbitMQ depth; `TargetDown` for a dead worker |
+
+### Failure drills (verified 2026-10-15)
+
+Each drill was run against the full Compose stack; the commands are in the
+[README](../README.md#failure-drills).
+
+| Drill | Result |
+|---|---|
+| Kafka stopped, orders placed | Orders kept flowing (the saga doesn't need Kafka); the outbox backlog grew and `OutboxLagging` fired after about 2 min; once Kafka was back the backlog drained in about 6s and every notification arrived, nothing dead-lettered |
+| Consumer offsets reset to earliest (759 events replayed) | Notification rows and all three analytics collections byte-identical afterwards; the replay shows as 759 duplicates on the Event pipeline dashboard |
+| Poison message written to `order-events` | Both groups dead-lettered it, the partition kept moving, analytics recorded it, `EventsDeadLettered` fired within a minute |
+| `notification-worker` killed (SIGKILL) mid-batch | The task it held went back to the queue; after a restart every row ended `sent`, each email/SMS exactly once |
+| Fake email/SMS failure rate 50%, then 100% | At 50%, 14 of 30 sends needed retries, all ended `sent`; at 100%, each gave up after exactly 5 attempts over about 30s, in-app unaffected, `NotificationsFailing` fired |
+
+The drills found three bugs, all fixed with tests: a message that wasn't valid Schema
+Registry framing was treated as an outage (confluent-kafka's `SerializationError`
+subclasses `KafkaException`), which blocked its partition instead of dead-lettering it;
+consumer lag was computed from the consumer's position, which is unset after a restart,
+so an idle consumer looked a whole log behind; and the alert counters above weren't
+created at 0.
 
 ## Assumptions
 
@@ -245,6 +486,12 @@ payment and rider all checked after each one).
 - Deliveries are limited to 15 km straight line from the restaurant (`MAX_DELIVERY_KM`);
   the delivery fee is 100 PKR + 30 PKR/km; tax 5%.
 - Riders don't manage routes in-app beyond seeing pickup and dropoff coordinates.
+- Email and SMS are simulated (a log line); a configurable share of sends fails, so the
+  retry path runs. The in-app inbox (`GET /v1/notifications`) is the only channel a user
+  can read back.
+- Analytics are eventually consistent: a few seconds behind the orders they describe.
+  Windows default to the last 7 days, and hours of the day are counted in Asia/Karachi
+  time.
 
 ## Gateway: single entry point, not a SPOF
 
@@ -313,8 +560,7 @@ is wrong — a customer's order shouldn't fail because SMS delivery is down.
 **Reliability**: transactional outbox pattern — each producing service writes its event row
 in the same DB transaction as its state change, avoiding a dual-write bug without needing a
 CDC tool like Debezium. A Celery-beat periodic task per service polls the outbox and
-publishes to Kafka, marking rows dispatched **(Week 3; outbox rows are already written for
-every event)**.
+publishes to Kafka, marking rows dispatched.
 
 ## Restaurant accept/reject: a Temporal signal-with-timeout
 
@@ -342,11 +588,61 @@ Rather than mixing ORM patterns across every service for one engineer to maintai
 ## Kafka client: confluent-kafka-python, not aiokafka
 
 aiokafka is asyncio-native, which would fit the rest of the async stack. But Kafka
-producers/consumers here run as their own dedicated processes (not inside a FastAPI request
-path), so there's no event-loop conflict to avoid — and confluent-kafka-python (the
+producers and consumers here never sit in a request path: the relay runs in a Celery
+worker, and a consumer's blocking `poll` runs in a worker thread, so it doesn't block the
+API's event loop — and confluent-kafka-python (the
 official librdkafka-backed client) has first-class, well-documented Confluent Schema
 Registry integration, which the tech stack explicitly calls for. Chose the stronger Schema
 Registry story over the async-native fit, since the latter provides no real benefit here.
+
+## Week 3 tradeoffs
+
+**JSON Schema, not Avro or Protobuf.** All three work with Schema Registry. The payloads
+are already Pydantic models, which generate JSON Schema directly, so there's one source
+of truth and no second IDL to keep in step; messages stay readable with any Kafka tool.
+Cost: larger messages than Avro and slower (de)serialization — irrelevant at this
+volume; switching is a serializer change, the contracts stay the same.
+
+**Celery-beat polling relay, not CDC (Debezium).** Debezium would read the Postgres WAL
+and add Kafka Connect, a connector per database and replication slots to operate.
+Polling every second costs one indexed query per service per second (a partial index
+on undispatched rows) and up to ~1s extra latency, which notifications and analytics
+don't notice. The outbox table stays the contract either way, so CDC can replace the
+relay later without touching the services.
+
+**Advisory lock, not `SELECT … FOR UPDATE SKIP LOCKED`, for the relay.** `SKIP LOCKED`
+would let two relays share the work, but they would split one order's events and
+publish them out of order. The relay is not the bottleneck (one batch of 200 a second);
+per-order ordering is what consumers depend on.
+
+**Consumers embedded in the API process (dev), not their own containers.** Fewer
+containers on an 8 GB laptop — the stack already runs 30. The consumer loop is the same
+code either way; `KAFKA_CONSUMER_MODE=standalone` runs it as its own process for
+production, where it should scale and restart separately from the API.
+
+**No OTel Collector.** Jaeger v2 is itself built on the Collector and accepts OTLP, so
+services export straight to it — one container fewer. A Collector (for tail sampling,
+or several backends) can be put in front later by changing `OTEL_EXPORTER_OTLP_ENDPOINT`
+only.
+
+**Mongo upserts, not transactions, for analytics.** Mongo here is a single node (no
+replica set, so no multi-document transactions), and none are needed: every write is
+an idempotent upsert of one document, so replays and out-of-order topics are safe
+without a `processed_events` table. Metrics are computed at read time from the facts,
+not kept as running totals that a replay would double. Cost: each summary request
+aggregates the window's facts — fine for thousands of orders a day; at larger volume,
+pre-aggregated hourly rollups would be the next step.
+
+**Prometheus counters next to the Mongo read model.** Grafana gets live business panels
+without a Mongo data source plugin, and the API stays the source of exact historical
+numbers. The counters only move the first time an event changes a document, so they
+don't double on a replay; they do reset when the process restarts, which Prometheus'
+`rate()`/`increase()` handle.
+
+**Simulated email/SMS without addresses.** Notifications carry the user ID only. A real
+sender would look up the email address or phone number from a user-contact projection
+fed by user-service events, which keeps notification-service free of synchronous calls
+to other services.
 
 ## Auth: 15-minute access tokens, rotating refresh tokens, Redis deny-list
 
@@ -403,7 +699,7 @@ Customers and restaurants want push, so they get **Server-Sent Events** from a s
   read every update for every order. With Pub/Sub, each tracking replica subscribes only
   to the channels its own clients watch. Missed messages don't matter: on (re)connect the
   client gets a snapshot of the current state first, kept in Redis by the publishers.
-  Kafka still carries the durable events for notifications and analytics (Week 3).
+  Kafka still carries the durable events for notifications and analytics.
 - **Ownership from Redis**: the snapshot state includes the order's `customer_id` and the
   restaurant's owner, so `tracking-service` authorizes a stream without calling another
   service; if Redis lost a key, it rebuilds it from an `/internal` endpoint once.
@@ -469,16 +765,26 @@ search in Redis GEO instead of a table scan, with Postgres location writes throt
 one per 30s per rider; live tracking in a separate stateless service with one Redis
 subscription per watched channel per replica.
 
-**Planned (Week 3)**: Kafka partitioning by aggregate ID for parallel consumer scale-out,
-Celery worker pools scaled independently of API processes. Horizontal replica scaling of domain services is a
-deployment concern (Kubernetes `Deployment`s) — not demonstrated with `--scale` locally, for
-the same reason given for the gateway above.
+**Implemented (Week 3)**: every event published through the outbox with no dual write;
+Kafka partitioning by aggregate ID (3 partitions per topic), so a consumer group can scale
+to 3 consumers per topic with per-order ordering kept; idempotent consumers, so scaling or
+replaying can't double-process; relay and notification workers that run as their own
+containers and scale separately from the APIs (the relay's advisory lock keeps it to one
+active relay per service, however many replicas); a DLQ per topic, so one bad message
+can't stop a partition; per-process Prometheus metrics and alerts on outbox age, consumer
+lag, dead letters, 5xx rate, saga system errors and failed notifications. Horizontal
+replica scaling of domain services is a deployment concern (Kubernetes `Deployment`s) —
+not demonstrated with `--scale` locally, for the same reason given for the gateway
+above.
 
 **Documented roadmap, not built** (out of scope for a Docker Compose dev/demo environment,
 but service boundaries are drawn so these wouldn't require a redesign later): read
 replicas, Kubernetes-native gateway scaling (`Deployment`/`HPA` + `Service` — see
 [Gateway: single entry point, not a SPOF](#gateway-single-entry-point-not-a-spof)), gRPC
-for the saga's synchronous calls.
+for the saga's synchronous calls, Alertmanager routing for the alerts, Kafka broker
+(JMX) metrics, persistent trace storage (Jaeger runs in memory) and an OTel Collector in
+front of it, a consumer for user-service events to give notification-service real email
+addresses and phone numbers.
 
 ## Library & tooling choices
 
@@ -496,6 +802,11 @@ for the saga's synchronous calls.
 | Redis client | redis-py (`redis.asyncio`) | Official, async-native since v4.2 |
 | MongoDB client | PyMongo `AsyncMongoClient` | Official driver's native async API — replaces Motor, which MongoDB deprecated on 2026-05-14 |
 | Gateway rate limiting | In-house (`app/rate_limit.py`, Redis-backed) | `fastapi-limiter`'s `RateLimiter` dependency crashed against this FastAPI version's routing internals (see docs/PROGRESS.md, "Docker verification"). Replaced with ~40 lines: one atomic Lua `INCR`+`PEXPIRE` per request, keyed by user ID (valid token) or client IP (anonymous) + a caller-supplied bucket name; the script also returns the remaining TTL, so a 429 needs no second round-trip. Needs shared state across gateway replicas either way, which Redis still provides. |
-| Kafka client | confluent-kafka-python (Week 3) | See rationale above |
+| Kafka client | confluent-kafka-python 2.x, JSON Schema serializer + Schema Registry client | See rationale above |
+| Background jobs | Celery 5 on RabbitMQ (solo pool, beat in the same process) | Retries, countdowns, schedules and late acks with no extra code; the solo pool keeps one event loop + async engine per worker, which our async-only DB layer needs |
+| Analytics store | MongoDB (PyMongo async) | Idempotent upserts per order and aggregation pipelines for the metrics; non-authoritative, rebuildable from Kafka |
+| Tracing | OpenTelemetry SDK, OTLP/HTTP → Jaeger v2 | Vendor-neutral; instrumentations for FastAPI, httpx, SQLAlchemy, Redis, PyMongo, Celery; Temporal's own interceptor |
+| Metrics | prometheus-client, scraped by Prometheus | Plain counters/gauges/histograms per process, no agent |
+| Logs | Grafana Alloy → Loki, viewed in Grafana | Tails Docker's JSON logs, no change to the services; `trace_id` links each line to its trace |
 | Testing | pytest + pytest-asyncio + httpx.AsyncClient (ASGITransport); Temporal's time-skipping test server | Unit tests everywhere; saga tests run the real workflow with faked activities on a time-skipping server (a 10-minute rider search takes milliseconds); `db`-marked tests run against the compose Postgres/Redis in separate `*_test` databases (`scripts/check.sh --with-db`) — used instead of testcontainers since the stack is already running; `scripts/smoke_test.py --lifecycle` drives whole orders through the gateway |
 | Lint/format/types | ruff + mypy | Fast, replaces flake8+isort+black in one tool |

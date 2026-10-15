@@ -109,71 +109,21 @@ Status: ✅ built · 🟡 partial · ⏳ planned (week).
 | FR-9 | server-side item pricing; promotion redemption, 5% tax and distance-based delivery fee in the saga | 1 / 2 | ✅ |
 | FR-10 | `payment-service` `authorize` (simulated card), idempotent per order | 2 | ✅ |
 | FR-11 | order stays `created` until reservation, pricing and payment succeed; `confirmed` only after the restaurant accepts | 2 | ✅ |
-| FR-12 | restaurant new-order live feed (SSE, `tracking-service`) + `POST orders/{id}/restaurant-response` → Temporal signal, 5-min timeout | 2 | ✅ (email/SMS in W3) |
+| FR-12 | restaurant new-order live feed (SSE, `tracking-service`) and a notification (in-app + SMS, from `OrderAwaitingRestaurant`); `POST orders/{id}/restaurant-response` → Temporal signal, 5-min timeout | 2 / 3 | ✅ |
 | FR-13 | saga creates the delivery and starts offering riders on `confirmed` | 2 | ✅ |
 | FR-14 | Redis GEO nearest + atomic Postgres claim, approved + available riders only; reassignment on decline, 60s expiry and drop-out (explicit or 3 min without a ping) | 2 | ✅ |
 | FR-15 | pickup and dropoff ETA from distance, vehicle speed and restaurant prep time | 2 | ✅ |
 | FR-16 | rider pickup/delivered endpoints; `delivery_status_history` + `DeliveryStatusUpdated`; live SSE feed via `tracking-service` (Redis Pub/Sub) | 2 | ✅ |
 | FR-17 | payment captured on `delivered` | 2 | ✅ |
 | FR-18 | cancel until pickup + saga compensation (void, release stock/promotion, free the rider); rider reassignment; post-delivery refund workflow | 2 | ✅ |
-| FR-19 | event schemas in `libs/events`; every event written as an outbox row in the same transaction; Kafka relay in W3 | 1 / 2 / 3 | 🟡 (published in W3) |
-| FR-20 | Notifications for order and delivery updates | §4, Guidelines W3 |
-| FR-21 | Analytics: total orders, orders per restaurant, peak-hour load, average delivery time, rider utilization, cancellation rate, acceptance rate, delivery success rate, failed events | §5 |
-
-## 5. Non-functional requirements
-
-| ID | Requirement | Approach |
-|---|---|---|
-| NFR-1 | Partial failures must not corrupt order state | local ACID transactions, Temporal saga with compensation, validate-before-write |
-| NFR-2 | Idempotent state updates; no duplicates or double-processing | Idempotency-Key on order creation, unique natural keys, `processed_events` consumer dedup |
-| NFR-3 | High concurrency at peak times | async I/O throughout, stateless services, Kafka partitioning, atomic conditional updates for stock, capacity and rider claims |
-| NFR-4 | Background tasks run independently of user flows, are traceable, and are recoverable | Kafka + Celery off the request path; transactional outbox; correlation IDs |
-| NFR-5 | Consistent, durable, queryable operational data | database-per-service with one owner per fact; snapshots; optimistic locking |
-| NFR-6 | Failures diagnosable in ordering, payment, assignment, tracking, notifications and background jobs | structured JSON logs with correlation IDs; Prometheus + Grafana; OpenTelemetry + Jaeger |
-| NFR-7 | Security | JWT at the gateway and in every service, role checks, ownership checks, blocked-user deny-list, rate limiting, argon2 password hashing |
-| NFR-8 | Reproducible local environment | Docker Compose with health-gated startup, per-service migrations, seed script |
-
-## 6. Milestones
-
-| Week | Milestone | Exit criteria |
-|---|---|---|
-| 1 | Foundation and core services | services scaffolded, schemas finalized (Postgres + Mongo), basic APIs incl. order creation working, `docker compose up` healthy, architecture diagram |
-| 2 | Order and delivery workflow | Temporal saga end to end (created → delivered), accept/reject, rider assignment and reassignment, payment simulation, cancellation with compensation |
-| 3 | Events and observability | outbox → Kafka relay, notification and analytics consumers, Celery workers, Prometheus/Grafana dashboards, Jaeger traces across services |
-| 4–5 | Part B (GenAI) | out of scope for this document |
-
-## 7. Traceability
-
-Status: ✅ built · 🟡 partial · ⏳ planned (week).
-
-| Req | Where it lives | Week | Status |
-|---|---|---|---|
-| FR-1 | `user-service`: `auth/register`, `users/me`, `users/me/addresses` | 1 | ✅ |
-| FR-2 | `restaurant-service`: `POST restaurants` (pending), `approve`/`suspend`, `mine`, `admin` | 1 | ✅ |
-| FR-3 | `restaurant-service`: categories and items CRUD, `is_available`, `stock_count` | 1 | ✅ |
-| FR-4 | `delivery-service`: `riders`, `riders/me/status`, `riders/me/location` (+ Mongo ping history), approve/suspend | 1 | ✅ |
-| FR-5 | `libs/auth` role dependencies in every service; gateway fail-closed public-route list | 1 | ✅ |
-| FR-6 | order history (`GET orders`); audit tables `order_status_history`, `restaurant_status_history`, `rider_verification_history` | 1 | ✅ (order transitions beyond `created` are recorded from W2) |
-| FR-7 | `order-service` checks availability and stock against `restaurant-service` at creation; stock *reservation* in the saga | 1 / 2 | 🟡 checked in W1, reserved in W2 |
-| FR-8 | `is_accepting_orders` checked at creation; `max_concurrent_orders` cap in the saga | 1 / 2 | 🟡 |
-| FR-9 | server-side item pricing (W1); promo, tax and fee step in the saga (W2) | 1 / 2 | 🟡 |
-| FR-10 | `payment-service` authorize (simulated), idempotent | 2 | ⏳ |
-| FR-11 | order stays `created` until saga validation passes | 2 | ⏳ |
-| FR-12 | restaurant new-order live feed (SSE) + `POST orders/{id}/restaurant-response` → Temporal signal with timeout ([week2-plan.md](./week2-plan.md) D11) | 2 | ⏳ |
-| FR-13 | saga activity after `confirmed` | 2 | ⏳ |
-| FR-14 | `delivery-service` assignment: Redis GEO nearest + atomic Postgres claim, approved + available riders only; reassignment on decline, expiry and drop-out | 2 | ⏳ (vetting gate on availability already enforced in W1) |
-| FR-15 | ETA from haversine distance and prep time | 2 | ⏳ |
-| FR-16 | delivery status endpoints + `DeliveryStatusUpdated`; SSE via `tracking-service` fed by Redis Pub/Sub | 2 | ⏳ |
-| FR-17 | payment capture on `delivered` | 2 | ⏳ |
-| FR-18 | cancel signal + compensation matrix ([technical-documentation.md#failure-handling](./technical-documentation.md#failure-handling)); post-delivery refund workflow | 2 | ⏳ |
-| FR-19 | event schemas in `libs/events`; outbox rows (`OrderPlaced` written in W1); Kafka relay | 1 / 3 | 🟡 |
-| FR-20 | `notification-service` Kafka consumer + Celery dispatch | 3 | ⏳ (schema + list endpoint in W1) |
-| FR-21 | `analytics-service` | 3 | ⏳ |
-| NFR-1 | order creation is validate-then-single-transaction; saga compensation, idempotent compensations, retries until done after pickup | 1 / 2 | ✅ |
-| NFR-2 | order Idempotency-Key; workflow ID per order; saga activities idempotent per order / refund; consumer dedup (W3) | 1–3 | 🟡 (consumers W3) |
-| NFR-3 | async I/O; stateless services; per-service gateway connection pools, timeouts, body-size limit; explicit DB pools; Redis cache for public reads; keyset pagination (W1). Atomic reservations and rider claims (concurrency-tested), Redis GEO assignment, SSE in a separate service (W2). Kafka partitioning (W3) | 1–3 | 🟡 |
-| NFR-4 | transactional outbox rows; Temporal workers (can run separately from the APIs), reconciler for unstarted sagas (W2); Kafka + Celery consumers (W3) | 1–3 | 🟡 |
-| NFR-5 | database-per-service, one owner per fact, snapshots on orders, optimistic `version` locks, `Decimal` money end to end | 1 | ✅ |
-| NFR-6 | JSON logs with a `trace_id` propagated across services + one access line per request (W1); metrics and tracing (W3) | 1 / 3 | 🟡 |
-| NFR-7 | see FR-5; bootstrap-admin one-shot + rate limited; strict request schemas (unknown fields rejected, size limits), 1 MB body limit, argon2 off the event loop | 1 | ✅ |
-| NFR-8 | `docker-compose.yml`, `entrypoint.sh` migrations, `scripts/seed.py`, `scripts/smoke_test.py --lifecycle` | 1 / 2 | ✅ |
+| FR-19 | every event written as an outbox row in the same transaction as its change; published by Celery relay workers (`order-`, `payment-`, `delivery-worker`) to Kafka, typed JSON Schemas in Schema Registry (`libs/events`); plus `OrderAwaitingRestaurant` and `RiderShiftChanged` | 1–3 | ✅ |
+| FR-20 | `notification-service` Kafka consumer → in-app, email and SMS (simulated) for customer, restaurant admin and rider; `notification-worker` (Celery) sends with retries, then `failed`; in-app inbox `GET /v1/notifications` | 3 | ✅ |
+| FR-21 | `analytics-service`: Kafka consumer → MongoDB read model; all nine metrics at `GET /v1/analytics/summary`, per restaurant, peak hours; live counters on the Grafana *Orders & deliveries* dashboard | 3 | ✅ |
+| NFR-1 | order creation is validate-then-single-transaction; saga compensation, idempotent compensations, retries until done after pickup; events can't be lost (outbox) | 1–3 | ✅ |
+| NFR-2 | order Idempotency-Key; workflow ID per order; saga activities idempotent per order / refund; consumers dedupe (`processed_events`, idempotent upserts) — a full replay changes nothing (drill 2) | 1–3 | ✅ |
+| NFR-3 | async I/O; stateless services; per-service gateway pools, timeouts, body-size limit; explicit DB pools; Redis cache for public reads; keyset pagination (W1). Atomic reservations and rider claims, Redis GEO assignment, SSE in a separate service (W2). Kafka partitioning by aggregate ID, workers scaled apart from APIs, notification sends off the request path (W3) | 1–3 | ✅ |
+| NFR-4 | outbox relay and consumers off the request path; traceable (one trace per order, `trace_id` in every log line); recoverable (outbox retries, consumer retries and DLQ, outages waited out, Celery late acks + sweep) — verified by the failure drills | 1–3 | ✅ |
+| NFR-5 | database-per-service, one owner per fact, snapshots on orders, optimistic `version` locks, `Decimal` money end to end; Mongo analytics non-authoritative | 1–3 | ✅ |
+| NFR-6 | JSON logs with `request_id` + `trace_id` in Loki; OpenTelemetry traces in Jaeger; Prometheus metrics for every flow, 4 Grafana dashboards, 7 alerts | 1 / 3 | ✅ |
+| NFR-7 | see FR-5; bootstrap-admin one-shot + rate limited; strict request schemas (unknown fields rejected, size limits), 1 MB body limit, argon2 off the event loop; metrics and observability UIs not exposed beyond localhost | 1 / 3 | ✅ |
+| NFR-8 | `docker-compose.yml` (30 containers, health-gated), `entrypoint.sh` migrations, `scripts/seed.py`, `scripts/smoke_test.py --deep --lifecycle --events`, `scripts/check.sh --with-db` | 1–3 | ✅ |

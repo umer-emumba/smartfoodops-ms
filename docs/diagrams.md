@@ -42,15 +42,20 @@ graph TD
     PS --> PaymentDB[(payment_db)]
     NS --> NotifDB[(notification_db)]
 
-    OS -.->|outbox relay via Celery beat - Week 3| Kafka[(Kafka: order/delivery/payment-events)]
-    DS -.->|outbox relay via Celery beat - Week 3| Kafka
-    PS -.->|outbox relay via Celery beat - Week 3| Kafka
-    Kafka -.-> NS
-    Kafka -.-> AS[analytics-service - Week 3]
-    NS -.->|dispatch tasks - Week 3| Rabbit[(RabbitMQ / Celery workers)]
+    GW1 -->|REST| AS[analytics-service]
+
+    OrderDB -->|"outbox → order-worker (Celery beat relay)"| Kafka[(Kafka + Schema Registry: order/delivery/payment-events)]
+    DeliveryDB -->|"outbox → delivery-worker"| Kafka
+    PaymentDB -->|"outbox → payment-worker"| Kafka
+    Kafka -->|consumer group| NS
+    Kafka -->|"consumer group (+ .dlq topics)"| AS
+    AS --> AnalyticsDB[(MongoDB: analytics)]
+    NS -->|"send tasks"| Rabbit[(RabbitMQ)]
+    Rabbit --> NW[notification-worker]
+    NW --> NotifDB
 ```
 
-Solid arrows are built; dotted arrows are Week 3 (per [PROGRESS.md](./PROGRESS.md)), the
+Solid arrows are built; dotted arrows are the
 tracking-service fallbacks (`/internal/*` calls made only when a Redis state key is
 missing), or, for the `api-gateway` replica line, production-only (Kubernetes
 `Deployment`/`HPA` + `Service` — never built locally, see
@@ -59,7 +64,10 @@ for why). Each service's Temporal worker runs inside the service process in deve
 and as a separate process (`python -m app.worker`) in production. Live tracking goes
 through Redis Pub/Sub, not Kafka: it needs sub-second push to whoever is watching, not a
 replayable log. Every database is a separate Postgres container — database-per-service,
-no shared instance.
+no shared instance. The relay workers (`order-worker`, `payment-worker`,
+`delivery-worker`) also use RabbitMQ — for their beat schedule — not drawn. Every process
+also sends traces to Jaeger and serves metrics to Prometheus; see
+[Observability](#observability).
 
 ## How data moves through one order (REST, Temporal, Pub/Sub, SSE)
 
@@ -73,7 +81,7 @@ of data. Each mechanism has one job:
 | **Temporal signals** | Tell the waiting saga that a user acted ("restaurant accepted") | ✅ durable |
 | **Redis Pub/Sub** | Announce "something changed" to tracking-service | ❌ — the latest state is saved next to it, sent as a snapshot on connect |
 | **SSE** (Server-Sent Events) | Push those changes to open screens (one-way, plain HTTP) | ❌ — the screen gets a fresh snapshot when it reconnects |
-| **Outbox → Kafka** (Week 3) | Guaranteed notifications: email, SMS, push, analytics | ✅ |
+| **Outbox → Kafka → Celery** | Guaranteed notifications (in-app, email, SMS) and analytics | ✅ |
 
 ### Overview
 
@@ -99,7 +107,7 @@ flowchart LR
     GW -->|SSE| S["Customer app<br/>Restaurant dashboard"]
 ```
 
-Guaranteed notifications (email, SMS, push) are a third path, added in Week 3 — see step 7.
+Guaranteed notifications and analytics are a third path — see step 7.
 
 ### Step 1 — The customer places the order (REST)
 
@@ -253,18 +261,20 @@ sequenceDiagram
     RD-->>C: SSE: delivered — the stream closes
 ```
 
-### Step 7 — Guaranteed notifications (Week 3: outbox → Kafka)
+### Step 7 — Guaranteed notifications and analytics (outbox → Kafka → Celery)
 
-Live screens are best-effort. Messages that must arrive — email, SMS, push — use the
-outbox: every change above already writes an event row (`OrderPlaced`,
-`OrderConfirmed`, `RiderAssigned`, …) in the same database transaction. Week 3 adds the
-relay and the senders.
+Live screens are best-effort. Messages that must arrive use the outbox: every change
+above writes an event row (`OrderPlaced`, `OrderAwaitingRestaurant`, `RiderAssigned`, …)
+in the same database transaction. A relay worker publishes it to Kafka within about a
+second; notification-service tells the customer, restaurant and rider, and
+analytics-service updates its metrics. The full path, with failure handling, is in
+[Event flow](#event-flow-outbox--kafka--consumers--celery).
 
 ```mermaid
 flowchart LR
     DB[(each service's<br/>outbox_events)] -->|Celery beat relay| K[(Kafka topics)]
     K --> NS[notification-service]
-    NS -->|Celery / RabbitMQ| Out[email / SMS / push]
+    NS -->|Celery / RabbitMQ| Out[in-app / email / SMS]
     K --> AS[analytics-service]
 ```
 
@@ -278,7 +288,105 @@ flowchart LR
 | 4 | Restaurant accepts | REST → Temporal signal |
 | 5 | Rider gets the offer | Temporal task queue; rider polls over REST |
 | 6 | Rider accepts, moves, delivers; customer watches | REST → signal; Redis Pub/Sub → SSE |
-| 7 | Email / SMS / push (Week 3) | Outbox → Kafka → Celery |
+| 7 | Notifications (in-app, email, SMS); analytics | Outbox → Kafka → Celery |
+
+## Event flow (outbox → Kafka → consumers → Celery)
+
+One event from the business write to the notification it causes. Each arrow says what
+happens when that hop fails.
+
+```mermaid
+flowchart LR
+    subgraph producer["order- / payment- / delivery-service"]
+        W["business write<br/>+ outbox row<br/>(one transaction)"] --> OB[(outbox_events)]
+    end
+    OB -->|"relay worker, every 1s:<br/>advisory lock → read → produce → flush → dispatched_at<br/>(Kafka down: rows wait, retried each tick)"| K[("Kafka topic<br/>key = aggregate ID")]
+    K -->|"poll → deserialize (Schema Registry)"| NC["notification-service consumer"]
+    K --> AC["analytics-service consumer"]
+    NC -->|"notifications + processed_events<br/>(one transaction), then commit offset"| NDB[(notification_db)]
+    NC -->|"after commit: one task per row"| MQ[(RabbitMQ)]
+    MQ --> NW["notification-worker<br/>send; retry 2s, 4s, 8s, 16s;<br/>failed after 5"]
+    NW --> NDB
+    AC -->|"idempotent upserts,<br/>then commit offset"| M[(MongoDB analytics)]
+    NC -.->|"handler failed 3×, or bad bytes"| DLQ[("topic.dlq")]
+    AC -.-> DLQ
+    DLQ -.->|raw| AC
+```
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant API as order-service (saga activity)
+    participant DB as order_db
+    participant R as order-worker (relay)
+    participant K as Kafka
+    participant N as notification-service
+    participant NDB as notification_db
+    participant Q as RabbitMQ
+    participant W as notification-worker
+
+    API->>DB: UPDATE orders + INSERT outbox_events (one transaction)
+    R->>DB: pg_try_advisory_xact_lock, SELECT undispatched ORDER BY created_at
+    R->>K: produce (key = order ID, headers: event_type, traceparent)
+    K-->>R: ack (acks=all)
+    R->>DB: SET dispatched_at, COMMIT
+    K->>N: poll
+    N->>NDB: INSERT notifications (pending) + processed_events, COMMIT
+    N->>K: commit offset
+    N->>Q: send_notification(id), one per row
+    Q->>W: deliver (acked only when the task finishes)
+    W->>NDB: SELECT … FOR UPDATE SKIP LOCKED, send, status = sent
+    Note over R,K: crash before COMMIT → re-published → N finds processed_events → no-op
+    Note over N,Q: crash before enqueue → the 30s sweep re-enqueues pending rows
+```
+
+## Trace path (one order = one trace)
+
+The W3C `traceparent` crosses every hop, so the whole order — including the work done
+long after the request returned — is one trace in Jaeger.
+
+```mermaid
+flowchart LR
+    C[client] -->|HTTP| GW[api-gateway]
+    GW -->|"HTTP + traceparent"| OS[order-service]
+    OS -->|"HTTP"| RS1[restaurant-service<br/>quote]
+    OS -->|"Temporal<br/>TracingInterceptor"| SAGA[order saga]
+    SAGA -->|activities| RS[restaurant-service]
+    SAGA --> PS[payment-service]
+    SAGA --> DS[delivery-service]
+    SAGA --> OSA[order-service<br/>transition_order]
+    OSA -->|"outbox row stores traceparent"| OW[order-worker<br/>publish span]
+    PS -.-> PW[payment-worker]
+    DS -.-> DW[delivery-worker]
+    OW -->|"Kafka header traceparent"| NS[notification-service<br/>process span]
+    OW --> AS[analytics-service<br/>process span]
+    NS -->|"Celery task message"| NW[notification-worker]
+```
+
+## Observability
+
+```mermaid
+flowchart LR
+    subgraph apps["every app container (APIs and workers)"]
+        P["process"]
+    end
+    P -->|"OTLP/HTTP spans"| J[Jaeger<br/>:16686]
+    P -->|"JSON logs on stdout"| D[(Docker log files)]
+    D -->|"tails via Docker socket"| A[Grafana Alloy]
+    A --> L[Loki]
+    PR[Prometheus<br/>:9090] -->|"scrape :9100 every 15s<br/>(Temporal SDK :9101)"| P
+    PR -->|scrape| T[Temporal server]
+    PR -->|scrape :15692| MQ[RabbitMQ]
+    PR -->|"rules.yml → alerts"| PR
+    G[Grafana<br/>:3001] --> PR
+    G --> L
+    G --> J
+    L -.->|"trace_id → trace"| J
+    J -.->|"trace → its logs"| L
+```
+
+All UIs are bound to localhost. Nothing is pushed to Prometheus — every process serves
+its metrics on an internal port, and Prometheus pulls them.
 
 ## Order lifecycle (sequence)
 
@@ -758,18 +866,80 @@ erDiagram
     NOTIFICATIONS {
         string id PK
         string user_id "opaque -> user_db.users.id"
+        string recipient_role "customer | restaurant_admin | rider"
+        string event_id "the event that caused it"
         string related_order_id "opaque -> order_db.orders.id"
         string type
-        string channel "in_app | email | sms | push"
+        string channel "in_app | email | sms"
         string content
         string status "pending | sent | failed"
         int retry_count
         string last_error
         datetime created_at
+        datetime last_attempt_at
         datetime sent_at
         datetime read_at
     }
+    PROCESSED_EVENTS {
+        string event_id PK "Kafka event ID - consumer dedup"
+        string consumer
+        datetime processed_at
+    }
 ```
+
+`processed_events` is written in the same transaction as the notifications an event
+creates, so a redelivered event creates nothing.
+
+### `analytics` (MongoDB, analytics-service)
+
+```mermaid
+erDiagram
+    ORDER_FACTS {
+        string _id PK "order ID"
+        int order_number
+        string customer_id
+        string restaurant_id
+        string restaurant_admin_id
+        decimal total_amount
+        datetime placed_at "$min - first wins"
+        datetime sent_to_restaurant_at
+        datetime confirmed_at
+        datetime rejected_at
+        string reject_reason
+        datetime cancelled_at
+        string cancel_reason
+        string cancelled_from "status it was cancelled in"
+        datetime assigned_at
+        datetime picked_up_at
+        datetime delivered_at
+        string delivery_id "current delivery"
+        string delivery_rider_id
+        datetime delivery_offered_at
+        datetime delivery_assigned_at
+        datetime delivery_ended_at
+        array reassignments "event IDs, $addToSet"
+        decimal total_refunded "$max"
+    }
+    RIDER_SHIFT_FACTS {
+        string _id PK "event ID"
+        string rider_id
+        string rider_user_id
+        bool on_shift
+        string reason
+        datetime at
+    }
+    FAILED_EVENTS {
+        string _id PK "dlq topic:partition:offset"
+        string original_topic
+        string consumer_group
+        string event_type
+        string error_type
+        string error
+        datetime at
+    }
+```
+
+Non-authoritative: everything here is rebuilt by replaying the Kafka topics.
 
 ### `outbox_events` (shared shape, present in `restaurant_db`/`order_db`/`delivery_db`/`payment_db`)
 
@@ -782,6 +952,11 @@ erDiagram
         json payload
         string correlation_id
         datetime created_at
-        datetime dispatched_at "null until relayed - Week 3"
+        datetime dispatched_at "null until relayed (partial index)"
+        string trace_context "writer's W3C traceparent"
+        int publish_attempts "failed publishes"
+        string last_error
     }
 ```
+
+restaurant-service has the table but writes no events.

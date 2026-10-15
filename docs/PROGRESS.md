@@ -12,7 +12,7 @@ not intent. See [PRD.md](./PRD.md) for requirements + traceability,
 |---|---|---|---|
 | Week 1 | Foundation & Core Services | APIs + DB + architecture setup | ☑ |
 | Week 2 | Order & Delivery Workflow | End-to-end order lifecycle | ☑ |
-| Week 3 | Events & Observability | Async processing + monitoring | ☐ |
+| Week 3 | Events & Observability | Async processing + monitoring | ☑ |
 
 ## Week 1 — Foundation + Core Services
 
@@ -701,18 +701,91 @@ per order.
 
 ## Week 3 — Event-Driven System + Observability
 
-- [ ] Kafka event schemas (Schema Registry), transactional outbox + Celery-beat relay per
+Detailed plan (design decisions W3-D1…D15, event → consumer map, metric definitions, build
+order): [week3-plan.md](./week3-plan.md). Branch `week3/event-driven-observability`. As
+built: [technical-documentation.md#event-driven-design-temporal-kafka-and-celery](./technical-documentation.md#event-driven-design-temporal-kafka-and-celery)
+and [#observability](./technical-documentation.md#observability).
+
+### Plan steps
+
+- [x] **Step 0 — Event contracts, Kafka plumbing, topics** (2026-10-15, `7523902`)
+  - Typed Pydantic payload per event, JSON Schema in Schema Registry
+    (`TopicRecordNameStrategy`, `BACKWARD`), schema snapshots + compatibility test;
+    new events `OrderAwaitingRestaurant`, `RiderShiftChanged`; payloads enriched with
+    recipients (`restaurant_admin_id`, `rider_user_id`, `customer_id`)
+  - Outbox gains `trace_context`, `publish_attempts`, `last_error`; payload validated at
+    write time. `kafka-init` creates 3 topics + 3 DLQs (3 partitions, 7 days)
+  - Old-format Week 2 outbox rows (test data) deleted with the user's OK
+- [x] **Step 1 — Outbox relay workers** (`92aa347`)
+  - `sfo_events.relay` (advisory xact lock, oldest first, idempotent producer, key =
+    aggregate ID, per-row failure tracking, hourly purge after 7 days) run by Celery beat
+    in `order-worker`, `payment-worker`, `delivery-worker`
+  - RabbitMQ 4.3 refuses Celery's transient remote-control queues → remote control off,
+    `--without-mingle --without-gossip`
+  - Verified: per-order ordering on Kafka; Kafka-down drill (backlog drained in ~6s, no
+    gaps or duplicates)
+- [x] **Step 2 — notification-service consumer + Celery dispatch** (`2568d84`)
+  - `ConsumerLoop` (retries → DLQ, outage = rewind and wait, never DLQ), `idempotent()`
+    with `processed_events`; templates per event and recipient; `notification-worker`
+    sends with backoff, `failed` after 5, 30s sweep; inbox read API
+  - Verified: replay → 0 duplicates; notification-db outage → nothing dead-lettered
+- [x] **Step 3 — analytics-service** (`77597d2`)
+  - Mongo read model (`order_facts`, `rider_shift_facts`, `failed_events`) with
+    idempotent upserts; the nine metrics at read time; Prometheus business counters on
+    first application only; gateway route `/v1/analytics`
+  - Verified: metrics match Postgres; a replay leaves Mongo and the counters unchanged
+- [x] **Step 4 — OpenTelemetry + Jaeger** (`484edd5`)
+  - Tracing in every process (FastAPI, httpx, SQLAlchemy, Redis, PyMongo), Temporal
+    `TracingInterceptor`, outbox → Kafka header → consumer, Celery sends; quiet pollers;
+    logs carry `request_id` (renamed from `trace_id`) + `trace_id`/`span_id`
+  - Verified: one order = one trace with a single root across 11 services
+- [x] **Step 5 — Metrics, dashboards, logs** (`edae78b`)
+  - Prometheus metrics on internal :9100 everywhere (RED by route template, Celery,
+    outbox, consumers, saga outcomes, notifications, rider pool, streams), Temporal SDK
+    + server, RabbitMQ; 7 alert rules; Loki + Alloy; Grafana (host :3001) with 4
+    generated dashboards and logs ↔ traces links
+  - Verified: 20/20 targets up; 39 dashboard queries return data; `OutboxLagging` fired
+    with Kafka down and cleared after
+- [x] **Step 6 — End-to-end checks + failure drills** (`8cfb8a4`)
+  - `smoke_test.py --events`: notifications per recipient and channel (once, all sent),
+    analytics deltas, one trace ≥ 8 services, backlog 0, nothing dead-lettered
+  - Drills 1–5 (Kafka down, offset reset, poison message, worker killed, 50%/100% send
+    failures) all pass — they found three bugs, fixed with tests: `SerializationError`
+    treated as an outage (partition blocked), consumer lag from position instead of
+    committed offsets (false `ConsumerLagging`), alert counters born at 1 (first failure
+    invisible); new `kafka_events_duplicates_total`
+  - Verified: `smoke_test.py --deep --lifecycle --events` 114/114; `check.sh --with-db`
+    green; stack 4.17 GiB of 7.75 across 30 containers
+- [x] **Step 7 — Docs** (2026-10-15)
+  - `technical-documentation.md`: event-driven design as built (events, relay,
+    consumers, DLQ, notifications, analytics), failure handling, observability, failure
+    drills, Week 3 tradeoffs, roadmap; `architecture.md`: services, workers, platform
+    containers, events catalog, data model, tracing/metrics conventions, repo layout;
+    `diagrams.md`: event flow, trace path, observability topology, updated component
+    and ER diagrams (all Mermaid blocks render); README: workflows, stack, containers,
+    observability URLs, `--events`, failure drills; PRD traceability (sections 5–7 were
+    duplicated — merged)
+
+**Week 3 known limits** (documented in technical-documentation.md): email/SMS are
+simulated, with no contact details; alerts aren't routed to anyone (no Alertmanager);
+Jaeger keeps traces in memory; no Kafka broker metrics; consumers run inside the API
+processes in dev.
+
+### Original scope checklist
+
+- [x] Kafka event schemas (Schema Registry), transactional outbox + Celery-beat relay per
       service
-- [ ] `notification-service`: Kafka consumer group + Celery dispatch task
-- [ ] `analytics-service`: Kafka consumer aggregating required metrics into Mongo, read API
-- [ ] Idempotent consumers (`processed_events` dedup)
-- [ ] OpenTelemetry across every service + gateway + Temporal worker + Kafka
+- [x] `notification-service`: Kafka consumer group + Celery dispatch task
+- [x] `analytics-service`: Kafka consumer aggregating required metrics into Mongo, read API
+- [x] Idempotent consumers (`processed_events` dedup; idempotent upserts in analytics)
+- [x] OpenTelemetry across every service + gateway + Temporal worker + Kafka
       producers/consumers
-- [ ] Prometheus `/metrics` per service; Grafana dashboards in `infra/grafana/`
-- [ ] Jaeger: one order's full trace across every service it touched
-- [ ] Deliverable check: fully event-driven, end-to-end traceable system; dashboards
-      enabled
-- [ ] Docs fully reflect the finished Part A system, ready for mentor review
+- [x] Prometheus metrics per service (internal port, not `/metrics` on the API port);
+      Grafana dashboards in `infra/grafana/`
+- [x] Jaeger: one order's full trace across every service it touched
+- [x] Deliverable check: fully event-driven, end-to-end traceable system; dashboards
+      enabled (`smoke_test.py --events`, failure drills)
+- [x] Docs fully reflect the finished Part A system, ready for mentor review
 
 ## Documentation & Submission
 
@@ -720,6 +793,6 @@ per order.
       workflows, tech stack, local setup, API overview
 - [x] `docs/technical-documentation.md` has every required section (service breakdown,
       lifecycle flows, event-driven design, failure handling, consistency approach,
-      tradeoffs) — Week 2 sections match what's built; Week 3 sections are design
+      tradeoffs) — all of it matches what's built (Weeks 1–3)
 - [x] `docs/PRD.md`: use cases, functional + non-functional requirements, milestones,
       traceability (update status column each week)

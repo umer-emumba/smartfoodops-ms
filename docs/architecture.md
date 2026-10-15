@@ -1,8 +1,7 @@
 # SmartFoodOps — Architecture (Part A)
 
 QuickServe/SmartFoodOps is a microservices-based food ordering and delivery platform.
-This document describes the target Part A design. Anything not yet built is marked
-**(Week 3)**; unmarked items exist in the code today. For the reasoning behind each decision, see
+This document describes the Part A system as built (Weeks 1–3). For the reasoning behind each decision, see
 [technical-documentation.md](./technical-documentation.md). For diagrams (microservices
 architecture, order-lifecycle sequences, one ER diagram per service database), see
 [diagrams.md](./diagrams.md). For
@@ -23,12 +22,29 @@ database directly. Cross-service contact only happens through the mechanisms in
 | `delivery-service` | Rider registration/availability + vetting audit trail, rider location ingestion; deliveries, nearest-rider offers, reassignment, ETA, stale-rider detection | Postgres (`delivery_db`) + Redis (GEO rider pool, live positions) + MongoDB (high-frequency rider location pings, TTL-indexed) |
 | `payment-service` | Simulated card payments: authorize, capture, void, full/partial refund — idempotent per order and per refund | Postgres (`payment_db`) |
 | `tracking-service` | Live SSE feeds: a customer's order, a restaurant's incoming orders. Stateless; ownership checked from Redis state keys | Redis only (Pub/Sub + state keys written by order- and delivery-service) |
-| `notification-service` | Notification records (list-mine in Week 1); order/delivery notification dispatch, simulated email/SMS/push **(Week 3)** | Postgres (`notification_db`) |
-| `analytics-service` (Week 3) | Event/metrics aggregation for the required analytics list | MongoDB (raw event log + rollups) |
+| `notification-service` | Turns order, payment and delivery events into notifications for the customer, restaurant admin and rider (in-app, simulated email and SMS); the in-app inbox. Kafka consumer group `notification-service` | Postgres (`notification_db`) |
+| `analytics-service` | The nine Part A metrics, computed from events; read API for system admins and restaurant admins. Kafka consumer group `analytics-service` (also reads the `.dlq` topics) | MongoDB (`analytics`: `order_facts`, `rider_shift_facts`, `failed_events`) |
 
 Each service is its own FastAPI app, own DB, own Dockerfile, own OpenAPI contract. The
 four services with saga steps (order, restaurant, payment, delivery) each also run a
 Temporal worker — see [Order saga (Temporal)](#order-saga-temporal).
+
+**Workers** — Celery processes from the same image as their service (`celery -A
+app.celery_app worker --beat --pool=solo`), each on its own RabbitMQ queue and with its
+own beat schedule:
+
+| Container | Runs | Schedule |
+|---|---|---|
+| `order-worker`, `payment-worker`, `delivery-worker` | the outbox relay: publishes the service's outbox to Kafka (`sfo_events.relay`); purges rows dispatched over 7 days ago | relay every 1s, purge hourly |
+| `notification-worker` | `send_notification(id)`: one send attempt, retried with backoff; the sweep that re-enqueues stuck `pending` rows | sweep every 30s |
+
+restaurant-service has an outbox table but writes no events, so it has no relay.
+
+**Platform containers** (`docker-compose.yml`): Postgres per service, MongoDB, Redis,
+RabbitMQ, Kafka (KRaft, single broker) + Schema Registry, `kafka-init` (creates the
+topics, then exits), Temporal dev server, and for observability Jaeger, Prometheus,
+Loki, Grafana Alloy and Grafana — see
+[technical-documentation.md#observability](./technical-documentation.md#observability).
 
 ## Gateway resilience
 
@@ -64,15 +80,32 @@ local Traefik-based version of it was removed rather than kept as a demo.
 - **Redis Pub/Sub** carries live tracking: order- and delivery-service publish each change,
   `tracking-service` streams it to whoever is watching — see
   [Real-time delivery tracking](#real-time-delivery-tracking).
-- **Kafka + Schema Registry (Week 3)** owns the domain event backbone: `OrderPlaced`,
-  `OrderConfirmed`, `OrderRejected`, `OrderCancelled`, `PaymentSuccessful`, `RiderAssigned`,
-  `OrderPickedUp`, `OrderDelivered`, `DeliveryStatusUpdated`, `RefundProcessed` — for
-  decoupled fan-out to `notification-service` and `analytics-service`, via the
-  transactional outbox pattern (see technical-documentation.md). Built today: each of
-  these is written as an outbox row in the same transaction as the change it describes;
-  nothing publishes outbox rows to Kafka until Week 3's relay.
-- **Celery + RabbitMQ (Week 3)** owns short, single-service, fire-and-forget jobs: the outbox relay,
-  and `notification-service`'s actual dispatch task.
+- **Kafka + Schema Registry** owns the domain event backbone — decoupled fan-out to
+  `notification-service` and `analytics-service`. Every event is written as an outbox
+  row in the same transaction as the change it describes, and a relay worker publishes
+  it (the transactional outbox pattern). See [Events](#events) below.
+- **Celery + RabbitMQ** owns short, single-service background jobs: the outbox relay and
+  sending notifications (see **Workers** above).
+
+### Events
+
+| Topic (3 partitions, key = aggregate ID) | Event | Producer | Payload highlights | Consumed by |
+|---|---|---|---|---|
+| `order-events` | `OrderPlaced` | order-service (`POST /v1/orders`) | customer, restaurant, restaurant admin, items, `total_amount` (still the subtotal: the saga adds tax and fee later) | notification, analytics |
+| | `OrderAwaitingRestaurant` | saga transition | `restaurant_admin_id`, total | notification (restaurant), analytics |
+| | `OrderConfirmed`, `OrderRejected`, `OrderCancelled`, `RiderAssigned`, `OrderPickedUp`, `OrderDelivered` | saga transitions (`transition_order`) | from/to status, reason, customer, restaurant admin, total | notification, analytics |
+| `payment-events` | `PaymentSuccessful` | payment-service (authorize) | payment, customer, amount, status | — (published for future consumers; an authorization isn't worth a message, and analytics doesn't need it) |
+| | `RefundProcessed` | payment-service (refund) | amount, customer | notification, analytics |
+| `delivery-events` | `DeliveryStatusUpdated` | delivery-service (every delivery status) | from/to status, `rider_user_id`, customer, reason | notification (rider), analytics |
+| | `RiderShiftChanged` | delivery-service (offline ↔ on shift: status endpoint, suspension, drop-out) | on/off shift, reason | analytics |
+
+Every topic has a `<topic>.dlq` twin for messages a consumer gave up on; messages keep
+their key and headers, plus `dlq.*` headers (error, error type, consumer group, original
+topic/partition/offset, attempts). Message headers also carry `event_type`, the
+correlation ID and the W3C `traceparent`. Schemas: JSON Schema generated from the
+Pydantic payload models (`libs/events/src/sfo_events/payloads.py`), registered under
+`TopicRecordNameStrategy` with `BACKWARD` compatibility; snapshots in
+`libs/events/schemas/`.
 - **Redis** also holds the gateway's rate-limit counters and the blocked-user deny-list,
   the public menu cache, and the rider assignment pool (GEO set `riders:available`).
   Rider assignment needs no distributed lock: the nearest candidate comes from
@@ -207,10 +240,21 @@ high write volume; see technical-documentation.md for why.
   failure_reason, refunded_amount/refunded_at, authorized_at/captured_at/voided_at**,
   `idempotency_key`), `refunds` (one row per refund workflow ID, so a retried refund
   can't pay out twice), `outbox_events`.
-- **`notification_db`**: `notifications` (incl. **related_order_id** — links back to what
-  it's about, **sent_at/read_at, retry_count/last_error**).
-- Week 3: `processed_events` table/collection in every Kafka-consuming service (consumer
-  dedup); `analytics-service`'s Mongo gets `raw_events` + per-metric rollups.
+- **`notification_db`**: `notifications` (one row per recipient and channel: **user_id,
+  recipient_role, event_id** (the event that caused it), **related_order_id**, type,
+  channel `in_app | email | sms`, content, status `pending | sent | failed`,
+  **retry_count/last_error/last_attempt_at, sent_at/read_at**); `processed_events`
+  (`event_id` PK, consumer, processed_at — consumer dedup, written in the same
+  transaction as the notifications).
+- **`analytics`** (MongoDB, analytics-service): `order_facts` (one document per order,
+  `_id` = order ID — milestone timestamps, restaurant, amount, reasons, current delivery
+  and reassignments, refunds), `rider_shift_facts` (one per on/off-shift change),
+  `failed_events` (one per dead-lettered message). Non-authoritative: rebuilt by
+  replaying the topics.
+- **`outbox_events`** (order, payment, delivery and restaurant DBs): id, aggregate_id,
+  event_type, payload, correlation_id, created_at, **dispatched_at** (null until
+  relayed; partial index on undispatched rows), **trace_context** (the writer's
+  `traceparent`), **publish_attempts/last_error** (set when Kafka refused it).
 
 **Audit trail**: the requirements call for "order history and audit trails." Each service
 that owns a status-bearing entity keeps an append-only history table, written **in the same
@@ -225,8 +269,8 @@ transaction** as the status change so the trail can never disagree with the curr
 
 Each row stores `from_status`, `to_status`, `actor_id`, `actor_role`, `reason`, and
 `created_at`. No-op transitions (approving an already-active restaurant) record nothing.
-**(Week 3)** The Kafka event log adds a second, cross-service, replayable view of the same
-facts, but it isn't what the audit trail depends on.
+The Kafka event log adds a second, cross-service, replayable view of the same facts (kept
+7 days), but it isn't what the audit trail depends on.
 
 ## Auth, token lifetime & blocked-user handling
 
@@ -304,7 +348,7 @@ before they're operationally trusted:
     ends after `delivered`, `cancelled` or `rejected`.
   - `GET /v1/tracking/restaurants/{id}`: a `snapshot` of orders awaiting a decision, then
     `new_order` and `order_cancelled`. This is how a restaurant "receives the order
-    notification" in real time; email/SMS come with notification-service in Week 3.
+    notification" in real time; notification-service also sends it in-app and by SMS.
 - **How it's wired**: publishers write the latest state (`tracking:order:{id}:state`
   hash; `tracking:restaurant:{id}:pending` set) and `PUBLISH` to `tracking:order:{id}` /
   `tracking:restaurant:{id}` in one Redis pipeline. `tracking-service` subscribes
@@ -416,20 +460,36 @@ A full pass over every route in all 7 services (the gateway plus six domain serv
   copies `env.example` → `.env` before running Compose. `DATABASE_URL`:
   `postgresql+asyncpg://user:pass@host:5432/dbname`.
 - **Kafka topics**: one per aggregate (`order-events`, `delivery-events`, `payment-events`),
-  `event_type` field inside the payload, partitioned by aggregate ID.
+  `event_type` in the envelope and in a header, keyed (partitioned) by aggregate ID, plus
+  a `.dlq` twin each. Created by `kafka-init`, never auto-created. Consumer group = the
+  consuming service's name.
+- **Events**: past-tense names (`OrderPlaced`); payloads carry the IDs consumers need
+  (customer, restaurant admin, rider user) so no consumer calls another service; a
+  payload change must stay backward compatible (`libs/events/tests/test_schema_compat.py`).
 - **Temporal task queues**: one per service — `order-saga` (workflows),
   `order-activities`, `restaurant-activities`, `payment-activities`,
   `delivery-activities` (`sfo_contracts.TaskQueue`). Workflow IDs: `order-{id}`,
   `refund-{order_id}`.
-- **Trace ID (`X-Request-ID`)**: generated at the gateway if absent (a valid client value
+- **Request ID (`X-Request-ID`)**: generated at the gateway if absent (a valid client value
   is kept), returned on every response, and forwarded on every downstream call — by the
   gateway, and by service-to-service clients through the shared
   `sfo_common.middleware.propagate_correlation_id` httpx hook. Every JSON log line carries
-  it as `request_id`, next to the OpenTelemetry `trace_id`/`span_id` (Week 3); it's also
-  stored on outbox rows and carried into Kafka headers. To debug one request: take `X-Request-ID` from the response, then
+  it as `request_id`; it's also stored on outbox rows (`correlation_id`) and carried into
+  Kafka headers. To debug one request: take `X-Request-ID` from the response, then
   `docker compose logs --no-log-prefix | grep <id>` shows its path through every service.
+- **Tracing**: OpenTelemetry, set up once per process in `app/__init__.py`
+  (`sfo_observability.setup_tracing`); service name = the compose service
+  (`OTEL_SERVICE_NAME`, so `order-worker` isn't reported as order-service). The trace
+  follows an order through HTTP, Temporal, the outbox, Kafka and Celery; log lines carry
+  `trace_id`/`span_id`. Background pollers run inside `quiet()` so they don't start a
+  trace every tick.
+- **Metrics**: every process serves Prometheus metrics on `METRICS_PORT` (9100), Temporal
+  workers also on 9101 — internal ports only, never routed by the gateway. Names follow
+  Prometheus conventions (`_total` counters, `_seconds` units); HTTP metrics are labelled
+  by route template, never by raw path; a counter an alert watches is created at 0 when
+  the process starts.
 - **Logging**: JSON on stdout, never files — Docker rotates it (10 MB × 3 per container,
-  `docker-compose.yml`) and a collector ships it in Week 3. Every service writes one
+  `docker-compose.yml`) and Grafana Alloy ships it to Loki. Every service writes one
   access line per request (`logger: sfo.request` — method, path, status, duration;
   health probes skipped); uvicorn's own logs go through the same JSON formatter and its
   plain-text access log is off.
@@ -494,14 +554,20 @@ FastAPI auto-generates OpenAPI from route signatures + Pydantic models — Swagg
 smartfoodops/
   pyproject.toml                 # uv workspace root
   docker-compose.yml
-  infra/                          # (Week 3) prometheus/ grafana/ otel-collector/
+  infra/
+    prometheus/    # prometheus.yml (scrape targets), rules.yml (alerts)
+    grafana/       # provisioning/ (data sources, dashboards), dashboards/*.json,
+                    # build_dashboards.py (generates the dashboards)
+    alloy/         # config.alloy: Docker logs → Loki
   libs/
     common/        # FastAPI app factory, config, error handlers, IDs, pagination,
                     # Temporal client/worker helpers, test helpers
     auth/           # JWT issue/verify, role dependency, deny-list
     contracts/      # saga contracts: task queues, activity/signal names and models
-    events/         # pydantic event schemas + outbox mixin; kafka producer/consumer (Week 3)
-    observability/  # JSON logging with redaction; OTel + Prometheus wiring (Week 3)
+    events/         # event envelope + typed payloads, outbox mixin, Kafka (de)serializers,
+                    # outbox relay, consumer loop, idempotency, pipeline metrics;
+                    # schemas/ (JSON Schema snapshots)
+    observability/  # JSON logging with redaction; OpenTelemetry + Prometheus wiring
   services/
     api-gateway/
     user-service/
@@ -511,7 +577,7 @@ smartfoodops/
     payment-service/
     tracking-service/     # SSE feeds, Redis only
     notification-service/
-    analytics-service/    # added Week 3
+    analytics-service/    # Kafka consumer → Mongo read model; metrics API
   docs/
     PRD.md
     architecture.md
@@ -520,7 +586,7 @@ smartfoodops/
     PROGRESS.md
   scripts/
     seed.py
-    smoke_test.py   # end-to-end through the gateway (--deep, --lifecycle)
+    smoke_test.py   # end-to-end through the gateway (--deep, --lifecycle, --events)
     check.sh        # lint, types, tests (--with-db: real Postgres/Redis)
   README.md
 ```
