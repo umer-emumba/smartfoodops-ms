@@ -9,6 +9,7 @@ import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 
+from sfo_observability import quiet
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 from temporalio.client import Client
@@ -79,7 +80,8 @@ async def run_reconciler(client: Client) -> None:
     while True:
         await asyncio.sleep(settings.reconcile_interval_seconds)
         try:
-            await reconcile_once(client)
+            with quiet():  # a poll; restarted sagas are traced by Temporal
+                await reconcile_once(client)
         except Exception:
             # Never takes the workers down; retried next run.
             _logger.warning("Order reconciler run failed", exc_info=True)

@@ -21,6 +21,7 @@ from sfo_contracts import order_workflow_id
 from sfo_contracts.activities import PING, PingResult
 from temporalio import activity
 from temporalio.client import Client
+from temporalio.contrib.opentelemetry import TracingInterceptor
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.service import RPCError, RPCStatusCode
 from temporalio.worker import Worker
@@ -45,9 +46,27 @@ GRACEFUL_SHUTDOWN_TIMEOUT = timedelta(seconds=8)
 # are deterministic — re-importing them per workflow run would only cost time.
 _WORKFLOW_RUNNER = SandboxedWorkflowRunner(
     restrictions=SandboxRestrictions.default.with_passthrough_modules(
-        "sfo_contracts", "pydantic", "pydantic_core", "annotated_types"
+        "sfo_contracts",
+        "pydantic",
+        "pydantic_core",
+        "annotated_types",
+        # TracingInterceptor runs inside workflows; the sandbox would
+        # otherwise refuse to import OpenTelemetry (week3-plan step 4).
+        "opentelemetry",
+        # Each service's `app/__init__.py` sets up tracing from its settings,
+        # and the sandbox re-runs it when a workflow imports from `app`:
+        # loading settings reads `.env`, which workflows may not do. Both are
+        # already loaded in the host and change nothing at run time.
+        "sfo_observability",
+        "app.config",
     )
 )
+
+# Traces through Temporal (week3-plan W3-D12): starting or signalling a
+# workflow, the workflow, and each activity become spans of the caller's
+# trace. Set on the client; workers built from it inherit it. A no-op while
+# tracing is off (no tracer provider set).
+_INTERCEPTORS = [TracingInterceptor()]
 
 _CONNECT_RETRY_MAX_DELAY_SECONDS = 10.0
 _EMBEDDED_RESTART_DELAY_SECONDS = 5.0
@@ -74,7 +93,12 @@ async def connect_client(address: str, *, namespace: str = "default") -> Client:
     delay = 1.0
     while True:
         try:
-            return await Client.connect(address, namespace=namespace, data_converter=DATA_CONVERTER)
+            return await Client.connect(
+                address,
+                namespace=namespace,
+                data_converter=DATA_CONVERTER,
+                interceptors=_INTERCEPTORS,
+            )
         except Exception as exc:
             _logger.warning(
                 "Temporal not reachable, retrying",
@@ -92,6 +116,7 @@ async def lazy_client(settings: TemporalSettings) -> Client:
         settings.temporal_address,
         namespace=settings.temporal_namespace,
         data_converter=DATA_CONVERTER,
+        interceptors=_INTERCEPTORS,
         lazy=True,
     )
 

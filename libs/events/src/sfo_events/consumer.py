@@ -32,8 +32,9 @@ from confluent_kafka import KafkaError, Message, TopicPartition
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
-from sfo_events.kafka import Headers, dlq_headers
+from sfo_events.kafka import Headers, dlq_headers, header_value
 from sfo_events.schemas import DomainEvent, EventType, dlq_topic
+from sfo_events.tracing import process_span
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +111,10 @@ def parse_event(data: dict[str, Any]) -> DomainEvent | None:
     return event
 
 
+def _header(msg: Message, name: str) -> str | None:
+    return header_value(msg.headers(), name)
+
+
 class ConsumerLoop:
     def __init__(
         self,
@@ -180,6 +185,12 @@ class ConsumerLoop:
             if error.code() != KafkaError._PARTITION_EOF:
                 logger.warning("Kafka consumer error: %s", error)
             return None
+        with process_span(
+            msg.topic() or "", msg.headers(), self._group, _header(msg, "event_type")
+        ):
+            return await self._handle_record(msg)
+
+    async def _handle_record(self, msg: Message) -> Outcome:
         if msg.topic() in self._raw_topics:
             return await self._handle_raw(msg)
         try:

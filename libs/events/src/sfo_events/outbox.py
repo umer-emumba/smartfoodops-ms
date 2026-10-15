@@ -7,6 +7,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from sfo_events.payloads import validate_payload
 from sfo_events.schemas import EventType
+from sfo_events.tracing import current_traceparent
 
 
 class OutboxEventMixin:
@@ -29,7 +30,7 @@ class OutboxEventMixin:
     )
     dispatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # W3C `traceparent` of the writing request/activity, carried to Kafka
-    # headers so consumers continue the trace (filled from Week 3 step 4).
+    # headers so consumers continue the trace (sfo_events.tracing).
     trace_context: Mapped[str | None] = mapped_column(String, nullable=True)
     # Failed relay attempts and the latest error — a row that keeps failing
     # is visible here (and in the outbox-age alert) instead of only in logs.
@@ -55,4 +56,5 @@ def new_outbox_row[T](
         event_type=event_type.value,
         payload=validate_payload(event_type, payload),
         correlation_id=correlation_id,
+        trace_context=current_traceparent(),
     )  # type: ignore[call-arg]

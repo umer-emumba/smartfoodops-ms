@@ -41,6 +41,14 @@ HEADER_DLQ_ATTEMPTS = "dlq.attempts"
 
 # confluent-kafka's header type (values may be str, bytes or None).
 Headers = list[tuple[str, str | bytes | None]]
+# What Message.headers() is typed as.
+HeadersLike = Headers | dict[str, str | bytes | None] | None
+
+
+def header_items(headers: HeadersLike) -> Headers:
+    if headers is None:
+        return []
+    return list(headers.items()) if isinstance(headers, dict) else headers
 
 
 def make_producer(bootstrap_servers: str, **overrides: Any) -> Producer:
@@ -143,10 +151,10 @@ def event_headers(event: DomainEvent) -> Headers:
     return headers
 
 
-def header_value(headers: Headers | None, name: str) -> str | None:
+def header_value(headers: HeadersLike, name: str) -> str | None:
     """Last value of header `name` (Kafka allows repeats), decoded."""
     value = None
-    for key, raw in headers or []:
+    for key, raw in header_items(headers):
         if key == name and raw is not None:
             value = raw if isinstance(raw, str) else raw.decode(errors="replace")
     return value
@@ -156,7 +164,7 @@ def dlq_headers(msg: Message, *, group: str, error: BaseException, attempts: int
     """The original headers plus where the message came from and why it
     failed."""
     return [
-        *(msg.headers() or []),
+        *header_items(msg.headers()),
         (HEADER_DLQ_TOPIC, (msg.topic() or "").encode()),
         (HEADER_DLQ_PARTITION, str(msg.partition()).encode()),
         (HEADER_DLQ_OFFSET, str(msg.offset()).encode()),

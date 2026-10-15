@@ -6,7 +6,7 @@ from sfo_common import create_app
 from sfo_common.db import check_db_ready
 from sfo_common.health import add_health_routes
 from sfo_common.temporal import embedded_workers
-from sfo_observability import configure_logging
+from sfo_observability import configure_logging, instrument_fastapi
 
 from app.api import internal
 from app.api.routes import router
@@ -31,6 +31,7 @@ app = create_app(
     lifespan=_lifespan,
 )
 
+instrument_fastapi(app)
 app.include_router(router)
 app.include_router(internal.router)
 

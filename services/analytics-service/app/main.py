@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from prometheus_client import make_asgi_app
 from sfo_common import create_app
 from sfo_common.health import add_health_routes
-from sfo_observability import configure_logging
+from sfo_observability import configure_logging, instrument_fastapi
 
 from app import mongo
 from app.api.routes import router
@@ -42,6 +42,7 @@ app = create_app(
     lifespan=_lifespan,
 )
 
+instrument_fastapi(app)
 app.include_router(router)
 # Prometheus scrapes this on the container network; api-gateway only proxies
 # /v1/{resource}, so it isn't reachable from outside.

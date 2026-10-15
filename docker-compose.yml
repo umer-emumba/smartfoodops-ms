@@ -14,7 +14,15 @@ x-logging: &default-logging
 # beat) instead of the API. They start after their service is healthy, i.e.
 # after its migrations ran. Dev-only broker credentials, like the Postgres
 # ones below.
+# Tracing (docs/week3-plan.md W3-D11): every service and worker sends spans
+# over OTLP/HTTP straight to Jaeger. Sample everything in dev.
+x-otel-env: &otel-env
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+  OTEL_TRACES_SAMPLER: parentbased_traceidratio
+  OTEL_TRACES_SAMPLER_ARG: "1.0"
+
 x-broker-env: &broker-env
+  <<: *otel-env
   CELERY_BROKER_URL: amqp://sfo:sfo@rabbitmq:5672//
 
 x-celery-worker: &celery-worker
@@ -226,6 +234,15 @@ services:
       timeout: 5s
       retries: 10
 
+  # Traces (week3-plan W3-D11): Jaeger v2 — itself an OpenTelemetry
+  # Collector distribution, so services export OTLP to it directly. The
+  # default all-in-one config keeps traces in memory (lost on restart),
+  # which is what dev needs. UI on localhost only; OTLP stays internal.
+  jaeger:
+    logging: *default-logging
+    image: jaegertracing/jaeger:2.22.0
+    ports: ["127.0.0.1:16686:16686"]
+
   temporal:
     logging: *default-logging
     # Temporal CLI dev server — Temporal's recommended local setup, replacing the
@@ -261,6 +278,7 @@ services:
     logging: *default-logging
     build: { context: ., dockerfile: services/api-gateway/Dockerfile }
     env_file: [services/api-gateway/.env]
+    environment: *otel-env
     depends_on:
       redis: { condition: service_healthy }
     ports: ["127.0.0.1:8080:8000"]
@@ -274,6 +292,7 @@ services:
     logging: *default-logging
     build: { context: ., dockerfile: services/user-service/Dockerfile }
     env_file: [services/user-service/.env]
+    environment: *otel-env
     depends_on:
       user-db: { condition: service_healthy }
       redis: { condition: service_healthy }
@@ -287,6 +306,7 @@ services:
     logging: *default-logging
     build: { context: ., dockerfile: services/restaurant-service/Dockerfile }
     env_file: [services/restaurant-service/.env]
+    environment: *otel-env
     depends_on:
       restaurant-db: { condition: service_healthy }
       # Public-read cache (app/cache.py). Not strictly required — a Redis
@@ -303,6 +323,7 @@ services:
     logging: *default-logging
     build: { context: ., dockerfile: services/order-service/Dockerfile }
     env_file: [services/order-service/.env]
+    environment: *otel-env
     depends_on:
       order-db: { condition: service_healthy }
       temporal: { condition: service_healthy }
@@ -316,6 +337,7 @@ services:
     logging: *default-logging
     build: { context: ., dockerfile: services/delivery-service/Dockerfile }
     env_file: [services/delivery-service/.env]
+    environment: *otel-env
     depends_on:
       delivery-db: { condition: service_healthy }
       mongo: { condition: service_healthy }
@@ -330,6 +352,7 @@ services:
     logging: *default-logging
     build: { context: ., dockerfile: services/payment-service/Dockerfile }
     env_file: [services/payment-service/.env]
+    environment: *otel-env
     depends_on:
       payment-db: { condition: service_healthy }
       temporal: { condition: service_healthy }
@@ -341,6 +364,9 @@ services:
 
   order-worker:
     <<: *celery-worker
+    environment:
+      <<: *broker-env
+      OTEL_SERVICE_NAME: order-worker
     build: { context: ., dockerfile: services/order-service/Dockerfile }
     env_file: [services/order-service/.env]
     depends_on:
@@ -352,6 +378,9 @@ services:
 
   payment-worker:
     <<: *celery-worker
+    environment:
+      <<: *broker-env
+      OTEL_SERVICE_NAME: payment-worker
     build: { context: ., dockerfile: services/payment-service/Dockerfile }
     env_file: [services/payment-service/.env]
     depends_on:
@@ -363,6 +392,9 @@ services:
 
   delivery-worker:
     <<: *celery-worker
+    environment:
+      <<: *broker-env
+      OTEL_SERVICE_NAME: delivery-worker
     build: { context: ., dockerfile: services/delivery-service/Dockerfile }
     env_file: [services/delivery-service/.env]
     depends_on:
@@ -378,6 +410,7 @@ services:
     logging: *default-logging
     build: { context: ., dockerfile: services/tracking-service/Dockerfile }
     env_file: [services/tracking-service/.env]
+    environment: *otel-env
     depends_on:
       redis: { condition: service_healthy }
     healthcheck:
@@ -410,6 +443,7 @@ services:
     logging: *default-logging
     build: { context: ., dockerfile: services/analytics-service/Dockerfile }
     env_file: [services/analytics-service/.env]
+    environment: *otel-env
     depends_on:
       mongo: { condition: service_healthy }
       schema-registry: { condition: service_healthy }
@@ -422,6 +456,9 @@ services:
 
   notification-worker:
     <<: *celery-worker
+    environment:
+      <<: *broker-env
+      OTEL_SERVICE_NAME: notification-worker
     build: { context: ., dockerfile: services/notification-service/Dockerfile }
     env_file: [services/notification-service/.env]
     depends_on:

@@ -11,6 +11,7 @@ import logging
 from redis.asyncio import Redis
 from redis.asyncio.client import PubSub
 from redis.exceptions import RedisError
+from sfo_observability import quiet
 
 _logger = logging.getLogger(__name__)
 
@@ -67,7 +68,8 @@ class Hub:
         assert self._pubsub is not None
         while True:
             try:
-                message = await self._pubsub.get_message(timeout=1.0)
+                with quiet():  # polled every second
+                    message = await self._pubsub.get_message(timeout=1.0)
             except RedisError:
                 # redis-py reconnects and re-subscribes on the next read.
                 _logger.warning("Tracking pub/sub read failed, retrying", exc_info=True)

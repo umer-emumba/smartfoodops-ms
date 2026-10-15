@@ -16,6 +16,7 @@ from sfo_common import temporal
 from sfo_common.errors import AppError
 from sfo_contracts import OrderSagaSignal
 from sfo_contracts.workflows import RiderDropped
+from sfo_observability import quiet
 from sqlalchemy import or_, select
 from temporalio.client import Client
 
@@ -80,6 +81,7 @@ async def run_stale_rider_detector(client: Client) -> None:
     while True:
         await asyncio.sleep(settings.stale_rider_check_interval_seconds)
         try:
-            await check_once(client)
+            with quiet():  # a poll; signalled sagas are traced by Temporal
+                await check_once(client)
         except Exception:
             _logger.warning("Stale-rider check failed", exc_info=True)

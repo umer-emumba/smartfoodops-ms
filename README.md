@@ -197,7 +197,7 @@ service has its own top-level `app` package.
 ### Debugging one request across services
 
 Every response carries an `X-Request-ID` header, and every service logs under that
-same ID as `trace_id`. To see one request's whole path:
+same ID as `request_id`. To see one request's whole path:
 
 ```bash
 docker compose logs --no-log-prefix | grep <x-request-id>

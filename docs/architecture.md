@@ -425,8 +425,8 @@ A full pass over every route in all 7 services (the gateway plus six domain serv
   is kept), returned on every response, and forwarded on every downstream call — by the
   gateway, and by service-to-service clients through the shared
   `sfo_common.middleware.propagate_correlation_id` httpx hook. Every JSON log line carries
-  it as `trace_id`; it's also stored on outbox rows and carried into Kafka headers
-  **(Week 3)**. To debug one request: take `X-Request-ID` from the response, then
+  it as `request_id`, next to the OpenTelemetry `trace_id`/`span_id` (Week 3); it's also
+  stored on outbox rows and carried into Kafka headers. To debug one request: take `X-Request-ID` from the response, then
   `docker compose logs --no-log-prefix | grep <id>` shows its path through every service.
 - **Logging**: JSON on stdout, never files — Docker rotates it (10 MB × 3 per container,
   `docker-compose.yml`) and a collector ships it in Week 3. Every service writes one

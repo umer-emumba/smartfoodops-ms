@@ -37,6 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from sfo_events.kafka import EventSerializer, event_headers, make_producer, make_registry_client
 from sfo_events.schemas import EVENT_TOPICS, DomainEvent, EventType
+from sfo_events.tracing import current_traceparent, publish_span, quiet
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +111,13 @@ class OutboxRelay:
         return self._producer, self._serializer
 
     async def relay_once(self) -> RelayResult:
+        """One tick. Its SQL isn't traced (`quiet`) — a poll every second
+        would start a trace each time; each published row gets a span in
+        the trace that wrote it instead."""
+        with quiet():
+            return await self._relay_once()
+
+    async def _relay_once(self) -> RelayResult:
         producer, serializer = self._connect()
         model = self._model
         async with self._session_factory() as session:
@@ -156,13 +164,19 @@ class OutboxRelay:
                     errors[row.id] = f"serialize: {exc}"
                     blocked.add(row.aggregate_id)
                     continue
-                producer.produce(
-                    EVENT_TOPICS[event.event_type],
-                    key=row.aggregate_id.encode(),
-                    value=value,
-                    headers=event_headers(event),
-                    on_delivery=on_delivery(row.id),
-                )
+                topic = EVENT_TOPICS[event.event_type]
+                with publish_span(topic, row.event_type, row.id, row.trace_context):
+                    traceparent = current_traceparent()
+                    headers = event_headers(event)
+                    if traceparent:
+                        headers.append(("traceparent", traceparent.encode()))
+                    producer.produce(
+                        topic,
+                        key=row.aggregate_id.encode(),
+                        value=value,
+                        headers=headers,
+                        on_delivery=on_delivery(row.id),
+                    )
             # Blocking; callbacks run inside flush().
             await asyncio.to_thread(producer.flush, self._delivery_timeout + 2)
 

@@ -5,6 +5,8 @@ from datetime import UTC, datetime
 
 from sfo_common.middleware import get_correlation_id
 
+from sfo_observability.tracing import current_trace_ids
+
 # Never let these show up in a log line, even at debug level — enforced here
 # rather than trusted to each call site. See docs/architecture.md#conventions.
 _REDACTED_KEYS = {
@@ -47,10 +49,19 @@ class _JsonFormatter(logging.Formatter):
             "logger": record.name,
             "message": record.getMessage(),
             # The request's X-Request-ID — the same value in every service a
-            # request touches, so `grep <trace_id>` across all services' logs
-            # shows its whole path. Null outside a request (startup, jobs).
-            "trace_id": get_correlation_id() or None,
+            # request touches, so `grep <request_id>` across all services'
+            # logs shows its whole path. Null outside a request (startup,
+            # jobs).
+            "request_id": get_correlation_id() or None,
         }
+        # The OpenTelemetry trace/span this line was written in — also set in
+        # Temporal activities, Kafka consumers and Celery tasks, where there
+        # is no request ID. Grafana links a log line's trace_id to the trace
+        # in Jaeger (week3-plan W3-D13).
+        trace_id, span_id = current_trace_ids()
+        if trace_id:
+            payload["trace_id"] = trace_id
+            payload["span_id"] = span_id
         extra = getattr(record, "extra_fields", None)
         if extra:
             payload["extra"] = _sanitize(extra)

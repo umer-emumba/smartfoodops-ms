@@ -4,7 +4,7 @@ tasks in app/tasks.py. The API process only enqueues — by task name, via
 `enqueue_sends` — and never imports the tasks."""
 
 from sfo_common.celery import make_celery_app
-from sfo_observability import configure_logging
+from sfo_observability import configure_logging, instrument_celery
 
 from app.config import settings
 
@@ -17,6 +17,8 @@ app = make_celery_app(
     configure_logging=lambda: configure_logging(settings.service_name, settings.log_level),
 )
 app.conf.include = ["app.tasks"]
+# Enqueue (API process) → send (worker) in the event's trace.
+instrument_celery()
 app.conf.beat_schedule = {
     "sweep-pending": {
         "task": SWEEP_PENDING,
