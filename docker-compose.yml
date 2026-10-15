@@ -106,6 +106,8 @@ services:
     logging: *default-logging
     image: mongo:7
     volumes: ["mongo-data:/data/db"]
+    # Host access for analytics-service's db tests, localhost only.
+    ports: ["127.0.0.1:27018:27017"]
     healthcheck:
       test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
       interval: 5s
@@ -394,6 +396,22 @@ services:
     depends_on:
       notification-db: { condition: service_healthy }
       rabbitmq: { condition: service_healthy }
+      schema-registry: { condition: service_healthy }
+      kafka-init: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Analytics read model (docs/week3-plan.md step 3): consumes every topic
+  # and DLQ into Mongo; no Postgres, so no migrations.
+  analytics-service:
+    logging: *default-logging
+    build: { context: ., dockerfile: services/analytics-service/Dockerfile }
+    env_file: [services/analytics-service/.env]
+    depends_on:
+      mongo: { condition: service_healthy }
       schema-registry: { condition: service_healthy }
       kafka-init: { condition: service_completed_successfully }
     healthcheck:

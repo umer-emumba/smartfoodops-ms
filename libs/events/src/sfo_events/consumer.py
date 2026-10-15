@@ -38,6 +38,8 @@ from sfo_events.schemas import DomainEvent, EventType, dlq_topic
 logger = logging.getLogger(__name__)
 
 Process = Callable[[DomainEvent], Awaitable[None]]
+# For topics whose messages aren't events to deserialize — the DLQs.
+ProcessRaw = Callable[[Message], Awaitable[None]]
 Deserialize = Callable[[Message], dict[str, Any]]
 
 
@@ -122,8 +124,17 @@ class ConsumerLoop:
         poll_timeout: float = 1.0,
         dlq_flush_timeout: float = 10.0,
         max_outage_backoff_seconds: float = 30.0,
+        raw_topics: frozenset[str] = frozenset(),
+        process_raw: ProcessRaw | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
+        """Messages from `raw_topics` skip deserialization and go to
+        `process_raw` as they are (e.g. dead letters, which by definition may
+        not deserialize)."""
+        if raw_topics and process_raw is None:
+            raise ValueError("raw_topics needs process_raw")
+        self._raw_topics = raw_topics
+        self._process_raw = process_raw
         self._consumer = consumer
         self._deserialize = deserialize
         self._process = process
@@ -169,6 +180,8 @@ class ConsumerLoop:
             if error.code() != KafkaError._PARTITION_EOF:
                 logger.warning("Kafka consumer error: %s", error)
             return None
+        if msg.topic() in self._raw_topics:
+            return await self._handle_raw(msg)
         try:
             event = parse_event(self._deserialize(msg))
         except Exception as exc:
@@ -208,6 +221,19 @@ class ConsumerLoop:
                 await self._sleep(delay)
                 delay *= 2
         raise AssertionError("unreachable")
+
+    async def _handle_raw(self, msg: Message) -> Outcome:
+        """No DLQ for these (no dead letters of dead letters): an outage is
+        retried like any other, anything else is logged and skipped."""
+        assert self._process_raw is not None
+        try:
+            await self._process_raw(msg)
+        except Exception as exc:
+            if is_transient(exc):
+                raise
+            logger.exception("Couldn't process %s@%s — skipped", msg.topic(), msg.offset())
+            return self._commit(msg, Outcome.SKIPPED)
+        return self._commit(msg, Outcome.PROCESSED)
 
     def _rewind(self, msg: Message) -> None:
         """Next poll returns `msg` again (the consumer's position had moved

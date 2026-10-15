@@ -338,6 +338,56 @@ async def test_run_rewinds_and_retries_until_the_outage_ends() -> None:
     assert consumer.committed == [0, 1]
 
 
+# --- raw topics (dead letters) ----------------------------------------------
+
+
+class DlqMessage(FakeMessage):
+    def topic(self) -> str:
+        return "order-events.dlq"
+
+
+def _raw_loop(process_raw: Any, consumer: FakeConsumer, producer: FakeProducer) -> ConsumerLoop:
+    async def no_events(event: DomainEvent) -> None:
+        raise AssertionError("not called")
+
+    return ConsumerLoop(
+        consumer=consumer,
+        deserialize=_deserialize,  # type: ignore[arg-type]
+        process=no_events,
+        dlq_producer=producer,
+        group="g",
+        raw_topics=frozenset({"order-events.dlq"}),
+        process_raw=process_raw,
+    )
+
+
+async def test_raw_topic_messages_skip_deserialization() -> None:
+    seen: list[bytes] = []
+
+    async def process_raw(msg: Any) -> None:
+        seen.append(msg.value())
+
+    consumer, producer = FakeConsumer(), FakeProducer()
+    outcome = await _raw_loop(process_raw, consumer, producer).handle(
+        DlqMessage(b"not json", offset=4)  # type: ignore[arg-type]
+    )
+    assert (outcome, seen, consumer.committed) == (Outcome.PROCESSED, [b"not json"], [4])
+
+
+async def test_raw_failures_are_skipped_not_dead_lettered_but_outages_retried() -> None:
+    async def broken(msg: Any) -> None:
+        raise ValueError("bug")
+
+    async def down(msg: Any) -> None:
+        raise ConnectionRefusedError("mongo down")
+
+    consumer, producer = FakeConsumer(), FakeProducer()
+    outcome = await _raw_loop(broken, consumer, producer).handle(DlqMessage(b"x"))  # type: ignore[arg-type]
+    assert (outcome, producer.sent, consumer.committed) == (Outcome.SKIPPED, [], [0])
+    with pytest.raises(ConnectionRefusedError):
+        await _raw_loop(down, FakeConsumer(), producer).handle(DlqMessage(b"x"))  # type: ignore[arg-type]
+
+
 # --- idempotency ------------------------------------------------------------
 
 

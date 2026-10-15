@@ -39,6 +39,8 @@ _UPSTREAM_POLICIES: dict[str, _UpstreamPolicy] = {
     "delivery-service": _UpstreamPolicy(max_connections=100, timeout_seconds=5.0),
     "payment-service": _UpstreamPolicy(max_connections=50, timeout_seconds=5.0),
     "notification-service": _UpstreamPolicy(max_connections=50, timeout_seconds=5.0),
+    # Aggregations over a window can take longer than a CRUD read.
+    "analytics-service": _UpstreamPolicy(max_connections=20, timeout_seconds=10.0),
     # Long-lived SSE streams (stream_tracking below), in a pool of their own
     # so they can never take connections from regular API calls. The read
     # timeout is 3 missed heartbeats (tracking-service sends one every 15s):
