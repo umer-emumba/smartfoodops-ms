@@ -210,6 +210,8 @@ class OrderSagaWorkflow:
         result_type: Any = None,
         retry_policy: RetryPolicy = ACTIVITY_RETRY_POLICY,
     ) -> Any:
+        # Temporal hands the step to whichever service listens on `task_queue`
+        # and waits for its result (retried on errors).
         return await workflow.execute_activity(
             name,
             arg,
@@ -227,6 +229,8 @@ class OrderSagaWorkflow:
         reason: str | None = None,
         retry_policy: RetryPolicy = ACTIVITY_RETRY_POLICY,
     ) -> None:
+        # Runs in order-service: saves the new status and its event (sent on to
+        # notifications and analytics through Kafka), and updates the live feeds.
         await self._activity(
             OrderActivity.TRANSITION_ORDER,
             TransitionOrderInput(
@@ -246,6 +250,8 @@ class OrderSagaWorkflow:
 
     async def _release_rider(self, outcome: RiderReleaseOutcome) -> None:
         assert self._delivery_id is not None
+        # Runs in delivery-service: frees the rider (back to available, or off
+        # shift if they dropped out).
         await self._delivery(
             DeliveryActivity.RELEASE_RIDER,
             ReleaseRiderInput(delivery_id=self._delivery_id, outcome=outcome),
@@ -257,6 +263,8 @@ class OrderSagaWorkflow:
 
     async def _undo_and_finish(self, status: OrderStatus, reason: str, actor: Actor) -> str:
         self._step = "compensating"
+        # Undo what was done so far, newest first (e.g. void the payment, give
+        # the stock back), each in the service that did it.
         for name, task_queue in reversed(self._compensations):
             await self._activity(
                 name,
@@ -296,6 +304,8 @@ class OrderSagaWorkflow:
         self._check_cancelled()
 
         # 1. Stock + capacity (atomic in restaurant-service).
+        # Runs in restaurant-service: reserves the items and a kitchen slot.
+        # Undone if a later step fails.
         self._step = "reserving"
         self._compensations.append(
             (RestaurantActivity.RELEASE_RESERVATION, TaskQueue.RESTAURANT_ACTIVITIES)
@@ -316,6 +326,8 @@ class OrderSagaWorkflow:
         # 2. Promotion.
         promotion: RedeemPromotionResult | None = None
         if data.promo_code:
+            # Runs in restaurant-service: uses up one redemption of the promo
+            # code. Undone if a later step fails.
             self._step = "redeeming_promotion"
             self._compensations.append(
                 (RestaurantActivity.RELEASE_PROMOTION, TaskQueue.RESTAURANT_ACTIVITIES)
@@ -331,6 +343,8 @@ class OrderSagaWorkflow:
             self._check_cancelled()
 
         # 3. Pricing.
+        # Worked out here; runs in order-service to save the discount, tax,
+        # delivery fee and final total on the order.
         self._step = "pricing"
         discount = pricing.discount(data.subtotal, promotion)
         priced: ApplyPricingResult = await self._activity(
@@ -347,6 +361,8 @@ class OrderSagaWorkflow:
         self._check_cancelled()
 
         # 4. Payment authorization (captured on delivery).
+        # Runs in payment-service: holds the total on the card (not charged yet).
+        # Undone (hold released) if a later step fails.
         self._step = "authorizing_payment"
         self._compensations.append((PaymentActivity.VOID, TaskQueue.PAYMENT_ACTIVITIES))
         payment: PaymentResult = await self._activity(
@@ -365,8 +381,11 @@ class OrderSagaWorkflow:
         self._check_cancelled()
 
         # 5–6. Hand the order to the restaurant and wait for its decision.
+        # The restaurant sees it on its live feed and gets an SMS.
         await self._transition(OrderStatus.AWAITING_RESTAURANT_ACCEPTANCE)
         self._step = "awaiting_restaurant"
+        # Waits for the restaurant's accept/reject (sent in by POST
+        # …/restaurant-response), a cancel, or the timeout.
         try:
             await workflow.wait_condition(
                 lambda: self._restaurant_response is not None or self._cancel is not None,
@@ -383,7 +402,7 @@ class OrderSagaWorkflow:
                 reason = f"{reason}: {response.reason}"
             raise _Failed(reason, actor=response.actor)
 
-        # 7. Confirmed.
+        # 7. Confirmed. The customer is notified.
         await self._transition(OrderStatus.CONFIRMED, actor=response.actor)
         self._step = OrderStatus.CONFIRMED
         return reservation.prep_time_minutes
@@ -392,6 +411,8 @@ class OrderSagaWorkflow:
         """Delivery, rider assignment (replacing riders who drop out), until
         the rider picks the food up."""
         # 8. Delivery record — the pickup is the restaurant, ready after prep.
+        # Runs in delivery-service: creates the delivery. Cancelled if a later
+        # step fails.
         assert data.pickup is not None, "orders without a pickup location can't be delivered"
         self._compensations.append(
             (DeliveryActivity.CANCEL_DELIVERY, TaskQueue.DELIVERY_ACTIVITIES)
@@ -420,6 +441,8 @@ class OrderSagaWorkflow:
             self._dropped = None
 
             # 10. Assigned: delivery, ETA, order (RiderAssigned).
+            # Runs in delivery-service: marks the delivery assigned, then works
+            # out the pickup and drop-off times (shown to the customer live).
             await self._delivery(
                 DeliveryActivity.TRANSITION_DELIVERY,
                 TransitionDeliveryInput(delivery_id=self._delivery_id, to_status="assigned"),
@@ -428,9 +451,11 @@ class OrderSagaWorkflow:
                 DeliveryActivity.COMPUTE_ETA, DeliveryRef(self._delivery_id), DeliveryEta
             )
             # A replacement rider leaves the order `assigned` (no-op).
+            # The customer is told a rider is on the way.
             await self._transition(OrderStatus.ASSIGNED)
 
             # 11. Wait for pickup — or a cancel, or the rider dropping out.
+            # (sent in by the rider's picked-up / drop-out endpoints, or a cancel)
             self._step = "awaiting_pickup"
             await workflow.wait_condition(
                 lambda: self._picked_up or self._cancel is not None or self._dropped is not None
@@ -455,6 +480,8 @@ class OrderSagaWorkflow:
                 raise _Failed("no_rider_available", status=OrderStatus.CANCELLED)
 
             self._step = "searching_rider"
+            # Runs in delivery-service: offers the delivery to the nearest free
+            # rider and holds them until they answer. None if nobody is free.
             offer: RiderOffer | None = await self._delivery(
                 DeliveryActivity.OFFER_TO_NEAREST_RIDER,
                 OfferRiderInput(
@@ -479,6 +506,8 @@ class OrderSagaWorkflow:
             self._offered_rider = offer.rider_id
             self._rider_response = None
             self._step = f"offered:{offer.rider_id}"
+            # Waits for the rider's accept/decline (sent in by the rider's
+            # endpoints), a cancel, or the offer expiring.
             try:
                 await workflow.wait_condition(
                     lambda: self._rider_response is not None or self._cancel is not None,
@@ -503,6 +532,8 @@ class OrderSagaWorkflow:
         self._compensations.clear()
 
         # 12. Picked up: the kitchen's capacity slot is freed.
+        # Delivery-service and order-service record the pickup (the customer is
+        # notified), then restaurant-service frees the kitchen slot.
         self._step = "picked_up"
         await self._delivery(
             DeliveryActivity.TRANSITION_DELIVERY,
@@ -516,11 +547,14 @@ class OrderSagaWorkflow:
             retry_policy=MUST_SUCCEED,
         )
 
-        # 13. Wait for delivery.
+        # 13. Wait for delivery (sent in by the rider's delivered endpoint).
         self._step = "delivering"
         await workflow.wait_condition(lambda: self._delivered)
 
         # 14. Delivered: final settlement (payment captured), rider freed.
+        # Delivery-service records it, payment-service charges the held amount,
+        # order-service marks the order delivered (customer and restaurant are
+        # notified). Each is retried until it succeeds.
         await self._delivery(
             DeliveryActivity.TRANSITION_DELIVERY,
             TransitionDeliveryInput(delivery_id=self._delivery_id, to_status="delivered"),

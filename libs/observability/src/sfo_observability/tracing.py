@@ -42,10 +42,15 @@ _UNTRACED_URLS = ",".join([*QUIET_PATHS, "/v1/tracking/"])
 
 
 def tracing_enabled() -> bool:
+    """On only when docker compose sets where to send spans (Jaeger); off in
+    unit tests, so they never try to reach Jaeger."""
     return bool(os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"))
 
 
 def setup_tracing(service_name: str) -> None:
+    """Turns tracing on for this process, once: names it (as shown in Jaeger),
+    sends its spans to Jaeger in the background, and auto-traces outgoing HTTP
+    calls, Redis and MongoDB. Without it no spans are recorded at all."""
     global _configured
     if _configured:
         return

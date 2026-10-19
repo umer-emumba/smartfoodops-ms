@@ -296,6 +296,8 @@ async def unblock(
         raise NotFoundError("User not found")
     user.is_blocked = False
     await session.commit()
+    # Removes the user from the Redis deny-list, so the gateway and the services
+    # accept their tokens again.
     await unblock_user(redis, user_id)
     return user
 

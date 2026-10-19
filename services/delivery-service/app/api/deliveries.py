@@ -48,6 +48,8 @@ async def _signal(
     snapshot = DeliveryResponse.model_validate(delivery)
     # Release the DB connection before the network call (expires `delivery`).
     await session.rollback()
+    # Sent to the order's saga in order-service, which applies it (rider
+    # accepted/declined, picked up, delivered, dropped out).
     await temporal_client.signal_order_saga(snapshot.order_id, signal, *args)
     return snapshot
 

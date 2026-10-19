@@ -15,6 +15,9 @@ from app.rider_pool_metrics import run_rider_pool_gauge
 from app.stale_riders import run_stale_rider_detector
 
 WORKERS = [WorkerSpec(TaskQueue.DELIVERY_ACTIVITIES, activities=ACTIVITIES)]
+# stale_rider_detector (every 30s): a rider on a delivery who stopped sending
+# their location is reported to the saga as dropped out, so it finds someone else.
+# rider_pool_gauge (every 15s): counts riders by status for Grafana.
 BACKGROUND = [run_stale_rider_detector, run_rider_pool_gauge]
 
 if __name__ == "__main__":

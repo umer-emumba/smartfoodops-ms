@@ -89,6 +89,8 @@ def record_shift_change(
     on_shift = rider.status != RIDER_STATUS_OFFLINE
     if was_on_shift == on_shift:
         return
+    # delivery-worker sends it to Kafka; analytics-service uses it for rider
+    # utilization.
     session.add(
         new_outbox_row(
             OutboxEvent,

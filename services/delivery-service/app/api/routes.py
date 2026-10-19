@@ -173,6 +173,8 @@ async def update_my_location(
     )
     await session.commit()
     if tracked_order is not None:
+        # Through Redis to tracking-service, which shows the rider moving on the
+        # customer's screen.
         await tracking.publish_location(tracked_order, rider.id, body.lat, body.lng)
     # Full ping history goes to Mongo, not delivery_db — Postgres only ever
     # needs the latest position (docs/architecture.md#services). Best-effort:

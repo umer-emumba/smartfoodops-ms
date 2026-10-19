@@ -99,6 +99,8 @@ async def authorize(data: AuthorizePaymentInput) -> PaymentResult:
                 # concurrent duplicate fails here.
                 await session.flush()
                 if not declined:
+                    # payment-worker sends it to Kafka; no service acts on it
+                    # yet (kept for future consumers).
                     session.add(
                         new_outbox_row(
                             OutboxEvent,
@@ -215,6 +217,8 @@ async def refund(data: RefundPaymentInput) -> RefundPaymentResult:
         payment.refunded_amount = payment.refunded_amount + amount
         payment.status = PaymentStatus.REFUNDED
         payment.refunded_at = now
+        # payment-worker sends it to Kafka; notification-service tells the
+        # customer, analytics-service records the refund.
         session.add(
             new_outbox_row(
                 OutboxEvent,

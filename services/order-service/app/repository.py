@@ -144,6 +144,8 @@ def apply_transition(
     )
     event_type = _TRANSITION_EVENTS.get(to_status)
     if event_type is not None:
+        # Saved with the status change; order-worker sends it to Kafka, where
+        # notification-service and analytics-service pick it up.
         session.add(
             new_outbox_row(
                 OutboxEvent,

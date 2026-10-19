@@ -60,11 +60,18 @@ def start_metrics_server() -> None:
 
 
 def instrument_metrics(app: Any) -> None:
+    """Adds request metrics to a FastAPI app and starts its metrics server on
+    port 9100, so Prometheus can read how many requests each route got, which
+    failed, and how long they took."""
     app.add_middleware(_RedMetrics)
     start_metrics_server()
 
 
 class _RedMetrics:
+    """Wraps every request: starts a timer, lets the app handle it, then counts
+    it under its route template and status code and records the time taken
+    ("RED" = rate, errors, duration — the three numbers to watch per route)."""
+
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
 

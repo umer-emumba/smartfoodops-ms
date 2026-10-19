@@ -63,6 +63,8 @@ async def transition_order(data: TransitionOrderInput) -> TransitionOrderResult:
         await session.commit()
         if to_status in TERMINAL:
             SAGA_OUTCOMES.labels(to_status.value, reason_label(data.reason)).inc()
+        # Through Redis to tracking-service, which pushes the new status to the
+        # customer's and restaurant's open screens.
         await tracking.publish_status(order)
         return TransitionOrderResult(status=order.status, changed=True)
 

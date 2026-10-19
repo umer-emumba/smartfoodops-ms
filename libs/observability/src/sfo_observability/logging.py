@@ -1,3 +1,8 @@
+"""Structured logs for every service: each log line is one JSON object with the
+service name, level, `request_id` and `trace_id`, with passwords and tokens
+removed. Grafana Alloy ships these lines to Loki, where Grafana can search all
+services at once and jump from a line to its trace in Jaeger."""
+
 import json
 import logging
 import sys
@@ -37,6 +42,9 @@ def _sanitize(obj: object) -> object:
 
 
 class _JsonFormatter(logging.Formatter):
+    """Turns each log record into one JSON line, adding the request and trace
+    IDs that are active when it's logged — nothing to pass in by hand."""
+
     def __init__(self, service_name: str) -> None:
         super().__init__()
         self.service_name = service_name

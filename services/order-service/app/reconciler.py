@@ -44,6 +44,8 @@ async def reconcile_once(client: Client) -> int:
         orders = list(result.scalars().all())
     started = 0
     for order in orders:
+        # Starts the saga for an order whose start was missed (does nothing if
+        # it's already running).
         if await temporal_client.start_order_saga(client, order):
             started += 1
     if started:

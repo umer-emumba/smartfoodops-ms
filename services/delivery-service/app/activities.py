@@ -89,6 +89,8 @@ async def _set_status(
             reason=reason,
         )
     )
+    # delivery-worker sends it to Kafka; notification-service tells the rider
+    # (new offer, assigned, cancelled), analytics-service tracks the delivery.
     session.add(
         new_outbox_row(
             OutboxEvent,

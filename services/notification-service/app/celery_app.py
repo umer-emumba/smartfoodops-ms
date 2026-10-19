@@ -16,10 +16,14 @@ app = make_celery_app(
     settings.celery_broker_url,
     configure_logging=lambda: configure_logging(settings.service_name, settings.log_level),
 )
-# Task outcomes and durations; serves the worker's metrics port.
+# Metrics: counts every Celery task run (succeeded / retried / failed) and
+# times it, served on this worker's port 9100 for Prometheus; shown on the
+# Grafana "Event pipeline" dashboard.
 instrument_celery_metrics()
 app.conf.include = ["app.tasks"]
-# Enqueue (API process) → send (worker) in the event's trace.
+# Tracing: the trace ID travels inside each task message, so the send (in
+# notification-worker) appears in the same Jaeger trace as the event that
+# caused it — enqueue (API process) → send (worker).
 instrument_celery()
 app.conf.beat_schedule = {
     "sweep-pending": {
@@ -33,4 +37,6 @@ app.conf.beat_schedule = {
 def enqueue_sends(notification_ids: list[str]) -> None:
     """Blocking (publishes to RabbitMQ) — call from a thread in async code."""
     for notification_id in notification_ids:
+        # Queued on RabbitMQ; notification-worker sends it (app/tasks.py),
+        # retrying failures.
         app.send_task(SEND_NOTIFICATION, args=[notification_id])

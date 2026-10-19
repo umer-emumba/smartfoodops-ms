@@ -50,6 +50,8 @@ async def handle(session: AsyncSession, event: DomainEvent) -> AfterCommit | Non
     session.add_all(rows)
     ids = [row.id for row in rows]
 
+    # Runs after the rows are saved: queues one send per row for
+    # notification-worker.
     async def enqueue() -> None:
         # Imported here: the Celery app needs the broker URL, which only
         # processes that run the consumer are given.

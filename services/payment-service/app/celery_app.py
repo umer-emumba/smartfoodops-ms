@@ -15,8 +15,12 @@ app = make_celery_app(
     settings.celery_broker_url,
     configure_logging=lambda: configure_logging(settings.service_name, settings.log_level),
 )
-# Task outcomes and durations; serves the worker's metrics port.
+# Metrics: counts every Celery task run (succeeded / retried / failed) and
+# times it, served on this worker's port 9100 for Prometheus; shown on the
+# Grafana "Event pipeline" dashboard.
 instrument_celery_metrics()
+# The outbox relay: every second, sends this service's unsent outbox rows to
+# Kafka and marks them sent; once an hour, deletes rows sent over 7 days ago.
 register_relay_tasks(
     app,
     OutboxRelay(

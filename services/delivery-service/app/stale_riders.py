@@ -58,6 +58,8 @@ async def check_once(client: Client) -> int:
         ):
             continue
         try:
+            # Tells the order's saga this rider dropped out; it frees them and
+            # looks for another rider.
             await temporal.signal_order_saga(
                 client,
                 order_id,

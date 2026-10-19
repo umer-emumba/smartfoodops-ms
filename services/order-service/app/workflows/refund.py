@@ -30,6 +30,8 @@ with workflow.unsafe.imports_passed_through():
 class OrderRefundWorkflow:
     @workflow.run
     async def run(self, data: OrderRefundInput) -> RefundPaymentResult:
+        # Runs in payment-service: gives the money back and writes a
+        # RefundProcessed event (the customer is notified).
         refund: RefundPaymentResult = await workflow.execute_activity(
             PaymentActivity.REFUND,
             RefundPaymentInput(
@@ -43,6 +45,8 @@ class OrderRefundWorkflow:
             start_to_close_timeout=ACTIVITY_TIMEOUT,
             retry_policy=ACTIVITY_RETRY_POLICY,
         )
+        # Runs in order-service: saves the refunded amount on the order.
+        # Retried until it succeeds (the money has already gone back).
         await workflow.execute_activity(
             OrderActivity.RECORD_REFUND,
             RecordRefundInput(

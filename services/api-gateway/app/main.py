@@ -40,7 +40,13 @@ app = create_app(
 # limiter and auth run (app/query_token.py).
 app.add_middleware(QueryTokenMiddleware)
 
+# Tracing: every request becomes a span in its trace (sent to Jaeger), and an
+# incoming `traceparent` header joins the caller's trace. This is what links
+# one order across all services. Health checks and metrics scrapes are skipped.
 instrument_fastapi(app)
+# Metrics: counts every request by route and status code, and times it.
+# Prometheus reads them from this process's port 9100 every 15s; they feed the
+# Grafana "Service overview" dashboard and the HighErrorRate alert.
 instrument_metrics(app)
 app.include_router(auth_routes.router)
 app.include_router(docs.router)

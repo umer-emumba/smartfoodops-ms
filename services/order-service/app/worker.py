@@ -22,6 +22,8 @@ WORKERS = [
     ),
     WorkerSpec(TaskQueue.ORDER_ACTIVITIES, activities=ACTIVITIES),
 ]
+# Every 30s, starts the saga for any order that was saved but whose
+# saga never started (e.g. Temporal was down at the time).
 BACKGROUND = [run_reconciler]
 
 if __name__ == "__main__":

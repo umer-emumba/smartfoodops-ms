@@ -66,6 +66,8 @@ async def _start_saga(order: Order) -> None:
     failure here isn't the client's problem: the reconciler starts it within
     a minute (app/reconciler.py)."""
     try:
+        # Temporal starts the order saga (workflows/order_saga.py), which takes
+        # the order from here to delivery.
         await temporal_client.start_order_saga(await temporal_client.get_client(), order)
     except Exception:
         _logger.warning(
@@ -92,6 +94,8 @@ async def _build_items(
     for line in body.items:
         requested[line.menu_item_id] += line.quantity
 
+    # Calls restaurant-service directly (HTTP) for the live prices, stock and
+    # status of just these items; 503 if it doesn't answer within 5s.
     restaurant, menu = await restaurant_client.get_quote(body.restaurant_id, list(requested))
     # Same rule the public endpoints apply: a pending/suspended restaurant
     # doesn't exist as far as customers are concerned.
@@ -191,8 +195,9 @@ async def create_order(
     ]
     try:
         order = await repository.create_order(session, order)
-        # Same transaction as the order insert — the transactional outbox.
-        # The outbox relay publishes undispatched rows to Kafka.
+        # Saved in the same transaction as the order (the outbox). order-worker
+        # sends it to Kafka; notification-service tells the customer,
+        # analytics-service counts the order.
         session.add(
             new_outbox_row(
                 OutboxEvent,
@@ -321,6 +326,8 @@ async def _signal_and_respond(
     # Release the DB connection before the network call. This expires
     # `order`, so only `snapshot` is used from here on.
     await session.rollback()
+    # Sent to the order's running saga, which applies it (e.g. confirms,
+    # rejects or cancels the order).
     await temporal_client.signal_order_saga(snapshot.id, signal, payload)
     return snapshot
 
@@ -400,6 +407,8 @@ async def refund_order(
         )
     snapshot = OrderResponse.model_validate(order)
     await session.rollback()
+    # Temporal starts the refund workflow (workflows/refund.py): payment-service
+    # gives the money back, then the order records it.
     started = await temporal_client.start_refund(
         OrderRefundInput(
             order_id=snapshot.id,

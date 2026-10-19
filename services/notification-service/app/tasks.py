@@ -123,6 +123,7 @@ def send_notification(self: Task, notification_id: str) -> None:
 def sweep_pending() -> None:
     ids = run_async(stale_pending_ids(timedelta(seconds=settings.notify_sweep_min_age_seconds)))
     for notification_id in ids:
+        # Queued again for this worker to send.
         send_notification.delay(notification_id)
     if ids:
         logger.warning("Re-enqueued %d stale pending notifications", len(ids))

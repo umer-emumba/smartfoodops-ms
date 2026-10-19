@@ -22,16 +22,21 @@ HeadersLike = list[tuple[str, str | bytes | None]] | dict[str, str | bytes | Non
 
 
 def current_traceparent() -> str | None:
+    """The trace we're in right now, as a W3C `traceparent` string. Saved on
+    each outbox row so that, when the relay sends the event later, the trace
+    continues through Kafka instead of starting over. None if not tracing."""
     carrier: dict[str, str] = {}
     propagate.inject(carrier)
     return carrier.get("traceparent")
 
 
 def _from_traceparent(traceparent: str | None) -> context.Context:
+    """Turns a saved `traceparent` back into a trace to continue (relay side)."""
     return propagate.extract({"traceparent": traceparent} if traceparent else {})
 
 
 def _from_headers(headers: HeadersLike) -> context.Context:
+    """Reads the trace from a Kafka message's headers (consumer side)."""
     carrier = {
         key: value if isinstance(value, str) else value.decode(errors="replace")
         for key, value in (headers.items() if isinstance(headers, dict) else headers or [])
