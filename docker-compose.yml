@@ -352,6 +352,10 @@ services:
     build: { context: ., dockerfile: services/user-service/Dockerfile }
     env_file: [services/user-service/.env]
     environment: *observability-env
+    # The token-signing private key: only this service gets it. Everyone else
+    # verifies with the public keys it serves at /.well-known/jwks.json.
+    # The additional public keys are the next/previous key during a rotation.
+    secrets: [jwt_private_key, jwt_additional_public_keys]
     depends_on:
       user-db: { condition: service_healthy }
       redis: { condition: service_healthy }
@@ -528,6 +532,14 @@ services:
       notification-service: { condition: service_healthy }
       notification-db: { condition: service_healthy }
       rabbitmq: { condition: service_healthy }
+
+# Dev-only: a file on the host (scripts/gen_jwt_key.py creates it, git-ignored).
+# Real deployments use a secrets manager instead.
+secrets:
+  jwt_private_key:
+    file: ./secrets/jwt_private_key.pem
+  jwt_additional_public_keys:
+    file: ./secrets/jwt_additional_public_keys.pem
 
 volumes:
   user-db-data:

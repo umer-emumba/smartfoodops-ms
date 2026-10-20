@@ -13,8 +13,10 @@ class Settings(KafkaConsumerSettings):
     environment: str = "local"
     log_level: str = "INFO"
 
-    jwt_secret: str
-    jwt_algorithm: str = "HS256"
+    # Where this service gets the public keys that verify access tokens
+    # (user-service's JWKS; see sfo_auth.keys). Public keys only: this
+    # service can verify a token but never issue one.
+    jwt_jwks_url: str = "http://user-service:8000/.well-known/jwks.json"
 
     mongo_url: str = "mongodb://mongo:27017"
     mongo_db: str = "analytics"

@@ -14,7 +14,8 @@ from app.main import app
 from app.models import OrderStatus
 from app.restaurant_client import MenuItemSnapshot, RestaurantSnapshot
 from httpx import ASGITransport, AsyncClient
-from sfo_auth import Role, create_access_token
+from sfo_auth import Role
+from sfo_auth.testing import make_test_token
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from tests.db_helpers import insert_order
@@ -56,12 +57,8 @@ def restaurant(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 async def _place_order(key: str | None = None) -> Any:
-    token = create_access_token(
-        user_id="u-customer",
-        role=Role.CUSTOMER,
-        secret=settings.jwt_secret,
-        algorithm=settings.jwt_algorithm,
-        ttl_minutes=5,
+    token = make_test_token(
+        user_id="u-customer", role=Role.CUSTOMER, jwks_url=settings.jwt_jwks_url, ttl_minutes=5
     )
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         return await client.post(

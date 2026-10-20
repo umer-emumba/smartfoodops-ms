@@ -10,12 +10,11 @@ from typing import Any
 import pytest
 import pytest_asyncio
 from redis.asyncio import Redis, from_url
-from sfo_auth import Role, create_access_token
+from sfo_auth import Role
+from sfo_auth.testing import make_test_token
 from sfo_common.testing import serve
 
 TEST_REDIS_URL = os.environ.get("TRACKING_TEST_REDIS_URL", "redis://localhost:16379/15")
-# Tests mint their own tokens, so any secret works when there's no .env.
-os.environ.setdefault("JWT_SECRET", "tracking-service-test-secret-32-bytes-long")
 
 
 @dataclass
@@ -31,12 +30,8 @@ class Env:
 def token(user_id: str, role: Role) -> str:
     from app.config import settings
 
-    return create_access_token(
-        user_id=user_id,
-        role=role,
-        secret=settings.jwt_secret,
-        algorithm=settings.jwt_algorithm,
-        ttl_minutes=5,
+    return make_test_token(
+        user_id=user_id, role=role, jwks_url=settings.jwt_jwks_url, ttl_minutes=5
     )
 
 

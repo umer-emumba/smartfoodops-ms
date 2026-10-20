@@ -137,19 +137,42 @@ Compose. Dependency management via `uv` workspaces. Full library-level choices
 
 ## Local setup
 
-Requires Docker + Docker Compose, and [uv](https://docs.astral.sh/uv/) if you want to run
-anything outside containers (tests, the seed script).
+Requires Docker + Docker Compose and [uv](https://docs.astral.sh/uv/). uv is needed even if
+you only run the stack: it runs the script that creates the token-signing key (step 1), as
+well as the tests and the seed script.
 
 1. For each service under `services/`, copy its `env.example` to `.env` (dummy local
    values are already fine for dev — see
    [architecture.md#conventions](docs/architecture.md#conventions) for why these are
-   named `env.example` rather than the more common `.env.example`). `JWT_SECRET` must be
-   the same in every service's `.env`; if you've changed it in an existing setup, set the
-   same value in `services/tracking-service/.env` too:
+   named `env.example` rather than the more common `.env.example`):
 
    ```bash
    for d in services/*/; do [ -f "$d/env.example" ] && cp "$d/env.example" "$d/.env"; done
    ```
+
+   This overwrites any `.env` you already have. On an existing checkout, copy only the
+   files that are missing, or add new lines from `env.example` by hand.
+
+   Then create the key that signs access tokens (once; it's git-ignored and only
+   `user-service` gets it — see
+   [architecture.md#access-token-signing](docs/architecture.md#access-token-signing)).
+   `docker compose` won't start without it:
+
+   ```bash
+   uv run python scripts/gen_jwt_key.py
+   ```
+
+   **Upgrading an existing checkout** (`.env` files and a key from before key rotation):
+   - Run the script again. It keeps your key ("already exists; not overwriting it") and
+     only adds the empty `secrets/jwt_additional_public_keys.pem` that compose now mounts.
+   - Add this line to `services/user-service/.env`; without it the stack runs, but a key
+     rotation publishes nothing:
+
+     ```
+     JWT_ADDITIONAL_PUBLIC_KEYS_FILE=/run/secrets/jwt_additional_public_keys
+     ```
+
+   - Any leftover `JWT_SECRET` / `JWT_ALGORITHM` lines are ignored and can be deleted.
 
 2. Bring the whole stack up:
 
@@ -177,6 +200,15 @@ anything outside containers (tests, the seed script).
 
    ```bash
    curl http://localhost:8080/v1/restaurants
+   ```
+
+   To check token signing: `user-service` should publish one Ed25519 public key (`kty: OKP`,
+   `crv: Ed25519`, no private `d` field). The endpoint isn't routed through the gateway,
+   so ask from inside the network:
+
+   ```bash
+   docker compose exec api-gateway python -c \
+     "import httpx; print(httpx.get('http://user-service:8000/.well-known/jwks.json').json())"
    ```
 
    Placing an order needs a customer token and an `Idempotency-Key` header. Only item IDs

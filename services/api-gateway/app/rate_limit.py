@@ -76,7 +76,7 @@ class RateLimiter:
         self.bucket = bucket
 
     async def __call__(self, request: Request) -> None:
-        payload = verified_token(request)
+        payload = await verified_token(request)
         key = f"rate_limit:{self.bucket}:{_client_key(request, payload)}"
         deny_key = blocked_key(payload.sub) if payload is not None else None
         try:

@@ -3,16 +3,13 @@
 from app.config import settings
 from app.main import app
 from httpx import ASGITransport, AsyncClient
-from sfo_auth import Role, create_access_token
+from sfo_auth import Role
+from sfo_auth.testing import make_test_token
 
 
 def auth() -> dict[str, str]:
-    token = create_access_token(
-        user_id="u1",
-        role=Role.CUSTOMER,
-        secret=settings.jwt_secret,
-        algorithm=settings.jwt_algorithm,
-        ttl_minutes=15,
+    token = make_test_token(
+        user_id="u1", role=Role.CUSTOMER, jwks_url=settings.jwt_jwks_url, ttl_minutes=15
     )
     return {"Authorization": f"Bearer {token}"}
 

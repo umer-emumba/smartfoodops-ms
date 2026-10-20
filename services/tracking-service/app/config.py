@@ -13,8 +13,10 @@ class Settings(BaseSettings):
 
     redis_url: str = "redis://redis:6379/0"
 
-    jwt_secret: str
-    jwt_algorithm: str = "HS256"
+    # Where this service gets the public keys that verify access tokens
+    # (user-service's JWKS; see sfo_auth.keys). Public keys only: this
+    # service can verify a token but never issue one.
+    jwt_jwks_url: str = "http://user-service:8000/.well-known/jwks.json"
 
     # Only used when a Redis state key is missing (app/state.py).
     order_service_url: str = "http://order-service:8000"

@@ -9,7 +9,8 @@ from app.config import settings
 from app.main import app
 from app.models import Delivery, Rider
 from httpx import ASGITransport, AsyncClient
-from sfo_auth import Role, create_access_token
+from sfo_auth import Role
+from sfo_auth.testing import make_test_token
 from sfo_contracts import OrderSagaSignal
 from sfo_contracts.activities import TransitionDeliveryInput
 from sfo_contracts.workflows import RiderDropped, RiderResponse
@@ -21,12 +22,8 @@ pytestmark = pytest.mark.db
 
 
 def _as(user_id: str, role: Role = Role.RIDER) -> dict[str, str]:
-    token = create_access_token(
-        user_id=user_id,
-        role=role,
-        secret=settings.jwt_secret,
-        algorithm=settings.jwt_algorithm,
-        ttl_minutes=5,
+    token = make_test_token(
+        user_id=user_id, role=role, jwks_url=settings.jwt_jwks_url, ttl_minutes=5
     )
     return {"Authorization": f"Bearer {token}"}
 

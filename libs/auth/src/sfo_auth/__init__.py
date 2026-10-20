@@ -1,4 +1,11 @@
 from sfo_auth.deps import CurrentUser, build_auth_dependencies
+from sfo_auth.keys import (
+    JwksKeyStore,
+    KeyStore,
+    KeyStoreUnavailable,
+    StaticKeyStore,
+    TokenSigner,
+)
 from sfo_auth.passwords import hash_password, hash_password_blocking, verify_password
 from sfo_auth.roles import Role
 from sfo_auth.tokens import (
@@ -12,6 +19,11 @@ from sfo_auth.tokens import (
 
 __all__ = [
     "CurrentUser",
+    "JwksKeyStore",
+    "KeyStore",
+    "KeyStoreUnavailable",
+    "StaticKeyStore",
+    "TokenSigner",
     "build_auth_dependencies",
     "hash_password",
     "hash_password_blocking",

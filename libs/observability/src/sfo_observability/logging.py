@@ -22,6 +22,8 @@ _REDACTED_KEYS = {
     "refresh_token",
     "authorization",
     "jwt_secret",
+    "jwt_private_key",
+    "private_key",
     "x-bootstrap-secret",
     "admin_bootstrap_secret",
     "card_number",

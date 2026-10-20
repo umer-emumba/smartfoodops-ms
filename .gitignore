@@ -14,3 +14,6 @@ dist/
 build/
 htmlcov/
 .coverage
+
+# Local signing keys (scripts/gen_jwt_key.py)
+secrets/

@@ -26,8 +26,10 @@ class BaseServiceSettings(BaseSettings):
     db_pool_timeout_seconds: float = 3.0
     db_statement_timeout_ms: int = 5000
 
-    jwt_secret: str
-    jwt_algorithm: str = "HS256"
+    # Where this service gets the public keys that verify access tokens
+    # (user-service's JWKS; see sfo_auth.keys). Public keys only: this
+    # service can verify a token but never issue one.
+    jwt_jwks_url: str = "http://user-service:8000/.well-known/jwks.json"
     access_token_ttl_minutes: int = 15
     refresh_token_ttl_days: int = 7
 

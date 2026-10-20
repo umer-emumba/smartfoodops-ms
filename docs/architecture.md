@@ -274,7 +274,8 @@ The Kafka event log adds a second, cross-service, replayable view of the same fa
 
 ## Auth, token lifetime & blocked-user handling
 
-- **Access tokens**: stateless JWT, 15-minute lifetime, role claims. Verified by every
+- **Access tokens**: stateless JWT, 15-minute lifetime, role claims, signed with an
+  asymmetric key ([Access-token signing](#access-token-signing)). Verified by every
   service independently (see [Defense-in-depth auth](#defense-in-depth-auth)), not just the
   gateway — signature + expiry only, no DB call.
 - **Refresh tokens**: tracked server-side in `user_db` (SHA-256 of the 256-bit random
@@ -419,11 +420,56 @@ below — every service still independently re-verifies the same token regardles
 gateway already checked. The gateway check is purely a fast-fail: reject obviously-bad
 requests before spending a network hop on a backend call that was always going to fail.
 
+## Access-token signing
+
+Access tokens are signed with **Ed25519** (JWT `alg: EdDSA`); only `user-service` holds
+the private key. Every other service, and the gateway, hold public keys only, so a
+compromised service can read tokens but cannot forge one. (This replaced a single HS256
+secret shared by all nine services, where any one of them could mint an admin token.)
+
+- **Issuing**: `user-service` signs with the key in `JWT_PRIVATE_KEY_FILE` (a Docker secret
+  mounted only into that container; `scripts/gen_jwt_key.py` creates the dev key in the
+  git-ignored `secrets/`). It loads the key at start-up, so a missing or wrong key stops the
+  service instead of failing the first login. Claims: `iss`, `sub`, `role`, `iat`, `exp`.
+- **Publishing**: `GET /.well-known/jwks.json` on `user-service` (RFC 7517). It is not under
+  `/v1`, so the gateway never routes it; it's reachable by the other services only.
+- **Verifying** (`libs/auth`, `sfo_auth.keys.JwksKeyStore`): each process fetches the JWKS
+  on the first token it sees (nothing at start-up, so no boot-order dependency on
+  `user-service`) and caches it for 5 minutes; after that a cached key keeps verifying
+  while the refresh runs in the background, so requests never wait on `user-service` for a
+  key they already have. Expiry and `iat` allow 10s of clock skew. The algorithm is pinned to EdDSA and the
+  issuer is checked; `alg: none`, HS256 "signed" with the public key, an unknown or missing
+  `kid`, a wrong issuer, and an expired token are all rejected (tests in `libs/auth` and
+  `api-gateway`).
+- **Outages**: if `user-service` is unreachable, cached keys keep verifying tokens for up to
+  an hour. With nothing cached, private routes answer **503** (the token may be fine, so
+  not 401); public routes keep working, and `get_current_user_optional` treats the caller
+  as anonymous (less access, never more). An unknown `kid` triggers at most one refetch
+  per 30s, so random key IDs can't flood `user-service`.
+- **Rotation** (no downtime): `kid` is the RFC 7638 thumbprint of the public key, so key IDs
+  need no configuration.
+  1. `scripts/gen_jwt_key.py --next` creates the next key and adds its public half to
+     `JWT_ADDITIONAL_PUBLIC_KEYS_FILE`. Restart `user-service`, then wait 5 minutes (the
+     cache TTL), so every service has the new key *before* any token is signed with it.
+  2. `scripts/gen_jwt_key.py --promote` makes the next key the signing key and publishes the
+     old one's public half. Restart `user-service`; tokens signed with the old key still
+     verify.
+  3. After one token lifetime (15 minutes) empty the additional-keys file and restart. Other
+     services drop the old key within 5 minutes of the JWKS changing.
+  Skipping step 1's wait still works, but the other services only learn a new `kid` on their
+  next allowed refetch (at most every 30s), so new tokens can get 401s until then. Don't
+  delete the private key without rotating: every issued token would stop verifying.
+- **Known limitation**: services fetch the JWKS over plain HTTP inside the Docker network, so
+  whoever can impersonate `user-service` there could serve their own keys. Closing that
+  needs authenticated service-to-service transport (mTLS or network policy); the keys
+  themselves are public.
+
 ## Defense-in-depth auth
 
 Only `api-gateway` verifying JWTs isn't enough — inside Docker Compose, every service is
 reachable directly by hostname from any other container. Every service independently
-re-verifies the JWT signature and role claims via the shared `libs/auth` dependency.
+re-verifies the JWT signature (against the public keys, see [Access-token
+signing](#access-token-signing)) and role claims via the shared `libs/auth` dependency.
 
 ## Authorization audit (2026-09-29)
 

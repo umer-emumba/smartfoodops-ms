@@ -3,7 +3,7 @@ import re
 import jwt
 from fastapi import Request
 from redis.exceptions import RedisError
-from sfo_auth import decode_access_token
+from sfo_auth import JwksKeyStore, KeyStoreUnavailable, decode_access_token
 from sfo_auth.denylist import blocked_key
 from sfo_auth.tokens import TokenPayload
 from sfo_common.errors import ForbiddenError, ServiceUnavailableError, UnauthorizedError
@@ -45,23 +45,30 @@ def _has_bearer(request: Request) -> bool:
     return request.headers.get("authorization", "").lower().startswith("bearer ")
 
 
-def verified_token(request: Request) -> TokenPayload | None:
+# The public keys that verify tokens, fetched from user-service's JWKS and
+# cached (sfo_auth.keys). The gateway holds public keys only.
+_key_store = JwksKeyStore.shared(settings.jwt_jwks_url)
+
+
+async def verified_token(request: Request) -> TokenPayload | None:
     """The request's bearer token, signature/expiry/claims verified — or None
     if there's no token or it's invalid. Decoded at most once per request and
     cached on request.state: the rate limiter (which runs first, keying on the
-    user ID) and authenticate() both need it."""
+    user ID) and authenticate() both need it. If the public keys can't be
+    fetched the result is None too, but `request.state.keys_unavailable` is
+    set, so authenticate() answers 503 rather than blaming the token."""
     if hasattr(request.state, "token_payload"):
         return request.state.token_payload
     payload = None
     if _has_bearer(request):
         try:
-            payload = decode_access_token(
-                request.headers["authorization"][7:],
-                secret=settings.jwt_secret,
-                algorithm=settings.jwt_algorithm,
+            payload = await decode_access_token(
+                request.headers["authorization"][7:], keys=_key_store
             )
         except jwt.InvalidTokenError:
             payload = None
+        except KeyStoreUnavailable:
+            request.state.keys_unavailable = True
     request.state.token_payload = payload
     return payload
 
@@ -85,10 +92,12 @@ async def authenticate(request: Request, *, public: bool) -> None:
         if public:
             return
         raise UnauthorizedError("Missing bearer token")
-    payload = verified_token(request)
+    payload = await verified_token(request)
     if payload is None:
         if public:
             return
+        if getattr(request.state, "keys_unavailable", False):
+            raise ServiceUnavailableError("Can't verify tokens right now")
         raise UnauthorizedError("Invalid or expired token")
     # Normally already fetched by the rate limiter in the same Redis
     # round-trip (app/rate_limit.py); checked here only if it wasn't.

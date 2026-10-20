@@ -4,16 +4,12 @@ test. Run with `scripts/check.sh --with-db` (or `pytest -m db`) while
 `docker compose up`."""
 
 import os
+from collections.abc import AsyncIterator
 
-# Settings need a JWT secret; the tests sign their own tokens with it.
-os.environ.setdefault("JWT_SECRET", "analytics-tests-only-secret-32-bytes-long")
-
-from collections.abc import AsyncIterator  # noqa: E402
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from pymongo import AsyncMongoClient  # noqa: E402
-from pymongo.asynchronous.database import AsyncDatabase  # noqa: E402
+import pytest
+import pytest_asyncio
+from pymongo import AsyncMongoClient
+from pymongo.asynchronous.database import AsyncDatabase
 
 TEST_MONGO_URL = os.environ.get("ANALYTICS_TEST_MONGO_URL", "mongodb://localhost:27018")
 
