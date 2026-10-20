@@ -18,6 +18,24 @@ poll → deserialize → process(event) → commit offset
   restart would land in the DLQ.
 - If the DLQ publish or the offset commit fails, the same rewind applies:
   the message is redelivered, never lost.
+
+Where it runs (two modes, same `ConsumerLoop`; picked by each service's
+`kafka_consumer_mode` setting):
+- Embedded (`running_in_background`): inside the API process, as an asyncio
+  task on the API's own event loop thread. It shares that thread with the
+  HTTP request handlers, so handlers (`process`) must not block it.
+- Standalone (`run_standalone`): its own process (`python -m app.consumer`),
+  no API at all. Its event loop runs the consumer on the main thread.
+
+Which thread does what (in both modes):
+- Event loop thread: the loop logic in `run`, deserialize, the handler
+  (`process`, its async DB/Mongo writes), the retry sleeps, and — briefly
+  blocking — the offset commit, the seek on rewind, and the DLQ produce+flush.
+- Worker threads (`asyncio.to_thread`): only the blocking Kafka calls —
+  `poll` (waits up to `poll_timeout` for a message) and `_record_lag`
+  (asks the broker for offsets). These would otherwise freeze the event loop.
+- librdkafka's own internal threads (inside confluent_kafka) handle
+  fetching, heartbeats and group membership; we don't manage them.
 """
 
 import asyncio
@@ -162,17 +180,20 @@ class ConsumerLoop:
         self._sleep = sleep
 
     async def run(self, stop: asyncio.Event) -> None:
-        """Until `stop` is set. The blocking poll runs in a worker thread so
+        """The consumer's main loop, one message at a time (so order within a
+        partition is kept). Until `stop` is set. The blocking poll runs in a worker thread so
         the event loop stays free. A message that couldn't be finished
         (outage, failed DLQ publish or commit) is rewound to and retried
         after a backoff that grows to `max_outage_backoff_seconds`."""
         delay = self._backoff
         next_lag_sample = 0.0
         while not stop.is_set():
+            # Worker thread: poll blocks while waiting for a message.
             msg = await asyncio.to_thread(self._consumer.poll, self._poll_timeout)
             now = time.monotonic()
             if now >= next_lag_sample:
                 next_lag_sample = now + _LAG_SAMPLE_SECONDS
+                # Worker thread too: this one calls the broker.
                 await asyncio.to_thread(self._record_lag)
             if msg is None:
                 continue
@@ -300,11 +321,16 @@ class ConsumerLoop:
         self._consumer.seek(TopicPartition(topic, partition, offset))
 
     def _commit(self, msg: Message, outcome: Outcome) -> Outcome:
+        # Synchronous commit, on the event loop thread: a short block, but the
+        # offset is saved before we move on, which is what makes redelivery safe.
         self._consumer.commit(message=msg, asynchronous=False)
         metrics.EVENTS_CONSUMED.labels(self._group, msg.topic() or "", outcome.value).inc()
         return outcome
 
     def _dead_letter(self, msg: Message, error: BaseException, *, attempts: int) -> None:
+        """Copies the failed message to its `.dlq` topic and waits (flush) for
+        Kafka to confirm. Runs on the event loop thread; rare, so the block
+        is accepted."""
         failures: list[KafkaError] = []
 
         def on_delivery(err: KafkaError | None, _: Message) -> None:
@@ -327,7 +353,8 @@ async def running_in_background(
     loop: ConsumerLoop, close: Callable[[], None]
 ) -> AsyncIterator[None]:
     """Embedded mode (W3-D6): runs `loop` as a task of the API's event loop
-    for the duration of the lifespan, then stops it and closes the Kafka
+    (same process and thread as the HTTP handlers) for the duration of the
+    lifespan, then stops it and closes the Kafka
     consumer (leaving the group, so its partitions move on at once)."""
     stop = asyncio.Event()
     task = asyncio.create_task(loop.run(stop), name="kafka-consumer")
@@ -343,7 +370,13 @@ async def running_in_background(
 
 
 def run_standalone(loop: ConsumerLoop, close: Callable[[], None]) -> None:
-    """Standalone mode: `python -m app.consumer` — runs until SIGTERM/SIGINT."""
+    """Standalone mode: `python -m app.consumer` — the consumer as its own
+    process, with no API and no HTTP server. "Standalone" = not embedded in
+    the API. It runs until SIGTERM/SIGINT (docker stop, Ctrl-C), which set
+    `stop` so the loop finishes its current message and `close` leaves the
+    consumer group cleanly. Same loop and handlers as embedded mode; only
+    where it runs differs (lets you scale consumers separately from the API).
+    """
 
     async def main() -> None:
         stop = asyncio.Event()
