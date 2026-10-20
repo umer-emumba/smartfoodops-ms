@@ -421,6 +421,10 @@ services:
       timeout: 5s
       retries: 10
 
+  # Start order: this worker waits for its API (so migrations have run),
+  # the DB, RabbitMQ (Celery broker), Schema Registry, and kafka-init (topics
+  # exist). Same image as the API, but runs Celery: the outbox relay (beat)
+  # publishes outbox rows to Kafka.
   order-worker:
     <<: *celery-worker
     environment:

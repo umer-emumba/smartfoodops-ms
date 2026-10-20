@@ -27,10 +27,13 @@ EVENT_TOPICS = [topic.value for topic in Topic]
 DLQ_TOPICS = [dlq_topic(topic) for topic in EVENT_TOPICS]
 
 
+# Called by the consumer loop for each event: updates the Mongo read model
+# (app/facts.py). Safe to run twice for the same event, so no idempotency table.
 async def process(event: DomainEvent) -> None:
     await facts.apply_event(mongo.db, event)
 
 
+# Called for each message on a *.dlq topic: just counts it as a failed event.
 async def process_dead_letter(msg: Message) -> None:
     await facts.record_dead_letter(mongo.db, msg)
 

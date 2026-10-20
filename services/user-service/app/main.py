@@ -19,6 +19,9 @@ configure_logging(settings.service_name, settings.log_level)
 
 @asynccontextmanager
 async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
+    # Background job in this process: periodically deletes expired refresh
+    # tokens (app/maintenance.py). Not a Temporal/Celery job — user-service has
+    # neither. Cancelled on shutdown so the process can exit cleanly.
     purge_task = asyncio.create_task(run_refresh_token_purge_loop())
     yield
     purge_task.cancel()
