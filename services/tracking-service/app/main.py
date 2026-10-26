@@ -17,7 +17,18 @@ configure_logging(settings.service_name, settings.log_level)
 
 @asynccontextmanager
 async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
-    yield
+    """Embedded mode: the Kafka consumer that feeds the live streams
+    (app/consumer.py) runs in this process. Standalone: `python -m
+    app.consumer` runs it instead."""
+    if settings.kafka_consumer_mode == "embedded":
+        from sfo_events.consumer import running_in_background
+
+        from app.consumer import build_consumer_loop
+
+        async with running_in_background(*build_consumer_loop()):
+            yield
+    else:
+        yield
     await hub.close()
     await state.close()
     await redis.aclose()

@@ -28,8 +28,9 @@ graph TD
     PS -->|payment-activities worker| Temporal
     DS -->|"delivery-activities worker"| Temporal
 
-    OS -->|"PUBLISH status + state hash"| Redis
+    OS -->|"state hash at creation (and rebuild)"| Redis
     DS -->|"GEO rider pool; PUBLISH delivery, ETA, location"| Redis
+    TS -->|"order event → state + PUBLISH (one Lua script)"| Redis
     Redis -->|"Pub/Sub + state keys"| TS
     TS -.->|"fallback when a state key is missing"| OS
     TS -.->|fallback| RS
@@ -49,6 +50,7 @@ graph TD
     PaymentDB -->|"outbox → payment-worker"| Kafka
     Kafka -->|consumer group| NS
     Kafka -->|"consumer group (+ .dlq topics)"| AS
+    Kafka -->|"consumer group (order-events)"| TS
     AS --> AnalyticsDB[(MongoDB: analytics)]
     NS -->|"send tasks"| Rabbit[(RabbitMQ)]
     Rabbit --> NW[notification-worker]
@@ -61,9 +63,10 @@ missing), or, for the `api-gateway` replica line, production-only (Kubernetes
 `Deployment`/`HPA` + `Service` — never built locally, see
 [technical-documentation.md](./technical-documentation.md#gateway-single-entry-point-not-a-spof)
 for why). Each service's Temporal worker runs inside the service process in development
-and as a separate process (`python -m app.worker`) in production. Live tracking goes
-through Redis Pub/Sub, not Kafka: it needs sub-second push to whoever is watching, not a
-replayable log. Every database is a separate Postgres container — database-per-service,
+and as a separate process (`python -m app.worker`) in production. Order status
+updates reach live tracking through Kafka (tracking-service's consumer group), so none is
+lost; Redis Pub/Sub then carries each one to the tracking replica that holds the viewer's
+stream. Delivery details and rider positions go to Redis directly. Every database is a separate Postgres container — database-per-service,
 no shared instance. The relay workers (`order-worker`, `payment-worker`,
 `delivery-worker`) also use RabbitMQ — for their beat schedule — not drawn. Every process
 also sends traces to Jaeger and serves metrics to Prometheus; see
@@ -79,9 +82,9 @@ of data. Each mechanism has one job:
 | **REST** (through api-gateway) | A user *does* something: place an order, accept, pick up | — (request/response) |
 | **Temporal task queues** | The saga hands *work* to the service that owns the data | ✅ durable, retried |
 | **Temporal signals** | Tell the waiting saga that a user acted ("restaurant accepted") | ✅ durable |
-| **Redis Pub/Sub** | Announce "something changed" to tracking-service | ❌ — the latest state is saved next to it, sent as a snapshot on connect |
+| **Redis Pub/Sub** | Carry each change to the tracking-service replica holding the viewer's stream | ❌ — the latest state is saved next to it, sent as a snapshot on (re)connect |
 | **SSE** (Server-Sent Events) | Push those changes to open screens (one-way, plain HTTP) | ❌ — the screen gets a fresh snapshot when it reconnects |
-| **Outbox → Kafka → Celery** | Guaranteed notifications (in-app, email, SMS) and analytics | ✅ |
+| **Outbox → Kafka** | Guaranteed order status updates for live screens, notifications (in-app, email, SMS, via Celery) and analytics | ✅ |
 
 ### Overview
 
@@ -97,12 +100,16 @@ flowchart LR
     T -->|"work (activities)"| W["restaurant-, payment-,<br/>delivery-, order-service<br/>workers"]
 ```
 
-**B. Telling screens** — every change is announced and pushed to whoever is watching:
+**B. Telling screens** — every change is announced and pushed to whoever is watching.
+Order status goes through Kafka, so it can't be lost; delivery details and rider
+positions go to Redis directly (frequent, and fine to drop one):
 
 ```mermaid
 flowchart LR
-    P["order-service<br/>delivery-service"] -->|"PUBLISH + save latest state"| RD[("Redis<br/>Pub/Sub")]
-    RD -->|SUBSCRIBE| TS[tracking-service]
+    OS[order-service] -->|"outbox → Kafka<br/>(order-events)"| TC["tracking-service<br/>consumer"]
+    TC -->|"save latest state + PUBLISH"| RD[("Redis<br/>Pub/Sub")]
+    DS[delivery-service] -->|"PUBLISH delivery, ETA, location"| RD
+    RD -->|SUBSCRIBE| TS["tracking-service<br/>(replica holding the stream)"]
     TS -->|SSE| GW[api-gateway]
     GW -->|SSE| S["Customer app<br/>Restaurant dashboard"]
 ```
@@ -154,19 +161,23 @@ sequenceDiagram
     S->>OS: transition_order → awaiting_restaurant_acceptance
 ```
 
-### Step 3 — The restaurant is notified (Redis Pub/Sub → SSE)
+### Step 3 — The restaurant is notified (Kafka → Redis Pub/Sub → SSE)
 
-Right after the status change is saved, order-service does two things in one Redis
-round-trip: it saves the latest state (and adds the order to the restaurant's
-"waiting" list), and it **publishes** `new_order` on the restaurant's channel.
-tracking-service is subscribed to that channel for every open dashboard, and pushes
-the message down the dashboard's SSE stream within a second.
+The status change is saved together with an `OrderAwaitingRestaurant` outbox row. The
+relay sends it to Kafka within about a second, and tracking-service's consumer applies
+it in one Redis script: it saves the latest state, adds the order to the restaurant's
+"waiting" list, and **publishes** `new_order` on the restaurant's channel. The
+tracking-service replica holding the open dashboard is subscribed to that channel and
+pushes the message down its SSE stream. If Redis or the consumer is down, the event
+waits in Kafka and is applied once they're back.
 
 ```mermaid
 sequenceDiagram
     participant OS as order-service
+    participant K as Kafka
+    participant TC as tracking-service consumer
     participant RD as Redis
-    participant TS as tracking-service
+    participant TS as tracking-service (stream)
     participant GW as api-gateway
     actor R as Restaurant dashboard
 
@@ -174,7 +185,9 @@ sequenceDiagram
     GW->>TS: stream
     TS->>RD: SUBSCRIBE tracking:restaurant:{id}
     TS-->>R: snapshot: orders already waiting
-    OS->>RD: save state + PUBLISH new_order
+    OS->>K: OrderAwaitingRestaurant (outbox → relay)
+    K->>TC: poll
+    TC->>RD: save state + pending + PUBLISH new_order (one Lua script)
     RD-->>TS: message
     TS-->>R: event: new_order (SSE, via the gateway)
 ```
@@ -195,7 +208,7 @@ sequenceDiagram
     participant OS as order-service
     participant T as Temporal
     participant S as Saga
-    participant RD as Redis
+    participant K as Kafka
     actor C as Customer app
 
     R->>OS: POST /v1/orders/{id}/restaurant-response {accept} (REST)
@@ -203,8 +216,8 @@ sequenceDiagram
     OS-->>R: 202
     T->>S: wakes the waiting saga
     S->>OS: transition_order → confirmed (order-activities queue)
-    OS->>RD: PUBLISH status: confirmed
-    RD-->>C: status: confirmed (via tracking-service, SSE)
+    OS->>K: OrderConfirmed (outbox → relay)
+    K-->>C: status: confirmed (tracking-service → Redis Pub/Sub → SSE)
 ```
 
 ### Step 5 — A rider is offered the order (Temporal task queue; the rider asks)
@@ -234,8 +247,9 @@ live feed (the same SSE pattern as the restaurant's) would fix this.
 ### Step 6 — The rider accepts and delivers; the customer watches live (REST → signal → Pub/Sub → SSE)
 
 Every rider action follows the same pattern: REST to delivery-service, which signals
-the saga; the saga makes the change; the change is published and pushed to the
-customer. Location pings skip the saga: delivery-service publishes them directly.
+the saga; the saga makes the change; the change is pushed to the customer. The order's
+status (assigned, picked up, delivered) arrives through Kafka as in steps 3–4; delivery
+details, ETAs and location pings are published by delivery-service directly.
 
 ```mermaid
 sequenceDiagram
@@ -243,6 +257,7 @@ sequenceDiagram
     participant DS as delivery-service
     participant S as Saga
     participant PS as payment-service
+    participant K as Kafka
     participant RD as Redis
     actor C as Customer app
 
@@ -257,17 +272,17 @@ sequenceDiagram
     D->>DS: POST …/picked-up, then …/delivered (REST)
     DS->>S: signals picked_up, delivered
     S->>PS: capture (payment-activities queue)
-    S->>RD: status: delivered (via order-service)
-    RD-->>C: SSE: delivered — the stream closes
+    S->>K: OrderDelivered (order-service's outbox)
+    K-->>C: SSE: delivered (tracking-service → Redis) — the stream closes
 ```
 
 ### Step 7 — Guaranteed notifications and analytics (outbox → Kafka → Celery)
 
-Live screens are best-effort. Messages that must arrive use the outbox: every change
-above writes an event row (`OrderPlaced`, `OrderAwaitingRestaurant`, `RiderAssigned`, …)
-in the same database transaction. A relay worker publishes it to Kafka within about a
-second; notification-service tells the customer, restaurant and rider, and
-analytics-service updates its metrics. The full path, with failure handling, is in
+Messages that must arrive use the outbox: every change above writes an event row
+(`OrderPlaced`, `OrderAwaitingRestaurant`, `RiderAssigned`, …) in the same database
+transaction. A relay worker publishes it to Kafka within about a second; tracking-service
+updates the live screens' order status, notification-service tells the customer,
+restaurant and rider, and analytics-service updates its metrics. The full path, with failure handling, is in
 [Event flow](#event-flow-outbox--kafka--consumers--celery).
 
 ```mermaid
@@ -276,6 +291,8 @@ flowchart LR
     K --> NS[notification-service]
     NS -->|Celery / RabbitMQ| Out[in-app / email / SMS]
     K --> AS[analytics-service]
+    K --> TS[tracking-service]
+    TS -->|"state + PUBLISH"| RD[(Redis → SSE)]
 ```
 
 ### Summary
@@ -284,11 +301,11 @@ flowchart LR
 |---|---|---|
 | 1 | Customer places the order | REST |
 | 2 | Saga reserves stock, prices, holds the money | Temporal task queues |
-| 3 | Restaurant sees the new order | Redis Pub/Sub → SSE |
+| 3 | Restaurant sees the new order | Outbox → Kafka → Redis Pub/Sub → SSE |
 | 4 | Restaurant accepts | REST → Temporal signal |
 | 5 | Rider gets the offer | Temporal task queue; rider polls over REST |
-| 6 | Rider accepts, moves, delivers; customer watches | REST → signal; Redis Pub/Sub → SSE |
-| 7 | Notifications (in-app, email, SMS); analytics | Outbox → Kafka → Celery |
+| 6 | Rider accepts, moves, delivers; customer watches | REST → signal; status via Kafka, location direct; Redis Pub/Sub → SSE |
+| 7 | Live order status; notifications (in-app, email, SMS); analytics | Outbox → Kafka (→ Celery for sends) |
 
 ## Event flow (outbox → Kafka → consumers → Celery)
 
@@ -303,6 +320,8 @@ flowchart LR
     OB -->|"relay worker, every 1s:<br/>advisory lock → read → produce → flush → dispatched_at<br/>(Kafka down: rows wait, retried each tick)"| K[("Kafka topic<br/>key = aggregate ID")]
     K -->|"poll → deserialize (Schema Registry)"| NC["notification-service consumer"]
     K --> AC["analytics-service consumer"]
+    K -->|"order-events"| TC["tracking-service consumer"]
+    TC -->|"Lua: state + PUBLISH, never backwards;<br/>Redis down: wait and retry"| RDS[(Redis → live feeds)]
     NC -->|"notifications + processed_events<br/>(one transaction), then commit offset"| NDB[(notification_db)]
     NC -->|"after commit: one task per row"| MQ[(RabbitMQ)]
     MQ --> NW["notification-worker<br/>send; retry 2s, 4s, 8s, 16s;<br/>failed after 5"]
@@ -310,6 +329,7 @@ flowchart LR
     AC -->|"idempotent upserts,<br/>then commit offset"| M[(MongoDB analytics)]
     NC -.->|"handler failed 3×, or bad bytes"| DLQ[("topic.dlq")]
     AC -.-> DLQ
+    TC -.-> DLQ
     DLQ -.->|raw| AC
 ```
 
@@ -360,6 +380,7 @@ flowchart LR
     DS -.-> DW[delivery-worker]
     OW -->|"Kafka header traceparent"| NS[notification-service<br/>process span]
     OW --> AS[analytics-service<br/>process span]
+    OW --> TSC[tracking-service<br/>process span]
     NS -->|"Celery task message"| NW[notification-worker]
 ```
 
@@ -422,7 +443,7 @@ sequenceDiagram
     W->>OS: apply_pricing (tax, delivery fee)
     W->>PS: authorize (simulated card)
     W->>OS: transition → awaiting_restaurant_acceptance
-    OS-)TS: Redis PUBLISH → customer `status`, restaurant `new_order`
+    OS-)TS: OrderAwaitingRestaurant via Kafka → Redis PUBLISH → customer `status`, restaurant `new_order`
     A->>GW: POST /v1/orders/{id}/restaurant-response {accept}
     GW->>OS: signal restaurant_response
     W->>OS: transition → confirmed

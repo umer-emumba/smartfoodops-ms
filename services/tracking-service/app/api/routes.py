@@ -40,14 +40,6 @@ router = APIRouter(prefix="/v1/tracking", tags=["tracking"])
 TERMINAL = {"delivered", "cancelled", "rejected"}
 
 
-def order_channel(order_id: str) -> str:
-    return f"tracking:order:{order_id}"
-
-
-def restaurant_channel(restaurant_id: str) -> str:
-    return f"tracking:restaurant:{restaurant_id}"
-
-
 def _is_terminal(message: dict[str, Any]) -> bool:
     return message.get("type") == "status" and message.get("status") in TERMINAL
 
@@ -78,6 +70,8 @@ async def _stream(
             except TimeoutError:
                 yield sse.HEARTBEAT
                 continue
+            if subscription.overflowed:
+                return  # it may have missed a message; reconnecting resyncs it
             message = json.loads(raw)
             yield sse.event(message.get("type", "message"), message)
             if ends(message):
@@ -107,7 +101,7 @@ async def track_order(
 
     return _sse(
         _stream(
-            order_channel(order_id),
+            state.order_channel(order_id),
             snapshot,
             ends=lambda m: (
                 m.get("status") in TERMINAL if m.get("type") == "snapshot" else _is_terminal(m)
@@ -131,4 +125,4 @@ async def restaurant_feed(
     async def snapshot() -> dict[str, Any]:
         return {"type": "snapshot", "pending": await state.pending_orders(restaurant_id)}
 
-    return _sse(_stream(restaurant_channel(restaurant_id), snapshot, ends=lambda _: False))
+    return _sse(_stream(state.restaurant_channel(restaurant_id), snapshot, ends=lambda _: False))

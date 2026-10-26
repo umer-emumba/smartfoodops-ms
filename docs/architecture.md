@@ -21,7 +21,7 @@ database directly. Cross-service contact only happens through the mechanisms in
 | `order-service` | Order creation (server-side pricing from `restaurant-service`, idempotency keys), order history + status audit trail, order state machine, restaurant accept/reject, cancel, refunds; the Temporal **order saga** and refund workflow, plus a reconciler that starts sagas a crash left unstarted | Postgres (`order_db`) |
 | `delivery-service` | Rider registration/availability + vetting audit trail, rider location ingestion; deliveries, nearest-rider offers, reassignment, ETA, stale-rider detection | Postgres (`delivery_db`) + Redis (GEO rider pool, live positions) + MongoDB (high-frequency rider location pings, TTL-indexed) |
 | `payment-service` | Simulated card payments: authorize, capture, void, full/partial refund — idempotent per order and per refund | Postgres (`payment_db`) |
-| `tracking-service` | Live SSE feeds: a customer's order, a restaurant's incoming orders. Stateless; ownership checked from Redis state keys | Redis only (Pub/Sub + state keys written by order- and delivery-service) |
+| `tracking-service` | Live SSE feeds: a customer's order, a restaurant's incoming orders. Stateless; ownership checked from Redis state keys. Its Kafka consumer turns order events into live-feed updates | Redis (Pub/Sub + state keys); consumer group `tracking-service` on `order-events` |
 | `notification-service` | Turns order, payment and delivery events into notifications for the customer, restaurant admin and rider (in-app, simulated email and SMS); the in-app inbox. Kafka consumer group `notification-service` | Postgres (`notification_db`) |
 | `analytics-service` | The nine Part A metrics, computed from events; read API for system admins and restaurant admins. Kafka consumer group `analytics-service` (also reads the `.dlq` topics) | MongoDB (`analytics`: `order_facts`, `rider_shift_facts`, `failed_events`) |
 
@@ -77,8 +77,9 @@ local Traefik-based version of it was removed rather than kept as a demo.
   exclusively, so clients can't reach them.
 - **Temporal** owns the **order saga** and post-delivery refunds — see
   [Order saga (Temporal)](#order-saga-temporal).
-- **Redis Pub/Sub** carries live tracking: order- and delivery-service publish each change,
-  `tracking-service` streams it to whoever is watching — see
+- **Redis Pub/Sub** carries live tracking to whoever is watching: order status changes
+  arrive through Kafka (`tracking-service`'s consumer applies and publishes them),
+  delivery details and rider positions are published by delivery-service directly — see
   [Real-time delivery tracking](#real-time-delivery-tracking).
 - **Kafka + Schema Registry** owns the domain event backbone — decoupled fan-out to
   `notification-service` and `analytics-service`. Every event is written as an outbox
@@ -354,9 +355,27 @@ before they're operationally trusted:
   - `GET /v1/tracking/restaurants/{id}`: a `snapshot` of orders awaiting a decision, then
     `new_order` and `order_cancelled`. This is how a restaurant "receives the order
     notification" in real time; notification-service also sends it in-app and by SMS.
-- **How it's wired**: publishers write the latest state (`tracking:order:{id}:state`
-  hash; `tracking:restaurant:{id}:pending` set) and `PUBLISH` to `tracking:order:{id}` /
-  `tracking:restaurant:{id}` in one Redis pipeline. `tracking-service` subscribes
+- **How it's wired**: the latest state lives in Redis (`tracking:order:{id}:state` hash;
+  `tracking:restaurant:{id}:pending` set), and each change is `PUBLISH`ed to
+  `tracking:order:{id}` / `tracking:restaurant:{id}` together with the state write.
+  - **Order status** (placed → … → delivered, rejected, cancelled): from Kafka.
+    `tracking-service`'s consumer (group `tracking-service`, `order-events`,
+    `app/projection.py`) applies each order event in one Lua script: state, pending set
+    and publishes, all or nothing. It never moves an order backwards (statuses only go
+    forward), so duplicates, replays and events older than a rebuilt state change
+    nothing. While Redis is down the consumer waits and retries (an outage, not a poison
+    message), then catches up — a status update can't be lost. Events older than a day
+    (their state would have expired) are skipped, so the group can start at the oldest
+    events without filling Redis with finished orders. order-service still writes the
+    state itself when an order is created (trackable at once) and when rebuilding a
+    missing key.
+  - **Delivery details** (delivery status, ETAs) and **rider positions**: published by
+    delivery-service directly, best-effort — positions arrive every few seconds, and the
+    order's own progress (assigned, picked up, delivered) comes through Kafka.
+  - Kafka adds up to about a second (the outbox relay runs every second) to a status
+    update, for the guarantee that it arrives.
+
+  `tracking-service` subscribes
   *before* reading the snapshot, so nothing falls between the two, and checks ownership
   from the same state (`customer_id`, `restaurant:{id}:owner`) before streaming — 403/404
   are normal JSON errors. If a state key is missing (e.g. Redis was flushed) it rebuilds
@@ -364,7 +383,10 @@ before they're operationally trusted:
 - **Scaling**: one shared Redis Pub/Sub connection per `tracking-service` replica; a
   channel is subscribed only while one of that replica's clients watches it, so a replica
   receives only what its own clients need. A client too slow to keep up (100 queued
-  events) is disconnected and reconnects for a fresh snapshot. Heartbeat comment every
+  events) is disconnected and reconnects for a fresh snapshot. Pub/Sub keeps nothing, and
+  redis-py reconnects (and re-subscribes) without telling the caller, so the hub registers
+  for every reconnect and read error and then ends all its open streams: each client
+  reconnects for a fresh snapshot instead of showing a status it missed. Heartbeat comment every
   15s; the gateway's tracking pool has its own 1,000 connections, so long-lived streams
   can't starve REST traffic.
 - **Auth**: bearer header, or `?access_token=` for browser `EventSource` (which can't send

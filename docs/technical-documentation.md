@@ -177,7 +177,8 @@ transaction instead of reaching Kafka.
    after 7 days (hourly task).
 3. **Consumers** (`sfo_events.consumer.ConsumerLoop`): poll → deserialize → process →
    commit the offset. Two consumer groups read all three topics: `notification-service`
-   and `analytics-service`.
+   and `analytics-service`. A third, `tracking-service`, reads `order-events` to drive the
+   live feeds.
 
 Delivery is at-least-once (a crash after Kafka acknowledged but before the relay's
 commit re-publishes those rows), so consumers dedupe:
@@ -188,6 +189,8 @@ commit re-publishes those rows), so consumers dedupe:
 - **analytics-service** needs no such table: every write is an idempotent upsert
   (`$min` for "first time" timestamps, `$set`, `$max`, `$addToSet`), so applying an
   event twice leaves the document the same.
+- **tracking-service** needs none either: an order event is applied only if it moves the
+  order forward, so a redelivered (or older) event changes and publishes nothing.
 
 **Consumer failures** (W3-D5):
 
@@ -693,13 +696,26 @@ Customers and restaurants want push, so they get **Server-Sent Events** from a s
   requests. Keeping them in their own small, stateless service (no database, Redis only)
   means they scale on their own and can't exhaust the connection pools of the services
   that do the real work. The gateway relays the stream from its own dedicated pool.
-- **Redis Pub/Sub, not Kafka** (a change from the original design, where the gateway
-  consumed a Kafka topic): tracking needs sub-second delivery to whoever is connected
-  *right now*, not a durable, replayable log — and with Kafka every gateway replica would
-  read every update for every order. With Pub/Sub, each tracking replica subscribes only
-  to the channels its own clients watch. Missed messages don't matter: on (re)connect the
-  client gets a snapshot of the current state first, kept in Redis by the publishers.
-  Kafka still carries the durable events for notifications and analytics.
+- **Kafka for order status, Redis Pub/Sub for the last step.** Order status updates
+  come from Kafka: `tracking-service` consumes `order-events` and applies each one. They
+  used to be published to Redis by order-service right after its commit, best-effort — a
+  Redis blip at that moment lost the update, and the snapshot stayed stale until the next
+  change. Through Kafka the consumer waits out a Redis outage and catches up, so an update
+  can't be lost; the price is up to about a second of extra delay (the outbox relay runs
+  every second). Kafka is *not* used for the last step: a consumer group gives each event
+  to one replica, while the customer's stream may be held by another, and having every
+  replica read every event grows the work with each replica. So the consumer writes the
+  state and `PUBLISH`es, and each tracking replica receives only the channels its own
+  clients watch.
+- **Missed Pub/Sub messages resync.** Pub/Sub keeps nothing. On (re)connect a client
+  first gets a snapshot of the current state; a client that may have missed something —
+  too far behind, or its replica's Pub/Sub connection dropped (redis-py reconnects
+  silently, so the hub listens for reconnects) — is disconnected so it reconnects for a
+  fresh snapshot.
+- **Delivery details stay direct**: delivery status, ETAs and rider positions are
+  published by delivery-service itself, best-effort. Positions arrive every few seconds,
+  ETAs are computed without a status change (so there's no event for them), and the
+  order's own progress — assigned, picked up, delivered — already comes through Kafka.
 - **Ownership from Redis**: the snapshot state includes the order's `customer_id` and the
   restaurant's owner, so `tracking-service` authorizes a stream without calling another
   service; if Redis lost a key, it rebuilds it from an `/internal` endpoint once.

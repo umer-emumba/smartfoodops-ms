@@ -28,6 +28,14 @@ _client = httpx.AsyncClient(
 )
 
 
+def order_channel(order_id: str) -> str:
+    return f"tracking:order:{order_id}"
+
+
+def restaurant_channel(restaurant_id: str) -> str:
+    return f"tracking:restaurant:{restaurant_id}"
+
+
 def order_state_key(order_id: str) -> str:
     return f"tracking:order:{order_id}:state"
 

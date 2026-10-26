@@ -2626,6 +2626,7 @@ dependencies = [
     { name = "redis" },
     { name = "sfo-auth" },
     { name = "sfo-common" },
+    { name = "sfo-events" },
     { name = "sfo-observability" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -2645,6 +2646,7 @@ requires-dist = [
     { name = "redis", specifier = ">=5.0" },
     { name = "sfo-auth", editable = "libs/auth" },
     { name = "sfo-common", editable = "libs/common" },
+    { name = "sfo-events", editable = "libs/events" },
     { name = "sfo-observability", editable = "libs/observability" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]

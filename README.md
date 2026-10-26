@@ -31,8 +31,8 @@ a new session.
                     activities └────────┬────────┘ activities      ┌───────┴───────┐
                                         │ activities               │     Redis     │
                                 ┌───────▼───────┐                  └───────▲───────┘
-                                │payment-service│        order- and delivery-service
-                                └───────────────┘        publish status, ETA, location
+                                │payment-service│        order status: Kafka → tracking-service;
+                                └───────────────┘        ETA, location: delivery-service
 
    The gateway also routes to payment-, notification- and analytics-service (not drawn).
    Each service has its own database and runs its own Temporal worker on its own task
@@ -50,14 +50,16 @@ Events, notifications and analytics:
   order-, payment-, delivery-worker ──► Kafka ──┬──► notification-service ──► RabbitMQ ──► notification-worker
   (Celery beat relay, every 1s)                 │    (consumer)                            (in-app / email / SMS,
                                                 │                                           retries, then failed)
-                                                └──► analytics-service ──► MongoDB (metrics read model)
+                                                ├──► analytics-service ──► MongoDB (metrics read model)
+                                                │
+                                                └──► tracking-service ──► Redis (live-feed state + Pub/Sub → SSE)
 
   Every process: traces → Jaeger, metrics → Prometheus, logs → Loki; all three in Grafana.
 ```
 
 Every service owns its own database — no service reads another's DB directly.
 Cross-service contact happens only via sync REST (order → restaurant for the quote), the
-Temporal order saga, Redis Pub/Sub for live tracking, Kafka domain events, or Celery
+Temporal order saga, Redis Pub/Sub for live tracking (order status fed from Kafka), Kafka domain events, or Celery
 background jobs. Full rationale in [docs/architecture.md](docs/architecture.md);
 component, sequence and ER diagrams in [docs/diagrams.md](docs/diagrams.md).
 
@@ -110,7 +112,8 @@ Full state transitions, compensation matrix and consistency model:
   pings → nearest available rider offered (Redis GEO), 60s to accept → reassignment on
   decline, expiry or drop-out → pickup → delivery, with ETAs.
 - **Live tracking**: customers follow their order and restaurants get new orders over SSE
-  (`/v1/tracking/...`), served by `tracking-service` from Redis Pub/Sub.
+  (`/v1/tracking/...`), served by `tracking-service`. Order status updates come from Kafka
+  (so none is lost), and Redis Pub/Sub delivers them to whichever replica holds the stream.
 - **Cancellation/refund**: cancel until pickup — the saga compensates for whatever had
   happened (release stock, void payment, free the rider). After delivery a system admin
   can refund all or part of an order.

@@ -19,7 +19,7 @@ from sfo_events.reasons import reason_label
 from sqlalchemy.ext.asyncio import AsyncSession
 from temporalio import activity
 
-from app import repository, tracking
+from app import repository
 from app.db import SessionFactory
 from app.metrics import SAGA_OUTCOMES
 from app.models import Order, OrderStatus, OrderStatusHistory
@@ -37,11 +37,12 @@ async def _load(session: AsyncSession, order_id: str) -> Order:
 
 @activity.defn(name=OrderActivity.TRANSITION_ORDER)
 async def transition_order(data: TransitionOrderInput) -> TransitionOrderResult:
-    """Status change + history row + outbox event in one transaction, then a
-    live-tracking publish. Already in `to_status` → no-op success (a retry
-    after a commit whose result was lost). A concurrent change fails the
-    commit on the `version` check; that error is retried, and the retry
-    re-reads the order and re-checks the transition."""
+    """Status change + history row + outbox event in one transaction. The
+    event also drives the live feeds (tracking-service consumes it). Already
+    in `to_status` → no-op success (a retry after a commit whose result was
+    lost). A concurrent change fails the commit on the `version` check; that
+    error is retried, and the retry re-reads the order and re-checks the
+    transition."""
     to_status = OrderStatus(data.to_status)
     async with SessionFactory() as session:
         order = await _load(session, data.order_id)
@@ -63,9 +64,6 @@ async def transition_order(data: TransitionOrderInput) -> TransitionOrderResult:
         await session.commit()
         if to_status in TERMINAL:
             SAGA_OUTCOMES.labels(to_status.value, reason_label(data.reason)).inc()
-        # Through Redis to tracking-service, which pushes the new status to the
-        # customer's and restaurant's open screens.
-        await tracking.publish_status(order)
         return TransitionOrderResult(status=order.status, changed=True)
 
 

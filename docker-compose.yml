@@ -480,8 +480,12 @@ services:
     build: { context: ., dockerfile: services/tracking-service/Dockerfile }
     env_file: [services/tracking-service/.env]
     environment: *observability-env
+    # The Kafka consumer that turns order events into live-feed updates runs
+    # in this process (KAFKA_CONSUMER_MODE=embedded, app/consumer.py).
     depends_on:
       redis: { condition: service_healthy }
+      schema-registry: { condition: service_healthy }
+      kafka-init: { condition: service_completed_successfully }
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 5s

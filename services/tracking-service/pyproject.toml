@@ -11,6 +11,7 @@ dependencies = [
     "sfo-common",
     "sfo-auth",
     "sfo-observability",
+    "sfo-events",
 ]
 
 [dependency-groups]
@@ -27,3 +28,4 @@ packages = ["app"]
 sfo-common = { workspace = true }
 sfo-auth = { workspace = true }
 sfo-observability = { workspace = true }
+sfo-events = { workspace = true }
