@@ -1,9 +1,12 @@
-"""Live tracking (docs/week2-plan.md D8): delivery status changes and, while
-a rider has the order, the rider's position are written into the order's
-state hash `tracking:order:{order_id}:state` (next to order-service's
-fields — the snapshot a customer gets on connecting) and published to
-`tracking:order:{order_id}`, which tracking-service relays.
-Best-effort, after commit — the database stays the source of truth."""
+"""Live tracking (docs/week2-plan.md D8): while a rider has the order, the
+rider's position is written into the order's state hash
+`tracking:order:{order_id}:state` (the snapshot a customer gets on
+connecting) and published to `tracking:order:{order_id}`, which
+tracking-service relays.
+
+Only positions: frequent, and fine to lose one, so straight to Redis,
+best-effort. Delivery status and ETAs reach the live feeds through their
+Kafka events instead (tracking-service's app/projection.py)."""
 
 import json
 import logging
@@ -13,7 +16,6 @@ from typing import Any
 from redis.exceptions import RedisError
 
 from app import redis_client
-from app.models import Delivery
 
 _logger = logging.getLogger(__name__)
 
@@ -31,10 +33,6 @@ def state_key(order_id: str) -> str:
 _STATE_TTL_SECONDS = 24 * 3600
 
 
-def _iso(value: datetime | None) -> str | None:
-    return value.isoformat() if value else None
-
-
 async def _publish(order_id: str, message: dict[str, Any], state: dict[str, Any]) -> None:
     message["at"] = datetime.now(UTC).isoformat()
     key = state_key(order_id)
@@ -50,28 +48,6 @@ async def _publish(order_id: str, message: dict[str, Any], state: dict[str, Any]
         _logger.warning(
             "Tracking publish failed", exc_info=True, extra={"extra_fields": {"order_id": order_id}}
         )
-
-
-async def publish_delivery(delivery: Delivery) -> None:
-    pickup_eta, dropoff_eta = _iso(delivery.pickup_eta), _iso(delivery.dropoff_eta)
-    await _publish(
-        delivery.order_id,
-        {
-            "type": "delivery",
-            "delivery_id": delivery.id,
-            "status": delivery.status,
-            "rider_id": delivery.rider_id,
-            "pickup_eta": pickup_eta,
-            "dropoff_eta": dropoff_eta,
-        },
-        {
-            "delivery_id": delivery.id,
-            "delivery_status": delivery.status,
-            "rider_id": delivery.rider_id,
-            "pickup_eta": pickup_eta,
-            "dropoff_eta": dropoff_eta,
-        },
-    )
 
 
 async def publish_location(order_id: str, rider_id: str, lat: float, lng: float) -> None:

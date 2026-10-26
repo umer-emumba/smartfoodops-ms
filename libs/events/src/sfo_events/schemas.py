@@ -34,6 +34,7 @@ class EventType(StrEnum):
     ORDER_PICKED_UP = "OrderPickedUp"
     ORDER_DELIVERED = "OrderDelivered"
     DELIVERY_STATUS_UPDATED = "DeliveryStatusUpdated"
+    DELIVERY_ETA_UPDATED = "DeliveryEtaUpdated"
     RIDER_SHIFT_CHANGED = "RiderShiftChanged"
 
 
@@ -52,6 +53,7 @@ EVENT_TOPICS: dict[EventType, Topic] = {
     EventType.PAYMENT_SUCCESSFUL: Topic.PAYMENT,
     EventType.REFUND_PROCESSED: Topic.PAYMENT,
     EventType.DELIVERY_STATUS_UPDATED: Topic.DELIVERY,
+    EventType.DELIVERY_ETA_UPDATED: Topic.DELIVERY,
     EventType.RIDER_SHIFT_CHANGED: Topic.DELIVERY,
 }
 

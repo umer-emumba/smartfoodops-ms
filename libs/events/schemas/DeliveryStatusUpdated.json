@@ -2,7 +2,7 @@
   "$defs": {
     "DeliveryStatusUpdatedPayload": {
       "additionalProperties": false,
-      "description": "`rider_id`/`rider_user_id` are the rider holding the delivery after the\nchange (None once released). `customer_id` is None only on a cancelled\nplaceholder delivery.",
+      "description": "`rider_id`/`rider_user_id` are the rider holding the delivery after the\nchange (None once released). `customer_id` is None only on a cancelled\nplaceholder delivery. `from_status` is None when the delivery is created.\n\n`released_rider_user_id`: the rider who just lost it \u2014 their offer was\ndeclined or expired, or they dropped out \u2014 so their app can be told\n(rider_user_id is already None by then). `pickup_eta`/`dropoff_eta` are\nthe delivery's current estimates (None until computed, and after a\nrelease).",
       "properties": {
         "customer_id": {
           "anyOf": [
@@ -19,6 +19,19 @@
           "title": "Delivery Id",
           "type": "string"
         },
+        "dropoff_eta": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dropoff Eta"
+        },
         "from_status": {
           "anyOf": [
             {
@@ -34,6 +47,19 @@
           "title": "Order Id",
           "type": "string"
         },
+        "pickup_eta": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pickup Eta"
+        },
         "reason": {
           "anyOf": [
             {
@@ -45,6 +71,18 @@
           ],
           "default": null,
           "title": "Reason"
+        },
+        "released_rider_user_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Released Rider User Id"
         },
         "rider_id": {
           "anyOf": [

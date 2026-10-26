@@ -257,3 +257,38 @@ async def test_stream_ends_when_its_pubsub_connection_drops(env: Env) -> None:
 
 async def _rest(stream: AsyncIterator[tuple[str, Any]]) -> list[tuple[str, Any]]:
     return [(n, d) async for n, d in stream if n != "heartbeat"]
+
+
+# ---------- Rider feed ----------
+
+
+async def test_rider_feed_snapshot_then_offer(env: Env) -> None:
+    rider = "u-rider"
+    await env.redis.hset(
+        f"tracking:rider:{rider}:state", mapping={"delivery_id": "d-0", "status": "assigned"}
+    )
+    async with httpx.AsyncClient(base_url=env.base_url, timeout=5) as client:
+        async with client.stream(
+            "GET", "/v1/tracking/riders/me", headers=auth(rider, Role.RIDER)
+        ) as resp:
+            assert resp.status_code == 200
+            stream = events(resp)
+            name, snapshot = await anext(stream)
+            assert (name, snapshot["delivery"]["delivery_id"]) == ("snapshot", "d-0")
+            await _publish(env, f"tracking:rider:{rider}", {"type": "offer", "delivery_id": "d-1"})
+            name, offer = await anext(_skip_heartbeats(stream))
+    assert (name, offer["delivery_id"]) == ("offer", "d-1")
+
+
+async def test_rider_feed_is_for_riders_only(env: Env) -> None:
+    async with httpx.AsyncClient(base_url=env.base_url, timeout=5) as client:
+        resp = await client.get("/v1/tracking/riders/me", headers=auth(CUSTOMER))
+    assert resp.status_code == 403
+
+
+async def _skip_heartbeats(
+    stream: AsyncIterator[tuple[str, Any]],
+) -> AsyncIterator[tuple[str, Any]]:
+    async for name, data in stream:
+        if name != "heartbeat":
+            yield name, data

@@ -21,7 +21,7 @@ database directly. Cross-service contact only happens through the mechanisms in
 | `order-service` | Order creation (server-side pricing from `restaurant-service`, idempotency keys), order history + status audit trail, order state machine, restaurant accept/reject, cancel, refunds; the Temporal **order saga** and refund workflow, plus a reconciler that starts sagas a crash left unstarted | Postgres (`order_db`) |
 | `delivery-service` | Rider registration/availability + vetting audit trail, rider location ingestion; deliveries, nearest-rider offers, reassignment, ETA, stale-rider detection | Postgres (`delivery_db`) + Redis (GEO rider pool, live positions) + MongoDB (high-frequency rider location pings, TTL-indexed) |
 | `payment-service` | Simulated card payments: authorize, capture, void, full/partial refund — idempotent per order and per refund | Postgres (`payment_db`) |
-| `tracking-service` | Live SSE feeds: a customer's order, a restaurant's incoming orders. Stateless; ownership checked from Redis state keys. Its Kafka consumer turns order events into live-feed updates | Redis (Pub/Sub + state keys); consumer group `tracking-service` on `order-events` |
+| `tracking-service` | Live SSE feeds: a customer's order, a restaurant's incoming orders, a rider's offers. Stateless; ownership checked from Redis state keys. Its Kafka consumer turns order and delivery events into live-feed updates | Redis (Pub/Sub + state keys); consumer group `tracking-service` on `order-events` and `delivery-events` |
 | `notification-service` | Turns order, payment and delivery events into notifications for the customer, restaurant admin and rider (in-app, simulated email and SMS); the in-app inbox. Kafka consumer group `notification-service` | Postgres (`notification_db`) |
 | `analytics-service` | The nine Part A metrics, computed from events; read API for system admins and restaurant admins. Kafka consumer group `analytics-service` (also reads the `.dlq` topics) | MongoDB (`analytics`: `order_facts`, `rider_shift_facts`, `failed_events`) |
 
@@ -77,9 +77,9 @@ local Traefik-based version of it was removed rather than kept as a demo.
   exclusively, so clients can't reach them.
 - **Temporal** owns the **order saga** and post-delivery refunds — see
   [Order saga (Temporal)](#order-saga-temporal).
-- **Redis Pub/Sub** carries live tracking to whoever is watching: order status changes
-  arrive through Kafka (`tracking-service`'s consumer applies and publishes them),
-  delivery details and rider positions are published by delivery-service directly — see
+- **Redis Pub/Sub** carries live tracking to whoever is watching: order and delivery
+  changes arrive through Kafka (`tracking-service`'s consumer applies and publishes them),
+  rider positions are published by delivery-service directly — see
   [Real-time delivery tracking](#real-time-delivery-tracking).
 - **Kafka + Schema Registry** owns the domain event backbone — decoupled fan-out to
   `notification-service` and `analytics-service`. Every event is written as an outbox
@@ -97,7 +97,8 @@ local Traefik-based version of it was removed rather than kept as a demo.
 | | `OrderConfirmed`, `OrderRejected`, `OrderCancelled`, `RiderAssigned`, `OrderPickedUp`, `OrderDelivered` | saga transitions (`transition_order`) | from/to status, reason, customer, restaurant admin, total | notification, analytics |
 | `payment-events` | `PaymentSuccessful` | payment-service (authorize) | payment, customer, amount, status | — (published for future consumers; an authorization isn't worth a message, and analytics doesn't need it) |
 | | `RefundProcessed` | payment-service (refund) | amount, customer | notification, analytics |
-| `delivery-events` | `DeliveryStatusUpdated` | delivery-service (every delivery status) | from/to status, `rider_user_id`, customer, reason | notification (rider), analytics |
+| `delivery-events` | `DeliveryStatusUpdated` | delivery-service (every delivery status, creation included) | from/to status, `rider_user_id`, `released_rider_user_id` (who just lost it), customer, reason, ETAs | notification (rider), analytics, tracking |
+| | `DeliveryEtaUpdated` | delivery-service (new ETAs, no status change) | status, rider, pickup/drop-off ETA | tracking |
 | | `RiderShiftChanged` | delivery-service (offline ↔ on shift: status endpoint, suspension, drop-out) | on/off shift, reason | analytics |
 
 Every topic has a `<topic>.dlq` twin for messages a consumer gave up on; messages keep
@@ -174,6 +175,7 @@ workflow, `OrderRefundWorkflow` (`refund-{order_id}`), handles post-delivery ref
 | delivery | `GET /v1/deliveries/by-order/{order_id}` | ordering customer, the rider, system admin |
 | tracking | `GET /v1/tracking/orders/{id}` (SSE) | ordering customer, system admin |
 | tracking | `GET /v1/tracking/restaurants/{restaurant_id}` (SSE) | owning restaurant admin, system admin |
+| tracking | `GET /v1/tracking/riders/me` (SSE) | rider (their own feed only) |
 
 Every action endpoint checks ownership and state, then signals the saga and returns 202;
 only the saga changes order and delivery status, so a rider's pickup can't race a
@@ -347,7 +349,7 @@ before they're operationally trusted:
   ~every 5–15s. Stateless, so any `delivery-service` replica can handle any rider's
   ping — no connection-affinity needed. Each ping updates Redis, appends a Mongo ping,
   and (while the rider has an order) publishes the position to that order's channel.
-- **Server → customer and restaurant (live feeds)**: Server-Sent Events from
+- **Server → customer, restaurant and rider (live feeds)**: Server-Sent Events from
   `tracking-service`, through the gateway's streaming proxy.
   - `GET /v1/tracking/orders/{id}`: a `snapshot` (order status, delivery status, rider,
     ETAs, last position), then `status`, `delivery` and `location` events; the stream
@@ -355,6 +357,12 @@ before they're operationally trusted:
   - `GET /v1/tracking/restaurants/{id}`: a `snapshot` of orders awaiting a decision, then
     `new_order` and `order_cancelled`. This is how a restaurant "receives the order
     notification" in real time; notification-service also sends it in-app and by SMS.
+  - `GET /v1/tracking/riders/me` (riders only, their own channel): a `snapshot` of the
+    delivery they currently have, then `offer`, `released` (offer declined or expired,
+    drop-out, order cancelled) and `delivery` (assigned, picked up, delivered). Each is a
+    nudge: the app fetches the details from `GET /v1/riders/me/offer` (the source of
+    truth), on every event and every (re)connect, plus a 30s safety check — instead of
+    polling every 2s.
 - **How it's wired**: the latest state lives in Redis (`tracking:order:{id}:state` hash;
   `tracking:restaurant:{id}:pending` set), and each change is `PUBLISH`ed to
   `tracking:order:{id}` / `tracking:restaurant:{id}` together with the state write.
@@ -369,9 +377,14 @@ before they're operationally trusted:
     events without filling Redis with finished orders. order-service still writes the
     state itself when an order is created (trackable at once) and when rebuilding a
     missing key.
-  - **Delivery details** (delivery status, ETAs) and **rider positions**: published by
-    delivery-service directly, best-effort — positions arrive every few seconds, and the
-    order's own progress (assigned, picked up, delivered) comes through Kafka.
+  - **Delivery details and rider offers** (`DeliveryStatusUpdated`, `DeliveryEtaUpdated`
+    on `delivery-events`): the same consumer updates the customer's delivery status and
+    ETAs and the rider's feed (`tracking:rider:{user_id}`, with a state hash for its
+    snapshot). Deliveries can go back (a declined offer), so these are compared by event
+    time per delivery instead of by status; a rider's state is cleared only by an event
+    about the delivery it holds, since two deliveries' events can arrive in either order.
+  - **Rider positions**: published by delivery-service directly, best-effort — they
+    arrive every few seconds, so losing one doesn't matter.
   - Kafka adds up to about a second (the outbox relay runs every second) to a status
     update, for the guarantee that it arrives.
 

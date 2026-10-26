@@ -26,7 +26,7 @@ another's.
 | `order-service` | Order creation, pricing, history, state machine; the order saga and refund workflows | `POST orders` (Idempotency-Key), `GET orders`, `GET orders/{id}`, `GET orders/admin`, `GET orders/restaurant/{id}`, `orders/{id}/restaurant-response`, `orders/{id}/cancel`, `orders/{id}/refund` | — |
 | `delivery-service` | Riders, vetting, location; deliveries, rider offers, reassignment, ETA | `riders`, `riders/me`, `riders/me/status`, `riders/me/location`, `riders/me/offer`, `riders/me/deliveries/{id}/accept\|decline\|drop-out\|picked-up\|delivered`, `deliveries/by-order/{id}`, `riders/admin`, `approve`, `suspend`, `verification-history` | — |
 | `payment-service` | Simulated card payments: authorize, capture, void, refund | `GET payments/by-order/{id}`; saga activities | — |
-| `tracking-service` | Live SSE feeds for customers and restaurants | `tracking/orders/{id}`, `tracking/restaurants/{id}` | — |
+| `tracking-service` | Live SSE feeds for customers, restaurants and riders | `tracking/orders/{id}`, `tracking/restaurants/{id}`, `tracking/riders/me` | — |
 | `notification-service` | Customer/restaurant/rider notifications: in-app, simulated email and SMS | `GET notifications` (mine) | `POST notifications/{id}/read`; Kafka consumer; `notification-worker` (Celery) sends (W3) |
 | `analytics-service` | The nine Part A metrics, from events | — | `analytics/summary`, `analytics/restaurants/{id}`, `analytics/peak-hours` (W3) |
 
@@ -93,8 +93,9 @@ the live SSE feed, and Kafka (from the outbox — what notifications and analyti
 3. **Claim and offer**: the candidate is claimed with one atomic
    `UPDATE riders SET status = 'busy' WHERE id = :id AND status = 'available' AND
    verification_status = 'approved'` — if another delivery got there first, the next
-   candidate is tried, so two deliveries can never get the same rider. The rider sees the
-   offer at `GET /v1/riders/me/offer` and has 60s to accept or decline.
+   candidate is tried, so two deliveries can never get the same rider. The offer is pushed
+   on the rider's live feed (`GET /v1/tracking/riders/me`); the app then reads it from
+   `GET /v1/riders/me/offer`, and the rider has 60s to accept or decline.
 4. **Reassignment**: a decline, an expired offer, or a drop-out after accepting (the rider
    says so, or sends no location ping for 3 min) releases the rider, increments
    `reassignment_count`, and offers the next-nearest rider. A rider is offered a given
@@ -109,8 +110,8 @@ the live SSE feed, and Kafka (from the outbox — what notifications and analyti
 6. **Pickup and delivery**: the rider marks the delivery picked up, then delivered. The
    endpoints only check ownership and state and signal the saga; the saga changes the
    status, so a rider's update can't race a cancellation. Each change writes a
-   `delivery_status_history` row and a `DeliveryStatusUpdated` outbox row, and is pushed
-   to the customer's live feed. `delivered` triggers payment capture and returns the
+   `delivery_status_history` row and a `DeliveryStatusUpdated` outbox row, which pushes
+   it to the customer's and the rider's live feeds (through Kafka). `delivered` triggers payment capture and returns the
    rider to `available`.
 7. **Tracking**: location pings continue during delivery and reach the customer within a
    second (see [Real-time tracking](#real-time-tracking-why-ingestion-and-fan-out-use-different-transports)).
@@ -138,7 +139,7 @@ Twelve event types (`libs/events/src/sfo_events/schemas.py`), one topic per aggr
 |---|---|---|
 | `order-events` | `OrderPlaced`, `OrderAwaitingRestaurant`, `OrderConfirmed`, `OrderRejected`, `OrderCancelled`, `RiderAssigned`, `OrderPickedUp`, `OrderDelivered` | order-service (creation; every saga transition) |
 | `payment-events` | `PaymentSuccessful`, `RefundProcessed` | payment-service activities |
-| `delivery-events` | `DeliveryStatusUpdated`, `RiderShiftChanged` | delivery-service (every delivery status; a rider going on or off shift) |
+| `delivery-events` | `DeliveryStatusUpdated`, `DeliveryEtaUpdated`, `RiderShiftChanged` | delivery-service (every delivery status, creation included; new ETAs; a rider going on or off shift) |
 
 Every event has the same envelope — `event_id` (UUIDv7, the dedup key), `event_type`,
 `aggregate_id` (the partition key), `occurred_at` (the outbox row's `created_at`),
@@ -177,8 +178,8 @@ transaction instead of reaching Kafka.
    after 7 days (hourly task).
 3. **Consumers** (`sfo_events.consumer.ConsumerLoop`): poll → deserialize → process →
    commit the offset. Two consumer groups read all three topics: `notification-service`
-   and `analytics-service`. A third, `tracking-service`, reads `order-events` to drive the
-   live feeds.
+   and `analytics-service`. A third, `tracking-service`, reads `order-events` and
+   `delivery-events` to drive the live feeds.
 
 Delivery is at-least-once (a crash after Kafka acknowledged but before the relay's
 commit re-publishes those rows), so consumers dedupe:
@@ -712,10 +713,18 @@ Customers and restaurants want push, so they get **Server-Sent Events** from a s
   too far behind, or its replica's Pub/Sub connection dropped (redis-py reconnects
   silently, so the hub listens for reconnects) — is disconnected so it reconnects for a
   fresh snapshot.
-- **Delivery details stay direct**: delivery status, ETAs and rider positions are
-  published by delivery-service itself, best-effort. Positions arrive every few seconds,
-  ETAs are computed without a status change (so there's no event for them), and the
-  order's own progress — assigned, picked up, delivered — already comes through Kafka.
+- **Delivery details through Kafka too; positions direct.** Delivery status and ETAs
+  (`DeliveryStatusUpdated`, and `DeliveryEtaUpdated` since ETAs are computed without a
+  status change) reach the customer's and rider's feeds through the same consumer. Rider
+  positions are published by delivery-service itself, best-effort: they arrive every few
+  seconds, so storing each one in Kafka would buy nothing.
+- **Riders get a push, then fetch.** The rider feed's messages (`offer`, `released`,
+  `delivery`) only say that something changed; the app reads the offer or delivery from
+  the existing REST endpoints. Offers are rare, so one extra request costs nothing, and
+  REST stays the single source of truth — the feed never has to carry or keep in sync
+  every offer field. Riders used to poll `GET /v1/riders/me/offer` every 2s, a load that
+  grows with the number of online riders rather than with orders; the app now checks
+  every 30s as a safety net and on each (re)connect.
 - **Ownership from Redis**: the snapshot state includes the order's `customer_id` and the
   restaurant's owner, so `tracking-service` authorizes a stream without calling another
   service; if Redis lost a key, it rebuilds it from an `/internal` endpoint once.

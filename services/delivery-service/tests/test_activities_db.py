@@ -82,7 +82,9 @@ async def test_offers_to_the_nearest_of_three_riders(env: Env) -> None:
     assert delivery.offer_expires_at == offer.expires_at
     assert (await _rider(env, "near")).status == "busy"
     assert not await _in_pool(env, "near")
-    assert env.published[-1][1]["status"] == "offered"
+    # The rider's live feed and notification-service learn of it from the event.
+    offered_event = (await outbox_payloads(env, "DeliveryStatusUpdated"))[-1]
+    assert (offered_event["to_status"], offered_event["rider_user_id"]) == ("offered", "user-near")
 
 
 async def test_riders_beyond_the_search_radius_are_not_offered(env: Env) -> None:
@@ -227,11 +229,19 @@ async def test_full_delivery_then_rider_is_free_again(env: Env) -> None:
         "picked_up",
         "delivered",
     ]
-    assert events == 4  # one DeliveryStatusUpdated per change after creation
+    assert events == 5  # one DeliveryStatusUpdated per change, creation included
     # Enriched with the recipients (week3-plan W3-D8).
     updates = await outbox_payloads(env, "DeliveryStatusUpdated")
-    assert [u["to_status"] for u in updates] == ["offered", "assigned", "picked_up", "delivered"]
-    assert {(u["rider_user_id"], u["customer_id"]) for u in updates} == {("user-near", CUSTOMER)}
+    assert [(u["from_status"], u["to_status"]) for u in updates] == [
+        (None, "pending_assignment"),
+        ("pending_assignment", "offered"),
+        ("offered", "assigned"),
+        ("assigned", "picked_up"),
+        ("picked_up", "delivered"),
+    ]
+    assert {(u["rider_user_id"], u["customer_id"]) for u in updates[1:]} == {
+        ("user-near", CUSTOMER)
+    }
 
 
 async def test_transition_is_idempotent_and_checked(env: Env) -> None:
@@ -263,7 +273,10 @@ async def test_eta_from_rider_position_and_food_ready_time(env: Env) -> None:
         estimate.pickup_eta,
         estimate.dropoff_eta,
     )
-    assert env.published[-1][1]["pickup_eta"] == estimate.pickup_eta.isoformat()
+    # The customer's live feed shows them from this event (no status change).
+    eta_event = (await outbox_payloads(env, "DeliveryEtaUpdated"))[-1]
+    assert (eta_event["status"], eta_event["rider_id"]) == ("assigned", "near")
+    assert datetime.fromisoformat(eta_event["pickup_eta"]) == estimate.pickup_eta
 
 
 async def test_eta_waits_for_the_food(env: Env) -> None:
@@ -288,6 +301,19 @@ async def test_eta_waits_for_the_food(env: Env) -> None:
 async def test_create_is_idempotent_per_order(env: Env) -> None:
     first = await new_delivery(env)
     assert await new_delivery(env) == first
+
+
+async def test_a_released_rider_is_named_in_the_event(env: Env) -> None:
+    """The event names who lost the offer, so their live feed can be told:
+    rider_user_id is already None by then."""
+    await add_rider(env, "near", at=km_north(0.5))
+    delivery_id, _ = await offered(env)
+    await activities.release_rider(
+        ReleaseRiderInput(delivery_id=delivery_id, outcome=RiderReleaseOutcome.DECLINED)
+    )
+    released = (await outbox_payloads(env, "DeliveryStatusUpdated"))[-1]
+    assert (released["to_status"], released["reason"]) == ("pending_assignment", "rider_declined")
+    assert (released["rider_user_id"], released["released_rider_user_id"]) == (None, "user-near")
 
 
 async def test_cancel_releases_the_rider(env: Env) -> None:
@@ -320,9 +346,11 @@ async def test_cancel_before_create_blocks_a_late_create(env: Env) -> None:
     assert result.status == "cancelled"
 
 
-async def test_delivery_updates_write_the_order_tracking_state(
+async def test_location_pings_write_the_order_tracking_state(
     env: Env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Only positions go to Redis from here; delivery status and ETAs reach
+    the state through their events (tracking-service)."""
     from app import tracking
 
     # The real publisher this time, against the test Redis.
@@ -330,15 +358,10 @@ async def test_delivery_updates_write_the_order_tracking_state(
     monkeypatch.setattr(activities, "SessionFactory", env.factory)
     monkeypatch.setattr(redis_client, "redis", env.redis)
     await add_rider(env, "near", at=km_north(0.5))
-    delivery_id, _ = await assigned(env)
-    await activities.compute_eta(DeliveryRef(delivery_id))
+    await assigned(env)
     await tracking.publish_location("o-1", "near", 24.818, 67.03)
 
     state = await env.redis.hgetall("tracking:order:o-1:state")
-    assert (state["delivery_status"], state["rider_id"], state["rider_lat"]) == (
-        "assigned",
-        "near",
-        "24.818",
-    )
-    assert state["pickup_eta"] and state["dropoff_eta"]
+    assert state["rider_lat"] == "24.818" and state["rider_location_at"]
+    assert "delivery_status" not in state
     assert 0 < await env.redis.ttl("tracking:order:o-1:state") <= 24 * 3600

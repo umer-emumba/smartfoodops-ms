@@ -31,8 +31,8 @@ a new session.
                     activities └────────┬────────┘ activities      ┌───────┴───────┐
                                         │ activities               │     Redis     │
                                 ┌───────▼───────┐                  └───────▲───────┘
-                                │payment-service│        order status: Kafka → tracking-service;
-                                └───────────────┘        ETA, location: delivery-service
+                                │payment-service│        statuses, ETAs, offers: Kafka → tracking;
+                                └───────────────┘        rider location: delivery-service
 
    The gateway also routes to payment-, notification- and analytics-service (not drawn).
    Each service has its own database and runs its own Temporal worker on its own task
@@ -111,9 +111,10 @@ Full state transitions, compensation matrix and consistency model:
 - **Delivery lifecycle**: rider registration, admin vetting, availability and location
   pings → nearest available rider offered (Redis GEO), 60s to accept → reassignment on
   decline, expiry or drop-out → pickup → delivery, with ETAs.
-- **Live tracking**: customers follow their order and restaurants get new orders over SSE
-  (`/v1/tracking/...`), served by `tracking-service`. Order status updates come from Kafka
-  (so none is lost), and Redis Pub/Sub delivers them to whichever replica holds the stream.
+- **Live tracking**: customers follow their order, restaurants get new orders and riders
+  get offers over SSE (`/v1/tracking/...`), served by `tracking-service`. Order and
+  delivery updates come from Kafka (so none is lost), and Redis Pub/Sub delivers them to
+  whichever replica holds the stream.
 - **Cancellation/refund**: cancel until pickup — the saga compensates for whatever had
   happened (release stock, void payment, free the rider). After delivery a system admin
   can refund all or part of an order.

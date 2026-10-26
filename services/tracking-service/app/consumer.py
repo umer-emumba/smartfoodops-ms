@@ -1,9 +1,10 @@
 """tracking-service's Kafka consumer: consumer group `tracking-service` on
-order-events. Each order event updates the live-feed state and publishes
-the change to the open streams (app/projection.py).
+order-events and delivery-events. Each order or delivery event updates the
+live-feed state and publishes the change to the open streams — customers',
+restaurants' and riders' (app/projection.py).
 
-No processed-events table: applying an event is idempotent by
-construction (never backwards, app/projection.py).
+No processed-events table: applying an event is idempotent by construction
+(stale events change nothing, app/projection.py).
 
 Runs inside the API process in embedded mode (started from app.main's
 lifespan); `python -m app.consumer` in standalone mode."""
@@ -27,7 +28,7 @@ GROUP = settings.service_name
 
 
 async def process(event: DomainEvent) -> None:
-    await projection.apply_order_event(redis_client.redis, event)
+    await projection.apply_event(redis_client.redis, event)
 
 
 def build_consumer_loop() -> tuple[ConsumerLoop, Callable[[], None]]:
@@ -36,7 +37,7 @@ def build_consumer_loop() -> tuple[ConsumerLoop, Callable[[], None]]:
     # skipped — events older than their state's lifetime are passed over
     # cheaply (app/projection.py).
     consumer = make_consumer(settings.kafka_bootstrap_servers, GROUP)
-    consumer.subscribe([Topic.ORDER.value])
+    consumer.subscribe([Topic.ORDER.value, Topic.DELIVERY.value])
     dlq_producer = make_producer(settings.kafka_bootstrap_servers)
     loop = ConsumerLoop(
         consumer=consumer,

@@ -195,3 +195,142 @@ async def test_redis_down_is_an_outage_to_wait_out_not_a_poison_message() -> Non
     # So the consumer loop rewinds and retries rather than dead-lettering it.
     assert is_transient(exc_info.value)
     await unreachable.aclose()
+
+
+# ---------- Deliveries and the rider feed ----------
+
+DELIVERY, RIDER_USER = "d-1", "u-rider"
+RIDER_STATE, RIDER_CHANNEL = f"tracking:rider:{RIDER_USER}:state", f"tracking:rider:{RIDER_USER}"
+
+
+def _delivery_event(
+    to_status: str,
+    *,
+    seconds_ago: float,
+    delivery_id: str = DELIVERY,
+    rider: str | None = None,
+    released: str | None = None,
+    reason: str | None = None,
+) -> DomainEvent:
+    return DomainEvent(
+        event_id=f"e-{delivery_id}-{to_status}-{seconds_ago}",
+        event_type="DeliveryStatusUpdated",
+        aggregate_id=delivery_id,
+        occurred_at=datetime.now(UTC) - timedelta(seconds=seconds_ago),
+        payload={
+            "delivery_id": delivery_id,
+            "order_id": ORDER,
+            "customer_id": "u-customer",
+            "rider_id": "r-1" if rider else None,
+            "rider_user_id": rider,
+            "from_status": None,
+            "to_status": to_status,
+            "reason": reason,
+            "released_rider_user_id": released,
+        },
+    )
+
+
+@pytest_asyncio.fixture
+async def rider_feed(redis: Redis) -> AsyncIterator[PubSub]:
+    pubsub = redis.pubsub(ignore_subscribe_messages=True)
+    await pubsub.subscribe(ORDER_CHANNEL, RIDER_CHANNEL)
+    yield pubsub
+    await pubsub.aclose()
+
+
+async def test_offer_reaches_the_rider_and_the_customer(redis: Redis, rider_feed: PubSub) -> None:
+    assert await projection.apply_event(
+        redis, _delivery_event("pending_assignment", seconds_ago=30)
+    )
+    assert await projection.apply_event(
+        redis, _delivery_event("offered", seconds_ago=20, rider=RIDER_USER)
+    )
+    rider_state = await redis.hgetall(RIDER_STATE)
+    assert (rider_state["delivery_id"], rider_state["order_id"], rider_state["status"]) == (
+        DELIVERY,
+        ORDER,
+        "offered",
+    )
+    assert (await redis.hgetall(STATE))["delivery_status"] == "offered"
+    messages = [(c, m["type"], m.get("status")) for c, m in await _drain(rider_feed)]
+    assert messages == [
+        (ORDER_CHANNEL, "delivery", "pending_assignment"),
+        (ORDER_CHANNEL, "delivery", "offered"),
+        (RIDER_CHANNEL, "offer", None),
+    ]
+
+
+async def test_declined_offer_is_released_and_cleared(redis: Redis, rider_feed: PubSub) -> None:
+    await projection.apply_event(
+        redis, _delivery_event("offered", seconds_ago=20, rider=RIDER_USER)
+    )
+    declined = _delivery_event(
+        "pending_assignment", seconds_ago=10, released=RIDER_USER, reason="rider_declined"
+    )
+    assert await projection.apply_event(redis, declined)
+    assert await redis.exists(RIDER_STATE) == 0
+    rider_messages = [m for c, m in await _drain(rider_feed) if c == RIDER_CHANNEL]
+    assert [(m["type"], m.get("reason")) for m in rider_messages] == [
+        ("offer", None),
+        ("released", "rider_declined"),
+    ]
+
+
+async def test_late_release_of_an_old_offer_keeps_the_new_one(redis: Redis) -> None:
+    """Two deliveries' events sit on different partitions and can arrive in
+    either order: the old offer's release must not wipe the newer offer."""
+    await projection.apply_event(
+        redis, _delivery_event("offered", seconds_ago=5, delivery_id="d-2", rider=RIDER_USER)
+    )
+    old_release = _delivery_event(
+        "pending_assignment", seconds_ago=30, released=RIDER_USER, reason="rider_expired"
+    )
+    await projection.apply_event(redis, old_release)
+    assert (await redis.hgetall(RIDER_STATE))["delivery_id"] == "d-2"
+
+
+async def test_redelivered_delivery_event_changes_and_publishes_nothing(
+    redis: Redis, rider_feed: PubSub
+) -> None:
+    offered = _delivery_event("offered", seconds_ago=20, rider=RIDER_USER)
+    assert await projection.apply_event(redis, offered)
+    await _drain(rider_feed)
+    assert not await projection.apply_event(redis, offered)
+    assert await _drain(rider_feed) == []
+
+
+async def test_eta_update_reaches_the_customer_only(redis: Redis, rider_feed: PubSub) -> None:
+    pickup = datetime.now(UTC) + timedelta(minutes=8)
+    eta = DomainEvent(
+        event_id="e-eta",
+        event_type="DeliveryEtaUpdated",
+        aggregate_id=DELIVERY,
+        occurred_at=datetime.now(UTC) - timedelta(seconds=1),
+        payload={
+            "delivery_id": DELIVERY,
+            "order_id": ORDER,
+            "customer_id": "u-customer",
+            "rider_id": "r-1",
+            "status": "assigned",
+            "pickup_eta": pickup.isoformat(),
+            "dropoff_eta": (pickup + timedelta(minutes=15)).isoformat(),
+        },
+    )
+    assert await projection.apply_event(redis, eta)
+    assert (await redis.hgetall(STATE))["pickup_eta"] == pickup.isoformat()
+    messages = await _drain(rider_feed)
+    assert [(c, m["type"], m["pickup_eta"]) for c, m in messages] == [
+        (ORDER_CHANNEL, "delivery", pickup.isoformat())
+    ]
+
+
+async def test_delivered_clears_the_riders_state(redis: Redis) -> None:
+    await projection.apply_event(
+        redis, _delivery_event("picked_up", seconds_ago=20, rider=RIDER_USER)
+    )
+    assert (await redis.hgetall(RIDER_STATE))["status"] == "picked_up"
+    await projection.apply_event(
+        redis, _delivery_event("delivered", seconds_ago=10, rider=RIDER_USER)
+    )
+    assert await redis.exists(RIDER_STATE) == 0

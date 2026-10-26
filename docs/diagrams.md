@@ -29,7 +29,7 @@ graph TD
     DS -->|"delivery-activities worker"| Temporal
 
     OS -->|"state hash at creation (and rebuild)"| Redis
-    DS -->|"GEO rider pool; PUBLISH delivery, ETA, location"| Redis
+    DS -->|"GEO rider pool; PUBLISH location"| Redis
     TS -->|"order event → state + PUBLISH (one Lua script)"| Redis
     Redis -->|"Pub/Sub + state keys"| TS
     TS -.->|"fallback when a state key is missing"| OS
@@ -63,10 +63,10 @@ missing), or, for the `api-gateway` replica line, production-only (Kubernetes
 `Deployment`/`HPA` + `Service` — never built locally, see
 [technical-documentation.md](./technical-documentation.md#gateway-single-entry-point-not-a-spof)
 for why). Each service's Temporal worker runs inside the service process in development
-and as a separate process (`python -m app.worker`) in production. Order status
-updates reach live tracking through Kafka (tracking-service's consumer group), so none is
-lost; Redis Pub/Sub then carries each one to the tracking replica that holds the viewer's
-stream. Delivery details and rider positions go to Redis directly. Every database is a separate Postgres container — database-per-service,
+and as a separate process (`python -m app.worker`) in production. Order and
+delivery updates reach live tracking through Kafka (tracking-service's consumer group), so
+none is lost; Redis Pub/Sub then carries each one to the tracking replica that holds the
+viewer's stream. Rider positions go to Redis directly. Every database is a separate Postgres container — database-per-service,
 no shared instance. The relay workers (`order-worker`, `payment-worker`,
 `delivery-worker`) also use RabbitMQ — for their beat schedule — not drawn. Every process
 also sends traces to Jaeger and serves metrics to Prometheus; see
@@ -101,17 +101,18 @@ flowchart LR
 ```
 
 **B. Telling screens** — every change is announced and pushed to whoever is watching.
-Order status goes through Kafka, so it can't be lost; delivery details and rider
-positions go to Redis directly (frequent, and fine to drop one):
+Order and delivery changes go through Kafka, so they can't be lost; rider positions go
+to Redis directly (frequent, and fine to drop one):
 
 ```mermaid
 flowchart LR
     OS[order-service] -->|"outbox → Kafka<br/>(order-events)"| TC["tracking-service<br/>consumer"]
+    DS[delivery-service] -->|"outbox → Kafka<br/>(delivery-events)"| TC
     TC -->|"save latest state + PUBLISH"| RD[("Redis<br/>Pub/Sub")]
-    DS[delivery-service] -->|"PUBLISH delivery, ETA, location"| RD
+    DS -->|"PUBLISH location"| RD
     RD -->|SUBSCRIBE| TS["tracking-service<br/>(replica holding the stream)"]
     TS -->|SSE| GW[api-gateway]
-    GW -->|SSE| S["Customer app<br/>Restaurant dashboard"]
+    GW -->|SSE| S["Customer app<br/>Restaurant dashboard<br/>Rider app"]
 ```
 
 Guaranteed notifications and analytics are a third path — see step 7.
@@ -220,36 +221,39 @@ sequenceDiagram
     K-->>C: status: confirmed (tracking-service → Redis Pub/Sub → SSE)
 ```
 
-### Step 5 — A rider is offered the order (Temporal task queue; the rider asks)
+### Step 5 — A rider is offered the order (Temporal task queue → Kafka → SSE)
 
 The saga asks delivery-service to create the delivery and offer it to the nearest free
 rider (found with Redis GEO, claimed with one atomic database update). The offer
-expires in 60 seconds.
+expires in 60 seconds. Its `DeliveryStatusUpdated` event reaches tracking-service
+through Kafka, which pushes `offer` on the rider's live feed; the app then reads the
+offer over REST. (The app also checks every 30s, in case its feed is down.)
 
 ```mermaid
 sequenceDiagram
     participant S as Saga
     participant DS as delivery-service
+    participant K as Kafka
+    participant TS as tracking-service
     actor D as Rider app
 
+    D->>TS: GET /v1/tracking/riders/me (SSE, opened at login)
     S->>DS: create_delivery (delivery-activities queue)
     S->>DS: offer_to_nearest_rider
     DS-->>S: offered to rider X (expires in 60s)
-    loop every few seconds
-        D->>DS: GET /v1/riders/me/offer (REST)
-    end
+    DS->>K: DeliveryStatusUpdated → offered (outbox → relay)
+    K->>TS: consumer: rider state + PUBLISH (Redis)
+    TS-->>D: event: offer
+    D->>DS: GET /v1/riders/me/offer (REST)
     DS-->>D: the offer
 ```
-
-**Gap:** nothing is pushed to the rider — the rider app has to keep asking. A rider
-live feed (the same SSE pattern as the restaurant's) would fix this.
 
 ### Step 6 — The rider accepts and delivers; the customer watches live (REST → signal → Pub/Sub → SSE)
 
 Every rider action follows the same pattern: REST to delivery-service, which signals
-the saga; the saga makes the change; the change is pushed to the customer. The order's
-status (assigned, picked up, delivered) arrives through Kafka as in steps 3–4; delivery
-details, ETAs and location pings are published by delivery-service directly.
+the saga; the saga makes the change; the change is pushed to the customer (and the
+rider's own feed). Order status, delivery status and ETAs arrive through Kafka as in
+steps 3–5; location pings are published by delivery-service directly.
 
 ```mermaid
 sequenceDiagram
@@ -264,8 +268,9 @@ sequenceDiagram
     D->>DS: POST …/accept (REST)
     DS->>S: signal rider_response
     S->>DS: delivery → assigned, compute ETA
-    DS->>RD: PUBLISH delivery: assigned + ETA
-    RD-->>C: SSE: assigned, ETA
+    DS->>K: DeliveryStatusUpdated, DeliveryEtaUpdated (outbox)
+    K-->>C: SSE: assigned, ETA (tracking-service → Redis)
+    K-->>D: SSE: delivery assigned (rider feed)
     D->>DS: PATCH /v1/riders/me/location (REST, repeated)
     DS->>RD: PUBLISH location
     RD-->>C: SSE: rider position
@@ -281,7 +286,7 @@ sequenceDiagram
 Messages that must arrive use the outbox: every change above writes an event row
 (`OrderPlaced`, `OrderAwaitingRestaurant`, `RiderAssigned`, …) in the same database
 transaction. A relay worker publishes it to Kafka within about a second; tracking-service
-updates the live screens' order status, notification-service tells the customer,
+updates the live screens (order and delivery status, ETAs, rider offers), notification-service tells the customer,
 restaurant and rider, and analytics-service updates its metrics. The full path, with failure handling, is in
 [Event flow](#event-flow-outbox--kafka--consumers--celery).
 
@@ -303,7 +308,7 @@ flowchart LR
 | 2 | Saga reserves stock, prices, holds the money | Temporal task queues |
 | 3 | Restaurant sees the new order | Outbox → Kafka → Redis Pub/Sub → SSE |
 | 4 | Restaurant accepts | REST → Temporal signal |
-| 5 | Rider gets the offer | Temporal task queue; rider polls over REST |
+| 5 | Rider gets the offer | Temporal task queue; outbox → Kafka → rider's SSE feed, then REST |
 | 6 | Rider accepts, moves, delivers; customer watches | REST → signal; status via Kafka, location direct; Redis Pub/Sub → SSE |
 | 7 | Live order status; notifications (in-app, email, SMS); analytics | Outbox → Kafka (→ Celery for sends) |
 
@@ -449,7 +454,8 @@ sequenceDiagram
     W->>OS: transition → confirmed
     W->>DS: create_delivery (ready_at = now + prep time)
     W->>DS: offer_to_nearest_rider (GEOSEARCH + atomic claim)
-    R->>GW: GET /v1/riders/me/offer, POST …/accept
+    DS-)TS: DeliveryStatusUpdated via Kafka → rider feed `offer`
+    R->>GW: GET /v1/riders/me/offer (after the push), POST …/accept
     GW->>DS: forward → signal rider_response
     W->>DS: transition_delivery → assigned, compute_eta
     W->>OS: transition → assigned (RiderAssigned)

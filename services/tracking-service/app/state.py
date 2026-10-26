@@ -8,6 +8,9 @@
 - `tracking:restaurant:{id}:pending` — set of order IDs awaiting the
   restaurant's decision.
 - `restaurant:{id}:owner` — the restaurant admin's user ID.
+- `tracking:rider:{user_id}:state` — hash: the delivery the rider currently
+  has (app/projection.py); no fallback — a rider's app fetches the details
+  over REST anyway.
 
 If a key is missing (Redis restarted, or expired), one call to the owning
 service rebuilds it: order-service and restaurant-service re-populate the
@@ -34,6 +37,16 @@ def order_channel(order_id: str) -> str:
 
 def restaurant_channel(restaurant_id: str) -> str:
     return f"tracking:restaurant:{restaurant_id}"
+
+
+def rider_channel(rider_user_id: str) -> str:
+    return f"tracking:rider:{rider_user_id}"
+
+
+def rider_state_key(rider_user_id: str) -> str:
+    """The delivery the rider currently has (offered or held): their feed's
+    snapshot. Written by app/projection.py; gone once they no longer have one."""
+    return f"tracking:rider:{rider_user_id}:state"
 
 
 def order_state_key(order_id: str) -> str:
@@ -97,6 +110,12 @@ async def pending_orders(restaurant_id: str) -> list[dict[str, Any]]:
         for order_id, state in zip(order_ids, states, strict=True)
         if state
     ]
+
+
+async def rider_delivery(rider_user_id: str) -> dict[str, Any] | None:
+    """The delivery the rider currently has, or None."""
+    state = cast(dict[str, Any], await redis_client.redis.hgetall(rider_state_key(rider_user_id)))
+    return state or None
 
 
 async def close() -> None:

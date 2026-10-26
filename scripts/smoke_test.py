@@ -526,18 +526,37 @@ class _Lifecycle:
         finally:
             feed.close()
         self.wait_status(oid, "awaiting_restaurant_acceptance")
-        self.respond(oid, "accept")
-        offer = self.offer(self.rider1)
-        check(
-            "nearest rider offered first",
-            abs(offer["distance_to_pickup_km"] - 0.3) < 0.05,
-            offer["distance_to_pickup_km"],
-        )
-        self.rider_act(self.rider1, offer["delivery_id"], "accept")
-        self.wait_status(oid, "assigned")
-        d = self.delivery(oid)
-        check("pickup and dropoff ETAs set", bool(d["pickup_eta"] and d["dropoff_eta"]), d)
-        self.deliver(self.rider1, oid, offer["delivery_id"])
+        rider_feed = _Stream(self.base_url, "/v1/tracking/riders/me", self.rider1)
+        try:
+            self.wait(lambda: rider_feed.of("snapshot"), "rider feed snapshot")
+            self.respond(oid, "accept")
+            offer = self.offer(self.rider1)
+            check(
+                "nearest rider offered first",
+                abs(offer["distance_to_pickup_km"] - 0.3) < 0.05,
+                offer["distance_to_pickup_km"],
+            )
+            pushed = self.wait(
+                lambda: [o for o in rider_feed.of("offer") if o["order_id"] == oid], "offer pushed"
+            )
+            check("rider's feed pushed the offer", pushed[0]["delivery_id"] == offer["delivery_id"])
+            self.rider_act(self.rider1, offer["delivery_id"], "accept")
+            self.wait_status(oid, "assigned")
+            d = self.delivery(oid)
+            check("pickup and dropoff ETAs set", bool(d["pickup_eta"] and d["dropoff_eta"]), d)
+            self.deliver(self.rider1, oid, offer["delivery_id"])
+
+            def held() -> list[str]:
+                return [e["status"] for e in rider_feed.of("delivery") if e["order_id"] == oid]
+
+            self.wait(lambda: "delivered" in held(), "rider feed: delivered")
+            check(
+                "rider's feed followed the delivery to delivered",
+                held() == ["assigned", "picked_up", "delivered"],
+                held(),
+            )
+        finally:
+            rider_feed.close()
 
         check("customer's stream closed itself on delivered", track.ended(15))
         seen = [s["status"] for s in track.of("snapshot") + track.of("status")]
@@ -545,6 +564,8 @@ class _Lifecycle:
         expected = ["awaiting_restaurant_acceptance", "confirmed", "assigned", "picked_up"]
         check("customer saw every status in order", seen == [*expected, "delivered"], seen)
         check("customer got rider locations", bool(track.of("location")), len(track.of("location")))
+        etas = [e for e in track.of("delivery") if e.get("pickup_eta")]
+        check("customer got the delivery ETAs live", bool(etas), len(track.of("delivery")))
         check("payment captured", self.payment(oid)["status"] == "captured", self.payment(oid))
         check("stock decremented once", self.stock() == stock - 1, (stock, self.stock()))
         if self.deep:
@@ -597,9 +618,19 @@ class _Lifecycle:
         )
 
     def rider_declines(self) -> None:
-        oid = self.accepted_order()
-        first = self.offer(self.rider1)
-        self.rider_act(self.rider1, first["delivery_id"], "decline")
+        rider_feed = _Stream(self.base_url, "/v1/tracking/riders/me", self.rider1)
+        try:
+            self.wait(lambda: rider_feed.of("snapshot"), "rider feed snapshot")
+            oid = self.accepted_order()
+            first = self.offer(self.rider1)
+            self.rider_act(self.rider1, first["delivery_id"], "decline")
+            released = self.wait(
+                lambda: [e for e in rider_feed.of("released") if e["order_id"] == oid],
+                "released pushed",
+            )
+            check("declining rider's feed was told", released[0]["reason"] == "rider_declined")
+        finally:
+            rider_feed.close()
         second = self.offer(self.rider2)
         check("same delivery offered to rider 2", second["delivery_id"] == first["delivery_id"])
         self.rider_act(self.rider2, second["delivery_id"], "accept")

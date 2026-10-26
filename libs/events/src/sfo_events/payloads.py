@@ -81,7 +81,13 @@ class RefundProcessedPayload(EventPayload):
 class DeliveryStatusUpdatedPayload(EventPayload):
     """`rider_id`/`rider_user_id` are the rider holding the delivery after the
     change (None once released). `customer_id` is None only on a cancelled
-    placeholder delivery."""
+    placeholder delivery. `from_status` is None when the delivery is created.
+
+    `released_rider_user_id`: the rider who just lost it — their offer was
+    declined or expired, or they dropped out — so their app can be told
+    (rider_user_id is already None by then). `pickup_eta`/`dropoff_eta` are
+    the delivery's current estimates (None until computed, and after a
+    release)."""
 
     delivery_id: str
     order_id: str
@@ -91,6 +97,21 @@ class DeliveryStatusUpdatedPayload(EventPayload):
     from_status: str | None
     to_status: str
     reason: str | None = None
+    released_rider_user_id: str | None = None
+    pickup_eta: datetime | None = None
+    dropoff_eta: datetime | None = None
+
+
+class DeliveryEtaUpdatedPayload(EventPayload):
+    """New estimates for the assigned rider, without a status change."""
+
+    delivery_id: str
+    order_id: str
+    customer_id: str | None
+    rider_id: str
+    status: str
+    pickup_eta: datetime
+    dropoff_eta: datetime
 
 
 class RiderShiftChangedPayload(EventPayload):
@@ -117,6 +138,7 @@ PAYLOAD_MODELS: dict[EventType, type[EventPayload]] = {
     EventType.PAYMENT_SUCCESSFUL: PaymentSuccessfulPayload,
     EventType.REFUND_PROCESSED: RefundProcessedPayload,
     EventType.DELIVERY_STATUS_UPDATED: DeliveryStatusUpdatedPayload,
+    EventType.DELIVERY_ETA_UPDATED: DeliveryEtaUpdatedPayload,
     EventType.RIDER_SHIFT_CHANGED: RiderShiftChangedPayload,
 }
 
