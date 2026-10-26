@@ -12,10 +12,11 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
+from app.state_machine import can_transition
 from app.workflows.order_saga import OrderSagaWorkflow
 from app.workflows.refund import OrderRefundWorkflow
 from sfo_common.temporal import WorkerSpec, run_workers
-from sfo_contracts import OrderSagaQuery, TaskQueue
+from sfo_contracts import BusinessErrorType, OrderSagaQuery, TaskQueue, business_error
 from sfo_contracts.activities import (
     Actor,
     ApplyPricingInput,
@@ -64,11 +65,13 @@ class FakeServices:
     (then it succeeds). `riders` is who each offer goes to, in order (None =
     nobody free; an empty list = nobody free from then on). Setting `pool`
     instead models riders who stay free: each offer goes to the first one not
-    excluded."""
+    excluded. The order's status follows the real state machine, so the saga
+    can't ask for a transition the real activity would refuse."""
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, Any]] = []
         self.fail: dict[str, list[Exception]] = {}
+        self.order_status = "created"
         self.reserve_status = "reserved"
         self.payment_status = "authorized"
         self.delivery_status = "pending_assignment"
@@ -89,6 +92,18 @@ class FakeServices:
         pending = self.fail.get(name)
         if pending:
             raise pending.pop(0)
+
+    def _transition_order(self, data: TransitionOrderInput) -> TransitionOrderResult:
+        # Same checks as the real transition_order activity.
+        if self.order_status == data.to_status:
+            return TransitionOrderResult(status=data.to_status, changed=False)
+        if not can_transition(self.order_status, data.to_status):
+            raise business_error(
+                BusinessErrorType.INVALID_ORDER_TRANSITION,
+                f"Order can't go from {self.order_status} to {data.to_status}",
+            )
+        self.order_status = data.to_status
+        return TransitionOrderResult(status=data.to_status, changed=True)
 
     def _offer(self, data: OfferRiderInput) -> RiderOffer | None:
         if self.pool is not None:
@@ -141,10 +156,7 @@ class FakeServices:
                 ),
                 ApplyPricingInput,
             ),
-            Od.TRANSITION_ORDER: (
-                lambda d: TransitionOrderResult(status=d.to_status, changed=True),
-                TransitionOrderInput,
-            ),
+            Od.TRANSITION_ORDER: (self._transition_order, TransitionOrderInput),
             Od.RECORD_REFUND: (lambda _: None, RecordRefundInput),
             D.CREATE_DELIVERY: (
                 lambda _: CreateDeliveryResult(

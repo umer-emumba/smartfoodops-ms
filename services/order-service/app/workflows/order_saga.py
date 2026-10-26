@@ -11,8 +11,9 @@
 Until pickup, a failure, rejection, timeout, cancellation or "no rider"
 undoes the steps already taken in reverse order (cancel delivery — which
 releases the rider —, void payment, release promotion, release reservation)
-and the order ends `rejected` or `cancelled` with a `status_reason`. A rider
-dropping out after accepting is replaced (D12); the order stays `assigned`.
+and the order ends `rejected` (before confirmation) or `cancelled` with a
+`status_reason`. A rider dropping out after accepting is replaced (D12); the
+order stays `assigned`.
 
 After pickup nothing is undone — the food is on its way. Cancel and
 drop-out are ignored from then on (the endpoints already refuse them), and
@@ -139,6 +140,8 @@ class OrderSagaWorkflow:
     def __init__(self) -> None:
         self._step = "starting"
         self._order_id = ""
+        # Set once the order may be `confirmed`: it can't be rejected from then on.
+        self._confirmed = False
         self._restaurant_response: RestaurantResponse | None = None
         self._cancel: CancelRequest | None = None
         # (activity, task queue) — every compensation takes OrderRef.
@@ -297,7 +300,11 @@ class OrderSagaWorkflow:
         except _Failed as failed:
             return await self._undo_and_finish(failed.status, failed.reason, failed.actor)
         except ActivityError as error:
-            return await self._undo_and_finish(OrderStatus.REJECTED, failure_reason(error), SYSTEM)
+            # Retries exhausted, or an unexpected business error: rejected
+            # before confirmation, cancelled after (the only way out of
+            # `confirmed` / `assigned` besides pickup).
+            status = OrderStatus.CANCELLED if self._confirmed else OrderStatus.REJECTED
+            return await self._undo_and_finish(status, failure_reason(error), SYSTEM)
         return await self._deliver_and_settle()
 
     async def _place_order(self, data: OrderSagaInput) -> int:
@@ -404,6 +411,9 @@ class OrderSagaWorkflow:
             raise _Failed(reason, actor=response.actor)
 
         # 7. Confirmed. The customer is notified.
+        # Flagged before the transition: it can commit and still report
+        # failure, and `cancelled` is valid from either status.
+        self._confirmed = True
         await self._transition(OrderStatus.CONFIRMED, actor=response.actor)
         self._step = OrderStatus.CONFIRMED
         return reservation.prep_time_minutes

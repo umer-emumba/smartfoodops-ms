@@ -280,6 +280,21 @@ async def test_rider_found_after_a_wait(env: WorkflowEnvironment) -> None:
     assert fakes.names().count(DeliveryActivity.OFFER_TO_NEAREST_RIDER) == 3
 
 
+# ---------- Failures after confirmation ----------
+
+
+async def test_retries_exhausted_after_confirmation_cancels(env: WorkflowEnvironment) -> None:
+    # A confirmed order can't become `rejected`: it ends `cancelled`.
+    fakes = FakeServices()
+    fakes.fail[DeliveryActivity.CREATE_DELIVERY] = [ConnectionError("delivery-db down")] * 5
+    async with running(env, fakes):
+        handle = await confirmed(env)
+        assert await handle.result() == "cancelled"
+    assert fakes.names()[-5:] == CANCEL_ALL
+    cancelled = final_transition(fakes)
+    assert (cancelled.to_status, cancelled.reason) == ("cancelled", "system_error")
+
+
 # ---------- Cancellation after confirmation ----------
 
 
