@@ -88,8 +88,9 @@ the live SSE feed, and Kafka (from the outbox — what notifications and analyti
    idempotent on `deliveries.order_id` (unique). Pickup (the restaurant) and dropoff are
    snapshotted; `ready_at` = now + the restaurant's `avg_prep_time_minutes`.
 2. **Find the nearest rider**: `GEOSEARCH` on the Redis GEO set `riders:available`
-   (riders who are approved, on shift, and pinged recently), within 5 km, nearest first,
-   skipping riders already tried for this delivery.
+   (riders who are approved, on shift, and pinged recently), within the search radius
+   (5 km, widening — step 4), nearest first, skipping riders who turned this delivery
+   down in the last 2 min.
 3. **Claim and offer**: the candidate is claimed with one atomic
    `UPDATE riders SET status = 'busy' WHERE id = :id AND status = 'available' AND
    verification_status = 'approved'` — if another delivery got there first, the next
@@ -98,9 +99,11 @@ the live SSE feed, and Kafka (from the outbox — what notifications and analyti
    `GET /v1/riders/me/offer`, and the rider has 60s to accept or decline.
 4. **Reassignment**: a decline, an expired offer, or a drop-out after accepting (the rider
    says so, or sends no location ping for 3 min) releases the rider, increments
-   `reassignment_count`, and offers the next-nearest rider. A rider is offered a given
-   order only once. While nobody is free the saga looks again every 30s; after 5 offers
-   or 10 min it gives up: the order is `cancelled` (`no_rider_available`) and the payment
+   `reassignment_count`, and offers the next-nearest rider. A rider who turned the order
+   down is skipped for 2 min, then asked again — with only a few riders nearby, someone
+   who declined may take it later. While nobody is free the saga looks again every 30s,
+   each time farther out (5 → 8 → 12 km around the restaurant, then staying at 12). After
+   10 min it gives up: the order is `cancelled` (`no_rider_available`) and the payment
    voided. A dropped rider is set `offline`. After pickup a drop-out is not reassigned —
    the food is with the rider, so it's a support case.
 5. **ETA**: pickup ETA = the later of the rider reaching the restaurant and the food being

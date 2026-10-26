@@ -95,6 +95,15 @@ async def test_riders_beyond_the_search_radius_are_not_offered(env: Env) -> None
     assert (await _rider(env, "too-far")).status == "available"
 
 
+async def test_the_sagas_wider_radius_reaches_farther_riders(env: Env) -> None:
+    await add_rider(env, "farther", at=km_north(6))
+    delivery_id = await new_delivery(env)
+    offer = await activities.offer_to_nearest_rider(
+        OfferRiderInput(delivery_id=delivery_id, radius_km=8)
+    )
+    assert offer is not None and offer.rider_id == "farther"
+
+
 async def test_excluded_riders_are_skipped(env: Env) -> None:
     await add_rider(env, "near", at=km_north(0.5))
     await add_rider(env, "mid", at=km_north(2))

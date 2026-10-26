@@ -238,6 +238,8 @@ class OfferRiderInput:
     exclude_rider_ids: list[str] = field(default_factory=list)
     # The saga's offer timer, so the offer's stored expiry matches it.
     offer_timeout_seconds: int | None = None
+    # The saga's current search radius; None = delivery-service's default.
+    radius_km: float | None = None
 
 
 @dataclass(frozen=True)

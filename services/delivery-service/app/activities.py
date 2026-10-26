@@ -216,7 +216,7 @@ async def create_delivery(data: CreateDeliveryInput) -> CreateDeliveryResult:
 @activity.defn(name=DeliveryActivity.OFFER_TO_NEAREST_RIDER)
 async def offer_to_nearest_rider(data: OfferRiderInput) -> RiderOffer | None:
     """Offers the delivery to the nearest available, approved rider within
-    the search radius (excluding riders who already had it), holding that
+    the saga's search radius (excluding riders who had it recently), holding that
     rider (`busy`) until they answer or the offer expires. None if nobody is
     free. Re-running while the offer is open returns the same offer."""
     async with SessionFactory() as session:
@@ -232,7 +232,9 @@ async def offer_to_nearest_rider(data: OfferRiderInput) -> RiderOffer | None:
         assert delivery.pickup_lat is not None and delivery.pickup_lng is not None
 
         candidates = await rider_locations.nearest_available(
-            delivery.pickup_lat, delivery.pickup_lng, settings.rider_search_radius_km
+            delivery.pickup_lat,
+            delivery.pickup_lng,
+            data.radius_km or settings.rider_search_radius_km,
         )
         excluded = set(data.exclude_rider_ids)
         claimed: tuple[str, float] | None = None

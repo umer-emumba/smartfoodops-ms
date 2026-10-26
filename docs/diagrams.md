@@ -488,7 +488,7 @@ sequenceDiagram
     actor R2 as Rider 2
 
     W->>DS: offer_to_nearest_rider(exclude = [])
-    DS->>Redis: GEOSEARCH riders:available, 5 km, nearest first
+    DS->>Redis: GEOSEARCH riders:available, 5 km (8, 12 on later looks), nearest first
     DS->>DS: UPDATE riders SET status='busy' WHERE id=R1 AND status='available'
     DS-->>W: offer to R1 (expires in 60s)
     alt R1 declines, or 60s pass
@@ -506,7 +506,7 @@ sequenceDiagram
         W->>DS: release_rider(dropped) → R1 offline, reassignment_count + 1
         W->>DS: offer_to_nearest_rider(exclude = [R1]) → R2 …
     end
-    Note over W,DS: Nobody free → look again every 30s. After 5 offers or 10 min:<br/>compensate → order `cancelled` (no_rider_available)
+    Note over W,DS: Riders who turned it down are asked again after 2 min.<br/>Nobody free → look again every 30s, farther out (5 → 8 → 12 km).<br/>After 10 min: compensate → order `cancelled` (no_rider_available)
 ```
 
 ## Cancellation and compensation

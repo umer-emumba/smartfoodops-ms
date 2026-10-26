@@ -58,9 +58,10 @@ def saga_input(order: Order) -> OrderSagaInput:
         restaurant_accept_timeout_seconds=settings.restaurant_accept_timeout_seconds,
         promo_code=order.promo_code,
         rider_offer_timeout_seconds=settings.rider_offer_timeout_seconds,
-        max_rider_offers=settings.max_rider_offers,
         rider_search_timeout_seconds=settings.rider_search_timeout_seconds,
         rider_search_retry_seconds=settings.rider_search_retry_seconds,
+        rider_reoffer_after_seconds=settings.rider_reoffer_after_seconds,
+        rider_search_radii_km=list(settings.rider_search_radii_km),
     )
 
 

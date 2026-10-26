@@ -62,7 +62,9 @@ class FakeServices:
     """Stand-ins for every service's activities. Records each call;
     `fail[name]` is a list of exceptions raised by that activity's next calls
     (then it succeeds). `riders` is who each offer goes to, in order (None =
-    nobody free; an empty list = nobody free from then on)."""
+    nobody free; an empty list = nobody free from then on). Setting `pool`
+    instead models riders who stay free: each offer goes to the first one not
+    excluded."""
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, Any]] = []
@@ -71,6 +73,7 @@ class FakeServices:
         self.payment_status = "authorized"
         self.delivery_status = "pending_assignment"
         self.riders: list[str | None] = ["r1", "r2", "r3", "r4", "r5", "r6"]
+        self.pool: list[str] | None = None
 
     def names(self) -> list[str]:
         return [name for name, _ in self.calls]
@@ -88,7 +91,10 @@ class FakeServices:
             raise pending.pop(0)
 
     def _offer(self, data: OfferRiderInput) -> RiderOffer | None:
-        rider = self.riders.pop(0) if self.riders else None
+        if self.pool is not None:
+            rider = next((r for r in self.pool if r not in data.exclude_rider_ids), None)
+        else:
+            rider = self.riders.pop(0) if self.riders else None
         if rider is None:
             return None
         return RiderOffer(

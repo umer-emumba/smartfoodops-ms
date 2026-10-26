@@ -156,8 +156,9 @@ workflow, `OrderRefundWorkflow` (`refund-{order_id}`), handles post-delivery ref
   reconciler next to the order-service worker starts sagas for `created` orders aged
   60s–1h (start is idempotent by workflow ID).
 - **Timeouts and limits** (order-service settings): restaurant decision 5 min, rider
-  offer 60s, at most 5 offers or 10 min of searching (looking again every 30s while no
-  rider is free), maximum delivery distance 15 km (`MAX_DELIVERY_KM`, straight line,
+  offer 60s, a rider who turned it down asked again after 2 min, 10 min of searching
+  (looking again every 30s while no rider is free, the radius widening 5 → 8 → 12 km),
+  maximum delivery distance 15 km (`MAX_DELIVERY_KM`, straight line,
   checked at order creation). Delivery-service: a rider with no location ping for 3 min
   counts as dropped out.
 

@@ -35,7 +35,8 @@ The first `system_admin` is created by a one-shot command run inside `user-servi
 - **UC-2 Restaurant accepts or rejects.** The restaurant responds within a time limit. A
   rejection or a timeout releases stock and voids the payment.
 - **UC-3 Dispatch.** Once the order is confirmed, the nearest approved, available rider is
-  offered it. A decline or timeout moves the offer to the next rider.
+  offered it. A decline or timeout moves the offer to the next rider; riders who declined
+  are asked again after a short cooldown, and the search widens if nobody nearby is free.
 - **UC-4 Track.** The customer sees live rider location and status until delivery.
 - **UC-5 Complete.** Delivery triggers payment capture (final settlement) and frees the rider.
 - **UC-6 Cancel and refund.** The customer cancels before pickup. Compensation depends on

@@ -4,7 +4,8 @@
     reserve stock + capacity → redeem promotion → price → authorize payment
     → awaiting_restaurant_acceptance → restaurant accepts → confirmed
     → create delivery → offer to the nearest rider (decline / expiry → next
-      rider, at most 5 offers or 10 minutes) → assigned
+      rider, decliners asked again after 2 minutes, search radius widening;
+      up to 10 minutes) → assigned
     → picked_up (capacity freed) → delivered → payment captured
 
 Until pickup, a failure, rejection, timeout, cancellation or "no rider"
@@ -26,7 +27,7 @@ also stops a late-arriving forward step.
 Signals that arrive together are applied in arrival order: a cancel after
 pickup, or a pickup after a cancel, is ignored."""
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from temporalio import workflow
@@ -433,10 +434,12 @@ class OrderSagaWorkflow:
             raise _Failed("delivery_cancelled", status=OrderStatus.CANCELLED)
         self._delivery_id = created.delivery_id
 
-        offered_to: list[str] = []
+        # Riders who turned the delivery down (declined, let it expire,
+        # dropped out) → when; kept across reassignments.
+        turned_down: dict[str, datetime] = {}
         while True:
             # 9. Find a rider who accepts.
-            rider_id = await self._find_rider(data, offered_to)
+            rider_id = await self._find_rider(data, turned_down)
             self._assigned_rider = rider_id
             self._dropped = None
 
@@ -465,18 +468,26 @@ class OrderSagaWorkflow:
             self._check_cancelled()
             # Rider dropped out (D12): off shift, find someone else.
             await self._release_rider(RiderReleaseOutcome.DROPPED)
+            turned_down[rider_id] = workflow.now()
             self._assigned_rider = None
 
-    async def _find_rider(self, data: OrderSagaInput, offered_to: list[str]) -> str:
+    async def _find_rider(self, data: OrderSagaInput, turned_down: dict[str, datetime]) -> str:
         """Offers the delivery to the nearest free rider, one at a time, until
-        one accepts. Each rider is offered it once. Gives up — cancelling the
-        order — after `max_rider_offers` offers or `rider_search_timeout`."""
+        one accepts. A rider who turned it down is asked again only after
+        `rider_reoffer_after_seconds` — so a few riders nearby get another
+        chance instead of the search running dry. Starts with riders close to
+        the restaurant and looks farther out each time nobody is free
+        (`rider_search_radii_km`). Gives up — cancelling the order — after
+        `rider_search_timeout`."""
         assert self._delivery_id is not None
         deadline = workflow.now() + timedelta(seconds=data.rider_search_timeout_seconds)
         offer_timeout = timedelta(seconds=data.rider_offer_timeout_seconds)
+        reoffer_after = timedelta(seconds=data.rider_reoffer_after_seconds)
+        radius_step = 0
         while True:
             self._check_cancelled()
-            if len(offered_to) >= data.max_rider_offers or workflow.now() >= deadline:
+            now = workflow.now()
+            if now >= deadline:
                 raise _Failed("no_rider_available", status=OrderStatus.CANCELLED)
 
             self._step = "searching_rider"
@@ -486,14 +497,19 @@ class OrderSagaWorkflow:
                 DeliveryActivity.OFFER_TO_NEAREST_RIDER,
                 OfferRiderInput(
                     delivery_id=self._delivery_id,
-                    exclude_rider_ids=list(offered_to),
+                    exclude_rider_ids=[
+                        rider for rider, at in turned_down.items() if now - at < reoffer_after
+                    ],
                     offer_timeout_seconds=data.rider_offer_timeout_seconds,
+                    radius_km=data.rider_search_radii_km[radius_step],
                 ),
                 RiderOffer | None,
                 ACTIVITY_RETRY_POLICY,
             )
             if offer is None:
-                # Nobody free nearby: look again shortly (or stop on cancel).
+                # Nobody free: look again shortly, a step farther out (or stop
+                # on cancel).
+                radius_step = min(radius_step + 1, len(data.rider_search_radii_km) - 1)
                 remaining = deadline - workflow.now()
                 retry = min(timedelta(seconds=data.rider_search_retry_seconds), remaining)
                 try:
@@ -502,7 +518,6 @@ class OrderSagaWorkflow:
                     pass
                 continue
 
-            offered_to.append(offer.rider_id)
             self._offered_rider = offer.rider_id
             self._rider_response = None
             self._step = f"offered:{offer.rider_id}"
@@ -516,6 +531,7 @@ class OrderSagaWorkflow:
             except TimeoutError:
                 self._offered_rider = None
                 await self._release_rider(RiderReleaseOutcome.EXPIRED)
+                turned_down[offer.rider_id] = workflow.now()
                 continue
             self._offered_rider = None
             # A cancel arriving now is handled by cancel_delivery, which also
@@ -525,6 +541,7 @@ class OrderSagaWorkflow:
             if self._rider_response.accepted:
                 return offer.rider_id
             await self._release_rider(RiderReleaseOutcome.DECLINED)
+            turned_down[offer.rider_id] = workflow.now()
 
     async def _deliver_and_settle(self) -> str:
         """After pickup: nothing is undone any more, every step must succeed."""

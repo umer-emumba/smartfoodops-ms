@@ -78,6 +78,10 @@ def offers_excluded(fakes: FakeServices) -> list[list[str]]:
     return [a.exclude_rider_ids for a in fakes.args(DeliveryActivity.OFFER_TO_NEAREST_RIDER)]
 
 
+def search_radii(fakes: FakeServices) -> list[float | None]:
+    return [a.radius_km for a in fakes.args(DeliveryActivity.OFFER_TO_NEAREST_RIDER)]
+
+
 CANCEL_ALL = [
     DeliveryActivity.CANCEL_DELIVERY,
     PaymentActivity.VOID,
@@ -214,14 +218,38 @@ async def test_drop_out_after_pickup_is_ignored(env: WorkflowEnvironment) -> Non
 # ---------- No rider ----------
 
 
-async def test_five_failed_offers_cancel_the_order(env: WorkflowEnvironment) -> None:
+async def test_riders_who_declined_are_asked_again_after_two_minutes(
+    env: WorkflowEnvironment,
+) -> None:
     fakes = FakeServices()
+    fakes.pool = ["r1", "r2"]  # the only riders nearby
     async with running(env, fakes):
         handle = await confirmed(env)
-        for rider in ("r1", "r2", "r3", "r4", "r5"):
-            await answer(handle, rider, accepted=False)
+        await answer(handle, "r1", accepted=False)
+        await answer(handle, "r2", accepted=False)
+        await wait_for_step(handle, "searching_rider")
+        await env.sleep(timedelta(seconds=150))
+        await answer(handle, "r1", accepted=True)
+        await wait_for_step(handle, "awaiting_pickup")
+    excluded = offers_excluded(fakes)
+    assert excluded[:3] == [[], ["r1"], ["r1", "r2"]]
+    # Nobody else came free; r1 was asked again once the 2 minutes were up.
+    assert "r1" not in excluded[-1]
+    assert released(fakes) == [RiderReleaseOutcome.DECLINED] * 2
+    assert order_transitions(fakes)[-1] == "assigned"
+
+
+async def test_riders_turning_it_down_for_ten_minutes_cancels_the_order(
+    env: WorkflowEnvironment,
+) -> None:
+    fakes = FakeServices()
+    fakes.pool = ["r1"]  # never answers; each offer expires
+    async with running(env, fakes):
+        handle = await confirmed(env)
         assert await handle.result() == "cancelled"
-    assert released(fakes) == [RiderReleaseOutcome.DECLINED] * 5
+    released_outcomes = released(fakes)
+    assert len(released_outcomes) >= 3
+    assert set(released_outcomes) == {RiderReleaseOutcome.EXPIRED}
     assert fakes.names()[-5:] == CANCEL_ALL
     cancelled = final_transition(fakes)
     assert (cancelled.to_status, cancelled.reason) == ("cancelled", "no_rider_available")
@@ -233,9 +261,10 @@ async def test_nobody_free_for_ten_minutes_cancels_the_order(env: WorkflowEnviro
     async with running(env, fakes):
         handle = await confirmed(env)
         assert await handle.result() == "cancelled"
-    # Looked again every 30s for 10 minutes.
-    searches = fakes.names().count(DeliveryActivity.OFFER_TO_NEAREST_RIDER)
-    assert 20 <= searches <= 21
+    # Looked again every 30s for 10 minutes, farther out each time.
+    searches = search_radii(fakes)
+    assert 20 <= len(searches) <= 21
+    assert searches[:4] == [5, 8, 12, 12]
     assert final_transition(fakes).reason == "no_rider_available"
 
 
