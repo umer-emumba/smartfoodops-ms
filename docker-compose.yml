@@ -63,6 +63,8 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: user_db
     volumes: ["user-db-data:/var/lib/postgresql/data"]
+    # Host access for the real-DB tests (scripts/check.sh --with-db), localhost only.
+    ports: ["127.0.0.1:15432:5432"]
 
   restaurant-db:
     <<: *postgres-common

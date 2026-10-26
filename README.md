@@ -172,7 +172,8 @@ well as the tests and the seed script.
      JWT_ADDITIONAL_PUBLIC_KEYS_FILE=/run/secrets/jwt_additional_public_keys
      ```
 
-   - Any leftover `JWT_SECRET` / `JWT_ALGORITHM` lines are ignored and can be deleted.
+   - Any leftover `JWT_SECRET` / `JWT_ALGORITHM` / `ADMIN_BOOTSTRAP_SECRET` lines are
+     ignored and can be deleted.
 
 2. Bring the whole stack up:
 
@@ -195,6 +196,14 @@ well as the tests and the seed script.
    ```bash
    uv run --group dev python scripts/seed.py
    ```
+
+   Safe to re-run: nothing is duplicated, and the menu's stock is topped back up to 50,
+   so re-running it also resets the demo after many smoke-test orders. The admin is the
+   one thing not created through the API (there is no endpoint for it): the seed runs
+   `user-service`'s `app/create_admin` command via `docker compose exec`, so run it on the
+   machine where the stack is running. See
+   [architecture.md](docs/architecture.md#restaurant--rider-approval) to create a real
+   first admin.
 
 4. Everything is reachable through the gateway at `http://localhost:8080`. Try:
 

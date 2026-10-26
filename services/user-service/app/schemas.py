@@ -5,7 +5,7 @@ from pydantic import AfterValidator, BaseModel, EmailStr, Field
 from sfo_common.schemas import PhoneNumber, RequestModel, VerbatimStr
 
 # Public self-registration is limited to these roles — system_admin accounts
-# are created out-of-band (bootstrap-admin), not self-serve. Anything else,
+# are created out-of-band (app/create_admin.py), not self-serve. Anything else,
 # including "system_admin", is a 422 from schema validation.
 PublicRole = Literal["customer", "restaurant_admin", "rider"]
 PUBLIC_ROLES: tuple[str, ...] = get_args(PublicRole)
@@ -27,7 +27,10 @@ class RegisterRequest(RequestModel):
     role: PublicRole = "customer"
 
 
-class BootstrapAdminRequest(RequestModel):
+class NewAdmin(RequestModel):
+    """The first system_admin's details, validated by the same rules as
+    self-registration (app/create_admin.py)."""
+
     email: NormalizedEmail
     password: NewPassword
     full_name: FullName

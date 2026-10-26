@@ -323,18 +323,22 @@ before they're operationally trusted:
   allowed), and suspending a rider forces them `offline`, so unvetted riders never
   enter the assignment pool. The assignment claim also requires
   `verification_status = 'approved'`, as defense in depth.
-- **Bootstrapping the first `system_admin`**: since `system_admin` is excluded from
+- **Creating the first `system_admin`**: since `system_admin` is excluded from
   `PUBLIC_ROLES` (self-registration would let anyone grant themselves the role that can
-  block any user and approve/suspend any restaurant or rider), the only way one is created
-  is `POST /v1/auth/bootstrap-admin` on `user-service`, gated by a shared secret
-  (`ADMIN_BOOTSTRAP_SECRET`, compared with `hmac.compare_digest`) sent as an
-  `X-Bootstrap-Secret` header — not JWT-gated, since no admin session can exist yet to
-  gate it with. It is **one-shot**: once any `system_admin` exists it returns 409, so a
-  leaked secret can't mint more admins later. The gateway gives it the same strict
-  per-IP rate limit as login. `user-service` refuses to start if
-  `ENVIRONMENT != local` and the secret is still the public dummy value from
-  `env.example`. `scripts/seed.py` calls this to create the demo admin (and tolerates
-  the 409 on re-runs) and approve the seeded restaurant/rider.
+  block any user and approve/suspend any restaurant or rider), there is **no HTTP
+  endpoint** that creates one. It's a command inside `user-service`, run by an operator:
+  `docker compose exec -T user-service python -m app.create_admin --email ... --full-name
+  ... --phone ... --password-stdin` (`app/create_admin.py`; in Kubernetes, a one-off Job
+  or `kubectl exec`). Only someone who can already run commands in that container can
+  create an admin, so there is nothing reachable from outside to attack and no shared
+  secret to manage. The password is read from stdin or a prompt, never from an argument
+  (which would show in `ps` and shell history), and checked by the same rules as
+  self-registration. It is **one-shot**: once any `system_admin` exists it exits with code
+  3 and creates nothing; a Postgres advisory lock makes two runs at once create only one.
+  `scripts/seed.py` runs it for the demo admin (treating exit code 3 as done) and then
+  approves the seeded restaurant and riders. This replaced `POST
+  /v1/auth/bootstrap-admin`, which was gated by a shared `ADMIN_BOOTSTRAP_SECRET` and
+  reachable through the gateway.
 
 ## Real-time delivery tracking
 
@@ -380,9 +384,9 @@ that was always going to reject it.
 `app/security.py`'s `authenticate` now verifies signature, expiry and claims at the gateway
 itself (via `sfo_auth.decode_access_token`, the same check every backend service runs), and
 checks the blocked-user deny-list with the same decoded token, before forwarding — for every route *except* an explicit public-route allowlist
-(`_PUBLIC_ROUTES` in the same file): `POST /v1/auth/{register,login,refresh,logout,
-bootstrap-admin}` (these authenticate via a refresh token, shared secret, or issue the
-token itself — there's no bearer token to check yet) and the read-only restaurant-browsing
+(`_PUBLIC_ROUTES` in the same file): `POST /v1/auth/{register,login,refresh,logout}`
+(these authenticate via a refresh token, or issue the token itself — there's no bearer
+token to check yet) and the read-only restaurant-browsing
 routes (`GET /v1/restaurants`, `/{id}`, `/{id}/menu`, `/{id}/menu/categories`, `/{id}/promotions` — public by
 design). Everything else needs a valid bearer token to even reach a backend service.
 
@@ -560,8 +564,7 @@ A full pass over every route in all 7 services (the gateway plus six domain serv
 - **Rate limiting**: keyed by user ID for requests with a valid token, by client IP
   otherwise — per-IP alone would throttle unrelated customers behind one mobile-carrier
   IP, and user+IP would hand a user a fresh limit every time their IP changes.
-  `/v1/auth/login`, `/v1/auth/register`, and `/v1/auth/bootstrap-admin` share a stricter,
-  separate limit. Fails open if Redis is unreachable (the blocked-user check fails closed).
+  `/v1/auth/login` and `/v1/auth/register` share a stricter, separate limit. Fails open if Redis is unreachable (the blocked-user check fails closed).
   The rate-limit counter and the blocked-user lookup go to Redis in one pipelined
   round-trip per request.
 - **Database connections**: explicit per-replica pool (`DB_POOL_SIZE` 10 +

@@ -24,8 +24,8 @@ lunch- and dinner-time peaks.
 | `rider` | Register (pending approval), set availability, report location, accept deliveries, update pickup and delivery status |
 | `system_admin` | Approve or suspend restaurants and riders, block or unblock users, view audit trails |
 
-The first `system_admin` is created through a one-shot bootstrap endpoint. No one can
-self-register as an admin.
+The first `system_admin` is created by a one-shot command run inside `user-service`
+(there is no endpoint for it). No one can self-register as an admin.
 
 ## 3. Key use cases
 
@@ -125,5 +125,5 @@ Status: ✅ built · 🟡 partial · ⏳ planned (week).
 | NFR-4 | outbox relay and consumers off the request path; traceable (one trace per order, `trace_id` in every log line); recoverable (outbox retries, consumer retries and DLQ, outages waited out, Celery late acks + sweep) — verified by the failure drills | 1–3 | ✅ |
 | NFR-5 | database-per-service, one owner per fact, snapshots on orders, optimistic `version` locks, `Decimal` money end to end; Mongo analytics non-authoritative | 1–3 | ✅ |
 | NFR-6 | JSON logs with `request_id` + `trace_id` in Loki; OpenTelemetry traces in Jaeger; Prometheus metrics for every flow, 4 Grafana dashboards, 7 alerts | 1 / 3 | ✅ |
-| NFR-7 | see FR-5; bootstrap-admin one-shot + rate limited; strict request schemas (unknown fields rejected, size limits), 1 MB body limit, argon2 off the event loop; metrics and observability UIs not exposed beyond localhost | 1 / 3 | ✅ |
+| NFR-7 | see FR-5; first admin created by a one-shot command, not an endpoint; strict request schemas (unknown fields rejected, size limits), 1 MB body limit, argon2 off the event loop; metrics and observability UIs not exposed beyond localhost | 1 / 3 | ✅ |
 | NFR-8 | `docker-compose.yml` (30 containers, health-gated), `entrypoint.sh` migrations, `scripts/seed.py`, `scripts/smoke_test.py --deep --lifecycle --events`, `scripts/check.sh --with-db` | 1–3 | ✅ |

@@ -21,9 +21,10 @@ _UUID = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F
 # (docs/architecture.md#defense-in-depth-auth) — this is an added short-
 # circuit, not a replacement for that.
 _PUBLIC_ROUTES: list[tuple[str, str, re.Pattern[str]]] = [
-    # register/login issue tokens; refresh/logout/bootstrap-admin authenticate
-    # via a refresh token or shared secret in the body/header, not a bearer JWT.
-    ("POST", "auth", re.compile(r"^(register|login|refresh|logout|bootstrap-admin)$")),
+    # register/login issue tokens; refresh/logout authenticate via a refresh
+    # token in the body, not a bearer JWT. (There is no admin-creating
+    # endpoint: the first admin comes from user-service's app/create_admin.py.)
+    ("POST", "auth", re.compile(r"^(register|login|refresh|logout)$")),
     # Restaurant browsing is public; "mine"/"admin" are private management
     # views, distinguished from a real ID by not matching the UUID shape.
     ("GET", "restaurants", re.compile(r"^$")),
