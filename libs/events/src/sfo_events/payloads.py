@@ -114,6 +114,22 @@ class DeliveryEtaUpdatedPayload(EventPayload):
     dropoff_eta: datetime
 
 
+class DeliveryFoodReadyPayload(EventPayload):
+    """The restaurant marked the food ready, without a status change. The
+    ETAs are recomputed from it once a rider holds the delivery (None
+    before)."""
+
+    delivery_id: str
+    order_id: str
+    customer_id: str | None
+    rider_id: str | None
+    rider_user_id: str | None
+    status: str
+    food_ready_at: datetime
+    pickup_eta: datetime | None = None
+    dropoff_eta: datetime | None = None
+
+
 class RiderShiftChangedPayload(EventPayload):
     """Only offline ↔ on shift (W3-D8c); the saga's available ↔ busy flips
     don't emit it. `reason`: `rider` (they chose), `suspended`, `dropped_out`."""
@@ -139,6 +155,7 @@ PAYLOAD_MODELS: dict[EventType, type[EventPayload]] = {
     EventType.REFUND_PROCESSED: RefundProcessedPayload,
     EventType.DELIVERY_STATUS_UPDATED: DeliveryStatusUpdatedPayload,
     EventType.DELIVERY_ETA_UPDATED: DeliveryEtaUpdatedPayload,
+    EventType.DELIVERY_FOOD_READY: DeliveryFoodReadyPayload,
     EventType.RIDER_SHIFT_CHANGED: RiderShiftChangedPayload,
 }
 

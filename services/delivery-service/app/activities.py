@@ -44,8 +44,14 @@ from app.state_machine import DeliveryStatus, can_transition
 D = DeliveryStatus
 
 # Offer outcomes that put the delivery back up for assignment.
-_REASSIGN = {RiderReleaseOutcome.DECLINED, RiderReleaseOutcome.EXPIRED, RiderReleaseOutcome.DROPPED}
+_REASSIGN = {
+    RiderReleaseOutcome.DECLINED,
+    RiderReleaseOutcome.EXPIRED,
+    RiderReleaseOutcome.DROPPED,
+    RiderReleaseOutcome.LATE,
+}
 _OPEN_OFFER = ("pending", "accepted")
+_BEFORE_PICKUP = (D.PENDING_ASSIGNMENT, D.OFFERED, D.ASSIGNED)
 
 
 def _now() -> datetime:
@@ -357,6 +363,25 @@ async def transition_delivery(data: TransitionDeliveryInput) -> None:
         await session.commit()
 
 
+async def _estimate(session: AsyncSession, delivery: Delivery) -> tuple[datetime, datetime]:
+    """Pickup and drop-off ETAs for the rider holding `delivery` (app/eta.py)."""
+    rider = await session.get(Rider, delivery.rider_id)
+    assert rider is not None
+    position = await rider_locations.latest(rider.id)
+    if position is None and rider.last_lat is not None and rider.last_lng is not None:
+        position = (rider.last_lat, rider.last_lng)
+    assert delivery.pickup_lat is not None and delivery.pickup_lng is not None
+    assert delivery.dropoff_lat is not None and delivery.dropoff_lng is not None
+    return eta.estimate(
+        now=_now(),
+        rider_position=position,
+        pickup=(delivery.pickup_lat, delivery.pickup_lng),
+        dropoff=(delivery.dropoff_lat, delivery.dropoff_lng),
+        vehicle_type=rider.vehicle_type,
+        ready_at=delivery.ready_at,
+    )
+
+
 @activity.defn(name=DeliveryActivity.COMPUTE_ETA)
 async def compute_eta(data: DeliveryRef) -> DeliveryEta:
     """Pickup and drop-off ETAs for the assigned rider (app/eta.py), stored
@@ -366,21 +391,7 @@ async def compute_eta(data: DeliveryRef) -> DeliveryEta:
         delivery = await _locked(session, data.delivery_id)
         if delivery.rider_id is None:
             raise _invalid(delivery, "estimate ETA for")
-        rider = await session.get(Rider, delivery.rider_id)
-        assert rider is not None
-        position = await rider_locations.latest(rider.id)
-        if position is None and rider.last_lat is not None and rider.last_lng is not None:
-            position = (rider.last_lat, rider.last_lng)
-        assert delivery.pickup_lat is not None and delivery.pickup_lng is not None
-        assert delivery.dropoff_lat is not None and delivery.dropoff_lng is not None
-        pickup_eta, dropoff_eta = eta.estimate(
-            now=_now(),
-            rider_position=position,
-            pickup=(delivery.pickup_lat, delivery.pickup_lng),
-            dropoff=(delivery.dropoff_lat, delivery.dropoff_lng),
-            vehicle_type=rider.vehicle_type,
-            ready_at=delivery.ready_at,
-        )
+        pickup_eta, dropoff_eta = await _estimate(session, delivery)
         delivery.pickup_eta, delivery.dropoff_eta = pickup_eta, dropoff_eta
         session.add(
             new_outbox_row(
@@ -400,6 +411,47 @@ async def compute_eta(data: DeliveryRef) -> DeliveryEta:
         )
         await session.commit()
     return DeliveryEta(pickup_eta=pickup_eta, dropoff_eta=dropoff_eta)
+
+
+@activity.defn(name=DeliveryActivity.MARK_FOOD_READY)
+async def mark_food_ready(data: DeliveryRef) -> DeliveryEta | None:
+    """The restaurant marked the food ready: `food_ready_at` is set and
+    `ready_at` becomes the real time, the assigned rider's ETAs are
+    recomputed from it (and returned), and a `DeliveryFoodReady` event tells
+    the customer and that rider. No-op (None) if already marked, or once
+    picked up or cancelled (a cancel may compensate while this runs); None
+    too while no rider is assigned."""
+    async with SessionFactory() as session:
+        delivery = await _locked(session, data.delivery_id)
+        if delivery.food_ready_at is not None or delivery.status not in _BEFORE_PICKUP:
+            return None
+        delivery.food_ready_at = delivery.ready_at = _now()
+        rider_user_id, new_eta = None, None
+        if delivery.status == D.ASSIGNED:
+            pickup_eta, dropoff_eta = await _estimate(session, delivery)
+            delivery.pickup_eta, delivery.dropoff_eta = pickup_eta, dropoff_eta
+            new_eta = DeliveryEta(pickup_eta=pickup_eta, dropoff_eta=dropoff_eta)
+            rider_user_id = await _user_id_of(session, delivery.rider_id)
+        session.add(
+            new_outbox_row(
+                OutboxEvent,
+                aggregate_id=delivery.id,
+                event_type=EventType.DELIVERY_FOOD_READY,
+                payload={
+                    "delivery_id": delivery.id,
+                    "order_id": delivery.order_id,
+                    "customer_id": delivery.customer_id,
+                    "rider_id": delivery.rider_id,
+                    "rider_user_id": rider_user_id,
+                    "status": delivery.status,
+                    "food_ready_at": delivery.food_ready_at,
+                    "pickup_eta": delivery.pickup_eta,
+                    "dropoff_eta": delivery.dropoff_eta,
+                },
+            )
+        )
+        await session.commit()
+    return new_eta
 
 
 @activity.defn(name=DeliveryActivity.CANCEL_DELIVERY)
@@ -443,5 +495,6 @@ ACTIVITIES = [
     release_rider,
     transition_delivery,
     compute_eta,
+    mark_food_ready,
     cancel_delivery,
 ]

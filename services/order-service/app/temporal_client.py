@@ -30,9 +30,9 @@ async def get_client() -> Client:
     return _client
 
 
-async def signal_order_saga(order_id: str, signal: OrderSagaSignal, payload: object) -> None:
+async def signal_order_saga(order_id: str, signal: OrderSagaSignal, *payload: object) -> None:
     """Signals workflow `order-{order_id}` (sfo_common.temporal.signal_order_saga)."""
-    await temporal.signal_order_saga(await get_client(), order_id, signal, payload)
+    await temporal.signal_order_saga(await get_client(), order_id, signal, *payload)
 
 
 def saga_input(order: Order) -> OrderSagaInput:
@@ -62,6 +62,10 @@ def saga_input(order: Order) -> OrderSagaInput:
         rider_search_retry_seconds=settings.rider_search_retry_seconds,
         rider_reoffer_after_seconds=settings.rider_reoffer_after_seconds,
         rider_search_radii_km=list(settings.rider_search_radii_km),
+        food_overdue_seconds=settings.food_overdue_seconds,
+        kitchen_timeout_seconds=settings.kitchen_timeout_seconds,
+        pickup_grace_seconds=settings.pickup_grace_seconds,
+        delivery_overdue_seconds=settings.delivery_overdue_seconds,
     )
 
 

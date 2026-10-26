@@ -17,7 +17,7 @@ export function createRider(root, who, title, defaultKm) {
   let restaurant = null;
   let me = null;
   let offer = null; // open offer
-  let delivery = null; // accepted: {id, order_id, pickup, dropoff, status}
+  let delivery = null; // accepted: {id, order_id, pickup, dropoff, status, foodReady}
   let closeFeed = () => {};
 
   async function refreshMe() {
@@ -66,6 +66,7 @@ export function createRider(root, who, title, defaultKm) {
         await refreshMe();
       } else {
         delivery.status = current.status;
+        delivery.foodReady = Boolean(current.food_ready_at);
       }
     } else {
       const next = await find(who, "/v1/riders/me/offer").catch(() => null);
@@ -91,7 +92,7 @@ export function createRider(root, who, title, defaultKm) {
     deliveryBox.replaceChildren();
     if (delivery) {
       deliveryBox.append(
-        `Delivery: ${delivery.status} `,
+        `Delivery: ${delivery.status}${delivery.foodReady ? " · food ready" : ""} `,
         button("Ride to restaurant", () => move(delivery.pickup, "to the restaurant")),
         button("Picked up", () => act("picked-up")),
         button("Ride to customer", () => move(delivery.dropoff, "to the customer")),
@@ -121,6 +122,10 @@ export function createRider(root, who, title, defaultKm) {
         },
         delivery: (e) => {
           log(`Delivery ${e.status}`, "event");
+          refresh();
+        },
+        food_ready: () => {
+          log("Food is ready for pickup", "event");
           refresh();
         },
       },

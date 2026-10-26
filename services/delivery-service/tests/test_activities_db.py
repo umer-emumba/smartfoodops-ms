@@ -163,7 +163,9 @@ async def test_concurrent_deliveries_get_different_riders(env: Env) -> None:
 # ---------- Release: decline / expire / drop out / complete ----------
 
 
-@pytest.mark.parametrize("outcome", [RiderReleaseOutcome.DECLINED, RiderReleaseOutcome.EXPIRED])
+@pytest.mark.parametrize(
+    "outcome", [RiderReleaseOutcome.DECLINED, RiderReleaseOutcome.EXPIRED, RiderReleaseOutcome.LATE]
+)
 async def test_declined_or_expired_offer_puts_delivery_back(
     env: Env, outcome: RiderReleaseOutcome
 ) -> None:
@@ -305,6 +307,55 @@ async def test_eta_waits_for_the_food(env: Env) -> None:
 
 
 # ---------- Create / cancel ----------
+
+
+# ---------- Food ready ----------
+
+
+async def test_food_ready_brings_the_assigned_riders_eta_forward(env: Env) -> None:
+    await add_rider(env, "near", at=km_north(0.1))
+    delivery_id, _ = await assigned(env)
+    async with env.factory() as session:
+        delivery = await session.get(Delivery, delivery_id)
+        assert delivery is not None
+        delivery.ready_at = datetime.now(UTC) + timedelta(minutes=30)  # due later
+        await session.commit()
+    await activities.compute_eta(DeliveryRef(delivery_id))
+    due = (await _delivery(env, delivery_id)).pickup_eta
+    new_eta = await activities.mark_food_ready(DeliveryRef(delivery_id))
+    # Retry / second tap: no-op.
+    assert await activities.mark_food_ready(DeliveryRef(delivery_id)) is None
+
+    delivery = await _delivery(env, delivery_id)
+    assert new_eta is not None and new_eta.pickup_eta == delivery.pickup_eta
+    assert delivery.food_ready_at is not None and delivery.ready_at == delivery.food_ready_at
+    assert due is not None and delivery.pickup_eta is not None and delivery.pickup_eta < due
+    [event] = await outbox_payloads(env, "DeliveryFoodReady")
+    assert (event["status"], event["rider_id"], event["rider_user_id"]) == (
+        "assigned",
+        "near",
+        "user-near",
+    )
+    assert datetime.fromisoformat(event["pickup_eta"]) == delivery.pickup_eta
+
+
+async def test_food_ready_before_a_rider_has_no_one_to_tell(env: Env) -> None:
+    delivery_id = await new_delivery(env)
+    assert await activities.mark_food_ready(DeliveryRef(delivery_id)) is None
+    [event] = await outbox_payloads(env, "DeliveryFoodReady")
+    assert (event["status"], event["rider_user_id"], event["pickup_eta"]) == (
+        "pending_assignment",
+        None,
+        None,
+    )
+
+
+async def test_food_ready_after_cancel_is_a_no_op(env: Env) -> None:
+    delivery_id = await new_delivery(env)
+    await activities.cancel_delivery(OrderRef("o-1"))
+    await activities.mark_food_ready(DeliveryRef(delivery_id))
+    assert (await _delivery(env, delivery_id)).food_ready_at is None
+    assert await outbox_payloads(env, "DeliveryFoodReady") == []
 
 
 async def test_create_is_idempotent_per_order(env: Env) -> None:

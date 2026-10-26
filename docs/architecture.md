@@ -99,6 +99,7 @@ local Traefik-based version of it was removed rather than kept as a demo.
 | | `RefundProcessed` | payment-service (refund) | amount, customer | notification, analytics |
 | `delivery-events` | `DeliveryStatusUpdated` | delivery-service (every delivery status, creation included) | from/to status, `rider_user_id`, `released_rider_user_id` (who just lost it), customer, reason, ETAs | notification (rider), analytics, tracking |
 | | `DeliveryEtaUpdated` | delivery-service (new ETAs, no status change) | status, rider, pickup/drop-off ETA | tracking |
+| | `DeliveryFoodReady` | delivery-service (`mark_food_ready`: the restaurant marked the food ready) | status, `food_ready_at`, assigned rider's `rider_user_id`, recomputed ETAs | notification (customer, rider), tracking |
 | | `RiderShiftChanged` | delivery-service (offline ↔ on shift: status endpoint, suspension, drop-out) | on/off shift, reason | analytics |
 
 Every topic has a `<topic>.dlq` twin for messages a consumer gave up on; messages keep
@@ -137,11 +138,12 @@ Activity and signal contracts (names, task queues, input/output models) are shar
 | `order-activities` | `transition_order`, `apply_pricing`, `record_refund` | — (idempotent state writes) |
 | `delivery-activities` | `create_delivery` | `cancel_delivery` (also frees the rider) |
 | | `offer_to_nearest_rider` | `release_rider` |
-| | `transition_delivery`, `compute_eta` | — |
+| | `transition_delivery`, `compute_eta`, `mark_food_ready` | — |
 
-Signals: `restaurant_response`, `rider_response`, `rider_dropped`, `picked_up`,
-`delivered`, `cancel` — sent by the REST endpoint that owns the action (restaurant
-response and cancel → order-service; rider actions → delivery-service), and by
+Signals: `restaurant_response`, `rider_response`, `rider_dropped`, `food_ready`,
+`picked_up`, `delivered`, `cancel` — sent by the REST endpoint that owns the action
+(restaurant response, food ready, cancel and the support override for delivered →
+order-service; rider actions → delivery-service), and by
 delivery-service's stale-rider detector. Query: `status` (current step). A second
 workflow, `OrderRefundWorkflow` (`refund-{order_id}`), handles post-delivery refunds.
 
@@ -161,6 +163,21 @@ workflow, `OrderRefundWorkflow` (`refund-{order_id}`), handles post-delivery ref
   maximum delivery distance 15 km (`MAX_DELIVERY_KM`, straight line,
   checked at order creation). Delivery-service: a rider with no location ping for 3 min
   counts as dropped out.
+- **Food ready, pickup and delivery deadlines**: the restaurant marks the food ready
+  (`POST …/food-ready` → `food_ready` signal, any time from confirmation to pickup;
+  delivery-service's `mark_food_ready` records it, brings `ready_at` and the ETAs up to
+  date, and emits `DeliveryFoodReady`). The deadlines tell a late kitchen from a late
+  rider: food not marked ready 15 min after it was due (confirmation + prep time) is
+  flagged `food_overdue`, and 1 h after it the order is cancelled (`kitchen_timeout`);
+  ready food not picked up 15 min after the later of "ready" and the rider's pickup ETA
+  gets another rider (`late`, back in the pool). An order not delivered 2 h after pickup
+  is flagged `delivery_overdue`; a system admin can mark it delivered. The flags count
+  `order_saga_overdue` (Temporal SDK metric, `stage` = food / delivery) and raise the
+  `OrdersOverdue` alert. The kitchen deadlines are checked while waiting for pickup, not
+  during the rider search (which normally ends before the food is due). Settings
+  (order-service): `FOOD_OVERDUE_SECONDS`, `KITCHEN_TIMEOUT_SECONDS`,
+  `PICKUP_GRACE_SECONDS`, `DELIVERY_OVERDUE_SECONDS`. Sagas started before this change
+  keep the old waits (`workflow.patched`).
 
 ### Order and delivery endpoints
 
@@ -169,7 +186,9 @@ workflow, `OrderRefundWorkflow` (`refund-{order_id}`), handles post-delivery ref
 | order | `POST /v1/orders` — returns at `created`, starts the saga; `payment_method` `card_simulated` (approves) or `card_simulated_decline` | customer |
 | order | `GET /v1/orders/restaurant/{restaurant_id}?status=` | owning restaurant admin, system admin |
 | order | `POST /v1/orders/{id}/restaurant-response` `{decision, reason?}` → 202 | owning restaurant admin |
+| order | `POST /v1/orders/{id}/food-ready` → 202, confirmed/assigned orders, repeats ignored | owning restaurant admin |
 | order | `POST /v1/orders/{id}/cancel` `{reason?}` → 202, until pickup | ordering customer, system admin |
+| order | `POST /v1/orders/{id}/mark-delivered` → 202, picked-up orders (support override when the rider never marked it) | system admin |
 | order | `POST /v1/orders/{id}/refund` `{amount?, reason}` → 202, delivered orders, once | system admin |
 | delivery | `GET /v1/riders/me/offer` | rider |
 | delivery | `POST /v1/riders/me/deliveries/{id}/accept`, `/decline`, `/drop-out`, `/picked-up`, `/delivered` → 202 | the rider it's offered/assigned to |
@@ -378,8 +397,8 @@ before they're operationally trusted:
     events without filling Redis with finished orders. order-service still writes the
     state itself when an order is created (trackable at once) and when rebuilding a
     missing key.
-  - **Delivery details and rider offers** (`DeliveryStatusUpdated`, `DeliveryEtaUpdated`
-    on `delivery-events`): the same consumer updates the customer's delivery status and
+  - **Delivery details and rider offers** (`DeliveryStatusUpdated`, `DeliveryEtaUpdated`,
+    `DeliveryFoodReady` on `delivery-events`): the same consumer updates the customer's delivery status and
     ETAs and the rider's feed (`tracking:rider:{user_id}`, with a state hash for its
     snapshot). Deliveries can go back (a declined offer), so these are compared by event
     time per delivery instead of by status; a rider's state is cleared only by an event

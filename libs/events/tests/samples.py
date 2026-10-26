@@ -64,6 +64,17 @@ SAMPLE_PAYLOADS: dict[EventType, dict[str, Any]] = {
         "pickup_eta": "2026-10-26T12:10:00+00:00",
         "dropoff_eta": "2026-10-26T12:25:00+00:00",
     },
+    EventType.DELIVERY_FOOD_READY: {
+        "delivery_id": "del-1",
+        "order_id": "ord-1",
+        "customer_id": "cust-1",
+        "rider_id": "rider-1",
+        "rider_user_id": "user-rider-1",
+        "status": "assigned",
+        "food_ready_at": "2026-10-26T12:05:00+00:00",
+        "pickup_eta": "2026-10-26T12:10:00+00:00",
+        "dropoff_eta": "2026-10-26T12:25:00+00:00",
+    },
     EventType.RIDER_SHIFT_CHANGED: {
         "rider_id": "rider-1",
         "rider_user_id": "user-rider-1",

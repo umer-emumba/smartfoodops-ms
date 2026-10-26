@@ -325,6 +325,46 @@ async def test_eta_update_reaches_the_customer_only(redis: Redis, rider_feed: Pu
     ]
 
 
+async def test_food_ready_reaches_the_customer_and_the_rider(
+    redis: Redis, rider_feed: PubSub
+) -> None:
+    await projection.apply_event(
+        redis, _delivery_event("assigned", seconds_ago=20, rider=RIDER_USER)
+    )
+    await _drain(rider_feed)
+    ready_at = datetime.now(UTC) - timedelta(seconds=1)
+    ready = DomainEvent(
+        event_id="e-ready",
+        event_type="DeliveryFoodReady",
+        aggregate_id=DELIVERY,
+        occurred_at=ready_at,
+        payload={
+            "delivery_id": DELIVERY,
+            "order_id": ORDER,
+            "customer_id": "u-customer",
+            "rider_id": "r-1",
+            "rider_user_id": RIDER_USER,
+            "status": "assigned",
+            "food_ready_at": ready_at.isoformat(),
+        },
+    )
+    assert await projection.apply_event(redis, ready)
+    assert (await redis.hgetall(STATE))["food_ready_at"] == ready_at.isoformat()
+    messages = await _drain(rider_feed)
+    assert [(c, m["type"]) for c, m in messages] == [
+        (ORDER_CHANNEL, "delivery"),
+        (RIDER_CHANNEL, "food_ready"),
+    ]
+    assert messages[0][1]["food_ready_at"] == ready_at.isoformat()
+    # A later delivery event keeps it; the rider still holds the delivery.
+    await projection.apply_event(
+        redis, _delivery_event("picked_up", seconds_ago=0, rider=RIDER_USER)
+    )
+    state = await redis.hgetall(STATE)
+    assert (state["food_ready_at"], state["delivery_status"]) == (ready_at.isoformat(), "picked_up")
+    assert (await redis.hgetall(RIDER_STATE))["status"] == "picked_up"
+
+
 async def test_delivered_clears_the_riders_state(redis: Redis) -> None:
     await projection.apply_event(
         redis, _delivery_event("picked_up", seconds_ago=20, rider=RIDER_USER)

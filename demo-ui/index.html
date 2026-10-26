@@ -45,6 +45,8 @@
       <h2>Restaurant</h2>
       <div class="muted">Live feed of orders waiting for a decision</div>
       <div id="r-pending"></div>
+      <div class="muted">Preparing — mark the food ready for pickup</div>
+      <div id="r-preparing"></div>
       <div class="log" id="r-log"></div>
     </section>
 
@@ -59,6 +61,8 @@
         <input id="a-reason" placeholder="Reason" value="Cold food" size="14">
         <button id="a-refund">Refund</button>
       </div>
+      <div class="muted">Support override: the rider never marked it delivered (picked-up orders only)</div>
+      <div class="row"><button id="a-mark-delivered">Mark delivered</button></div>
       <div class="log" id="a-log"></div>
     </section>
   </main>

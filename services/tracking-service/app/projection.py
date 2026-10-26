@@ -52,6 +52,7 @@ from redis.exceptions import TimeoutError as RedisTimeoutError
 from sfo_events import DomainEvent
 from sfo_events.payloads import (
     DeliveryEtaUpdatedPayload,
+    DeliveryFoodReadyPayload,
     DeliveryStatusUpdatedPayload,
     OrderPlacedPayload,
     OrderTransitionPayload,
@@ -159,7 +160,9 @@ async def apply_event(redis: Redis, event: DomainEvent) -> bool:
     p = event.typed_payload()
     if isinstance(p, OrderPlacedPayload | OrderTransitionPayload):
         return await apply_order_event(redis, event)
-    if isinstance(p, DeliveryStatusUpdatedPayload | DeliveryEtaUpdatedPayload):
+    if isinstance(
+        p, DeliveryStatusUpdatedPayload | DeliveryEtaUpdatedPayload | DeliveryFoodReadyPayload
+    ):
         return await apply_delivery_event(redis, event)
     return False
 
@@ -277,36 +280,43 @@ def _rider_update(
 
 
 async def apply_delivery_event(redis: Redis, event: DomainEvent) -> bool:
-    """A delivery status or ETA event: the customer's delivery details, and
-    the rider's feed for offers and the delivery they hold. True if applied."""
+    """A delivery status, ETA or food-ready event: the customer's delivery
+    details, and the rider's feed for offers and the delivery they hold.
+    True if applied."""
     if _too_old(event):
         return False
     p = event.typed_payload()
+    at = event.occurred_at.isoformat()
+    food_ready_at = None
     if isinstance(p, DeliveryStatusUpdatedPayload):
         status = p.to_status
-        rider, action, rider_message = _rider_update(p, event.occurred_at.isoformat())
+        rider, action, rider_message = _rider_update(p, at)
     elif isinstance(p, DeliveryEtaUpdatedPayload):
         status, rider, action, rider_message = p.status, None, "none", None
+    elif isinstance(p, DeliveryFoodReadyPayload):
+        status, rider, action = p.status, p.rider_user_id, "none"
+        food_ready_at = p.food_ready_at.isoformat()
+        rider_message = {
+            "type": "food_ready",
+            "delivery_id": p.delivery_id,
+            "order_id": p.order_id,
+            "at": at,
+        }
     else:
         return False
-    at = event.occurred_at.isoformat()
     pickup_eta, dropoff_eta = _iso(p.pickup_eta), _iso(p.dropoff_eta)
-    messages = [
-        [
-            state.order_channel(p.order_id),
-            json.dumps(
-                {
-                    "type": "delivery",
-                    "delivery_id": p.delivery_id,
-                    "status": status,
-                    "rider_id": p.rider_id,
-                    "pickup_eta": pickup_eta,
-                    "dropoff_eta": dropoff_eta,
-                    "at": at,
-                }
-            ),
-        ]
-    ]
+    customer_message = {
+        "type": "delivery",
+        "delivery_id": p.delivery_id,
+        "status": status,
+        "rider_id": p.rider_id,
+        "pickup_eta": pickup_eta,
+        "dropoff_eta": dropoff_eta,
+        "at": at,
+    }
+    if food_ready_at:
+        customer_message["food_ready_at"] = food_ready_at
+    messages = [[state.order_channel(p.order_id), json.dumps(customer_message)]]
     if rider is not None and rider_message is not None:
         messages.append([state.rider_channel(rider), json.dumps(rider_message)])
     rider_fields = {
@@ -322,6 +332,8 @@ async def apply_delivery_event(redis: Redis, event: DomainEvent) -> bool:
         "pickup_eta": pickup_eta,
         "dropoff_eta": dropoff_eta,
     }
+    if food_ready_at:  # kept by the later events, which don't carry it
+        order_fields["food_ready_at"] = food_ready_at
     return await _eval(
         redis,
         _APPLY_DELIVERY,

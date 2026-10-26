@@ -75,6 +75,8 @@ class FakeServices:
         self.reserve_status = "reserved"
         self.payment_status = "authorized"
         self.delivery_status = "pending_assignment"
+        # mark_food_ready's new pickup ETA, from now (None: no rider assigned).
+        self.food_ready_pickup_in: timedelta | None = None
         self.riders: list[str | None] = ["r1", "r2", "r3", "r4", "r5", "r6"]
         self.pool: list[str] | None = None
 
@@ -104,6 +106,12 @@ class FakeServices:
             )
         self.order_status = data.to_status
         return TransitionOrderResult(status=data.to_status, changed=True)
+
+    def _mark_food_ready(self, _: DeliveryRef) -> DeliveryEta | None:
+        if self.food_ready_pickup_in is None:
+            return None
+        pickup = activity.info().current_attempt_scheduled_time + self.food_ready_pickup_in
+        return DeliveryEta(pickup_eta=pickup, dropoff_eta=pickup + timedelta(minutes=15))
 
     def _offer(self, data: OfferRiderInput) -> RiderOffer | None:
         if self.pool is not None:
@@ -174,6 +182,7 @@ class FakeServices:
                 ),
                 DeliveryRef,
             ),
+            D.MARK_FOOD_READY: (self._mark_food_ready, DeliveryRef),
             D.CANCEL_DELIVERY: (lambda _: None, OrderRef),
         }
 

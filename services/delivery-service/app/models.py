@@ -83,8 +83,10 @@ class Delivery(Base):
     dropoff_lng: Mapped[float | None] = mapped_column(Float, nullable=True)
     distance_km: Mapped[float | None] = mapped_column(Float, nullable=True)
 
-    # When the food should be ready; the pickup ETA is never earlier.
+    # When the food should be ready — the real time once the restaurant marks
+    # it (`food_ready_at`); the pickup ETA is never earlier.
     ready_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    food_ready_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     offer_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

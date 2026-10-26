@@ -70,6 +70,16 @@ def test_no_rider_cancellation_says_why() -> None:
     assert "no rider was available" in message.content
 
 
+def test_kitchen_timeout_cancellation_says_why() -> None:
+    [message] = messages_for(
+        event(
+            EventType.ORDER_CANCELLED,
+            order_payload(from_status="assigned", reason="kitchen_timeout"),
+        )
+    )[:1]
+    assert "the restaurant couldn't prepare it in time" in message.content
+
+
 def test_delivered_tells_customer_and_restaurant() -> None:
     ev = event(
         EventType.ORDER_DELIVERED, order_payload(from_status="picked_up", to_status="delivered")
@@ -95,6 +105,33 @@ def test_order_without_restaurant_admin_skips_the_restaurant() -> None:
 def test_riders_hear_from_delivery_events(to_status: str, expected: list) -> None:  # type: ignore[type-arg]
     ev = event(EventType.DELIVERY_STATUS_UPDATED, delivery_payload(to_status=to_status))
     assert _summary(ev) == expected
+
+
+def _food_ready(**overrides):  # type: ignore[no-untyped-def]
+    payload = {
+        "delivery_id": "d-1",
+        "order_id": "o-1",
+        "customer_id": CUSTOMER,
+        "rider_id": "rider-1",
+        "rider_user_id": RIDER_USER,
+        "status": "assigned",
+        "food_ready_at": "2026-10-26T12:00:00+00:00",
+        **overrides,
+    }
+    return event(EventType.DELIVERY_FOOD_READY, payload)
+
+
+def test_food_ready_tells_the_customer_and_the_assigned_rider() -> None:
+    assert _summary(_food_ready()) == [
+        (CUSTOMER, "customer", "order_update", ("in_app",)),
+        (RIDER_USER, "rider", "delivery_update", ("in_app", "sms")),
+    ]
+    assert "your rider is picking it up" in messages_for(_food_ready())[0].content
+
+
+def test_food_ready_before_a_rider_tells_only_the_customer() -> None:
+    [message] = messages_for(_food_ready(status="pending_assignment", rider_user_id=None))
+    assert message.user_id == CUSTOMER and "we're finding a rider" in message.content
 
 
 def test_released_delivery_has_no_rider_to_tell() -> None:

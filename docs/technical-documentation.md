@@ -142,7 +142,7 @@ Twelve event types (`libs/events/src/sfo_events/schemas.py`), one topic per aggr
 |---|---|---|
 | `order-events` | `OrderPlaced`, `OrderAwaitingRestaurant`, `OrderConfirmed`, `OrderRejected`, `OrderCancelled`, `RiderAssigned`, `OrderPickedUp`, `OrderDelivered` | order-service (creation; every saga transition) |
 | `payment-events` | `PaymentSuccessful`, `RefundProcessed` | payment-service activities |
-| `delivery-events` | `DeliveryStatusUpdated`, `DeliveryEtaUpdated`, `RiderShiftChanged` | delivery-service (every delivery status, creation included; new ETAs; a rider going on or off shift) |
+| `delivery-events` | `DeliveryStatusUpdated`, `DeliveryEtaUpdated`, `DeliveryFoodReady`, `RiderShiftChanged` | delivery-service (every delivery status, creation included; new ETAs; the restaurant marking the food ready; a rider going on or off shift) |
 
 Every event has the same envelope — `event_id` (UUIDv7, the dedup key), `event_type`,
 `aggregate_id` (the partition key), `occurred_at` (the outbox row's `created_at`),

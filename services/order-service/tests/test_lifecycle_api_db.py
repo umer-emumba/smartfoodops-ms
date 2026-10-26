@@ -1,6 +1,6 @@
-"""Restaurant-admin views, restaurant response and cancel endpoints
-(week2-plan step 1) against a real Postgres; signals to the saga are
-captured (`signals` fixture)."""
+"""Restaurant-admin views, restaurant response, food ready, cancel and
+mark-delivered endpoints (week2-plan step 1) against a real Postgres;
+signals to the saga are captured (`signals` fixture)."""
 
 from decimal import Decimal
 
@@ -313,3 +313,70 @@ async def test_internal_tracking_state_rebuilds_the_key(
     assert (resp.json()["status"], resp.json()["customer_id"]) == ("confirmed", CUSTOMER)
     assert tracking_redis.hashes[f"tracking:order:{order.id}:state"]["status"] == "confirmed"
     assert (await client.get("/internal/orders/nope/tracking")).status_code == 404
+
+
+# ---------- Food ready ----------
+
+
+@pytest.mark.parametrize("status", [OrderStatus.CONFIRMED, OrderStatus.ASSIGNED])
+async def test_owner_marks_food_ready(
+    session_factory: Factory, client: AsyncClient, signals: list, status: OrderStatus
+) -> None:
+    order = await insert_order(session_factory, status=status)
+    resp = await client.post(f"/v1/orders/{order.id}/food-ready", headers=OWNER_H)
+    assert resp.status_code == 202
+    assert signals == [(order.id, OrderSagaSignal.FOOD_READY, None)]
+
+
+async def test_food_ready_from_another_restaurant_is_forbidden(
+    session_factory: Factory, client: AsyncClient, signals: list
+) -> None:
+    order = await insert_order(session_factory, status=OrderStatus.CONFIRMED)
+    resp = await client.post(f"/v1/orders/{order.id}/food-ready", headers=OTHER_ADMIN_H)
+    assert resp.status_code == 403
+    assert signals == []
+
+
+@pytest.mark.parametrize(
+    "status", [OrderStatus.AWAITING_RESTAURANT_ACCEPTANCE, OrderStatus.PICKED_UP]
+)
+async def test_food_ready_only_between_confirmation_and_pickup(
+    session_factory: Factory, client: AsyncClient, signals: list, status: OrderStatus
+) -> None:
+    order = await insert_order(session_factory, status=status)
+    resp = await client.post(f"/v1/orders/{order.id}/food-ready", headers=OWNER_H)
+    assert resp.status_code == 409
+    assert signals == []
+
+
+# ---------- Mark delivered (support override) ----------
+
+
+async def test_system_admin_marks_a_picked_up_order_delivered(
+    session_factory: Factory, client: AsyncClient, signals: list
+) -> None:
+    order = await insert_order(session_factory, status=OrderStatus.PICKED_UP)
+    resp = await client.post(f"/v1/orders/{order.id}/mark-delivered", headers=SYSTEM_ADMIN_H)
+    assert resp.status_code == 202
+    assert signals == [
+        (order.id, OrderSagaSignal.DELIVERED, Actor(id="u-admin", role="system_admin"))
+    ]
+
+
+async def test_only_a_system_admin_marks_delivered(
+    session_factory: Factory, client: AsyncClient, signals: list
+) -> None:
+    order = await insert_order(session_factory, status=OrderStatus.PICKED_UP)
+    for headers in (CUSTOMER_H, OWNER_H):
+        resp = await client.post(f"/v1/orders/{order.id}/mark-delivered", headers=headers)
+        assert resp.status_code == 403
+    assert signals == []
+
+
+async def test_mark_delivered_only_after_pickup(
+    session_factory: Factory, client: AsyncClient, signals: list
+) -> None:
+    order = await insert_order(session_factory, status=OrderStatus.ASSIGNED)
+    resp = await client.post(f"/v1/orders/{order.id}/mark-delivered", headers=SYSTEM_ADMIN_H)
+    assert resp.status_code == 409
+    assert signals == []

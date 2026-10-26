@@ -27,15 +27,21 @@ Tokens live only in page memory (no `localStorage`, no cookies).
 
 1. **Rider 1** and **Rider 2**: *Go on shift* (0.3 km and 1 km from the restaurant).
 2. **Customer**: pick an item, *Place order*. The restaurant panel shows it at once.
-3. **Restaurant**: *Accept*.
+3. **Restaurant**: *Accept*. The order moves to *Preparing*.
 4. **Rider 1** (nearest) gets the offer: *Accept*.
-5. Rider 1: *Ride to restaurant* → *Picked up* → *Ride to customer* → *Delivered*.
-6. The customer panel shows every status, the ETAs, rider positions, and the payment captured.
-7. **Admin**: *Refund* (part or all of it).
+5. **Restaurant**: *Mark ready* — the customer and rider 1 are told, and the pickup ETA updates.
+6. Rider 1: *Ride to restaurant* → *Picked up* → *Ride to customer* → *Delivered*.
+7. The customer panel shows every status, the ETAs, food ready, rider positions, and the payment captured.
+8. **Admin**: *Refund* (part or all of it).
 
 Other paths: *Reject* in the restaurant panel; *Card declines*; *Cancel order*
 before pickup; *Decline* or *Drop out* as rider 1 (rider 2 gets it); or don't
 answer — the restaurant times out after 5 minutes, a rider offer after 60s.
+*Mark ready* can come before a rider is found. Left alone, a kitchen that never
+marks the food ready is flagged 15 minutes after it was due and the order
+cancelled after an hour; a rider who doesn't come for ready food is replaced
+15 minutes after their pickup ETA. **Admin** → *Mark delivered* settles a
+picked-up order the rider never marked delivered.
 
 The **workflow** link next to an order opens it in the Temporal UI, showing
 every saga step, signal and compensation.

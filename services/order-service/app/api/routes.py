@@ -318,7 +318,7 @@ async def _get_order_or_404(session: AsyncSession, order_id: str) -> Order:
 
 
 async def _signal_and_respond(
-    session: AsyncSession, order: Order, signal: OrderSagaSignal, payload: object
+    session: AsyncSession, order: Order, signal: OrderSagaSignal, *payload: object
 ) -> OrderResponse:
     """Responds with the order as it is now (202 — the saga applies the
     change asynchronously; GET /v1/orders/{id} or live tracking shows it)."""
@@ -328,7 +328,7 @@ async def _signal_and_respond(
     await session.rollback()
     # Sent to the order's running saga, which applies it (e.g. confirms,
     # rejects or cancels the order).
-    await temporal_client.signal_order_saga(snapshot.id, signal, payload)
+    await temporal_client.signal_order_saga(snapshot.id, signal, *payload)
     return snapshot
 
 
@@ -361,6 +361,23 @@ async def restaurant_response(
     )
 
 
+@router.post("/orders/{order_id}/food-ready", response_model=OrderResponse, status_code=202)
+async def food_ready(
+    order_id: str,
+    current: CurrentUser = Depends(require_roles(Role.RESTAURANT_ADMIN)),
+    session: AsyncSession = Depends(get_session),
+) -> OrderResponse:
+    """The owning restaurant marks a confirmed order's food ready for
+    pickup. The customer and the assigned rider are told; a rider who then
+    doesn't come for it in time is replaced. Repeats are ignored."""
+    order = await _get_order_or_404(session, order_id)
+    if order.restaurant_admin_id != current.id:
+        raise ForbiddenError("Not your restaurant's order")
+    if order.status not in (OrderStatus.CONFIRMED, OrderStatus.ASSIGNED):
+        raise ConflictError(f"Order is {order.status}; only confirmed orders can be marked ready")
+    return await _signal_and_respond(session, order, OrderSagaSignal.FOOD_READY)
+
+
 @router.post("/orders/{order_id}/cancel", response_model=OrderResponse, status_code=202)
 async def cancel_order(
     order_id: str,
@@ -380,6 +397,27 @@ async def cancel_order(
         order,
         OrderSagaSignal.CANCEL,
         CancelRequest(actor=Actor(id=current.id, role=current.role.value), reason=body.reason),
+    )
+
+
+@router.post("/orders/{order_id}/mark-delivered", response_model=OrderResponse, status_code=202)
+async def mark_delivered(
+    order_id: str,
+    current: CurrentUser = Depends(require_roles(Role.SYSTEM_ADMIN)),
+    session: AsyncSession = Depends(get_session),
+) -> OrderResponse:
+    """Support's override for a picked-up order the rider never marked
+    delivered (the saga flags it `delivery_overdue`), once they've confirmed
+    with the customer. Settles it like the rider's delivered: payment
+    captured, rider freed — recorded as this admin's doing."""
+    order = await _get_order_or_404(session, order_id)
+    if order.status != OrderStatus.PICKED_UP:
+        raise ConflictError(f"Order is {order.status}; only picked-up orders can be marked")
+    return await _signal_and_respond(
+        session,
+        order,
+        OrderSagaSignal.DELIVERED,
+        Actor(id=current.id, role=current.role.value),
     )
 
 

@@ -65,6 +65,7 @@ class DeliveryResponse(BaseModel):
     dropoff_lng: float | None
     distance_km: float | None
     ready_at: datetime | None
+    food_ready_at: datetime | None
     offer_expires_at: datetime | None
     pickup_eta: datetime | None
     dropoff_eta: datetime | None

@@ -21,6 +21,7 @@ class OrderSagaSignal(StrEnum):
     RESTAURANT_RESPONSE = "restaurant_response"
     RIDER_RESPONSE = "rider_response"
     RIDER_DROPPED = "rider_dropped"
+    FOOD_READY = "food_ready"
     PICKED_UP = "picked_up"
     DELIVERED = "delivered"
     CANCEL = "cancel"
@@ -108,6 +109,17 @@ class OrderSagaInput:
     # Search radius around the restaurant: starts at the first and widens
     # one step each time nobody is free, staying at the last.
     rider_search_radii_km: list[float] = field(default_factory=lambda: [5.0, 8.0, 12.0])
+    # Kitchen deadlines, from when the food was due (confirmation + prep
+    # time): not marked ready this long after → flagged; this long → the
+    # order is cancelled (`kitchen_timeout`).
+    food_overdue_seconds: int = 900
+    kitchen_timeout_seconds: int = 3600
+    # Food ready but not picked up this long after the later of "ready" and
+    # the rider's pickup ETA → the rider is replaced.
+    pickup_grace_seconds: int = 900
+    # Not delivered this long after pickup: flagged for support (who can mark
+    # it delivered); the saga keeps waiting.
+    delivery_overdue_seconds: int = 7200
 
 
 @dataclass(frozen=True)

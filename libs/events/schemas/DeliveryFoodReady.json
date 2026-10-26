@@ -1,0 +1,142 @@
+{
+  "$defs": {
+    "DeliveryFoodReadyPayload": {
+      "additionalProperties": false,
+      "description": "The restaurant marked the food ready, without a status change. The\nETAs are recomputed from it once a rider holds the delivery (None\nbefore).",
+      "properties": {
+        "customer_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Customer Id"
+        },
+        "delivery_id": {
+          "title": "Delivery Id",
+          "type": "string"
+        },
+        "dropoff_eta": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dropoff Eta"
+        },
+        "food_ready_at": {
+          "format": "date-time",
+          "title": "Food Ready At",
+          "type": "string"
+        },
+        "order_id": {
+          "title": "Order Id",
+          "type": "string"
+        },
+        "pickup_eta": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pickup Eta"
+        },
+        "rider_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Rider Id"
+        },
+        "rider_user_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Rider User Id"
+        },
+        "status": {
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "delivery_id",
+        "order_id",
+        "customer_id",
+        "rider_id",
+        "rider_user_id",
+        "status",
+        "food_ready_at"
+      ],
+      "title": "DeliveryFoodReadyPayload",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "aggregate_id": {
+      "title": "Aggregate Id",
+      "type": "string"
+    },
+    "correlation_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Correlation Id"
+    },
+    "event_id": {
+      "title": "Event Id",
+      "type": "string"
+    },
+    "event_type": {
+      "const": "DeliveryFoodReady",
+      "title": "Event Type",
+      "type": "string"
+    },
+    "occurred_at": {
+      "format": "date-time",
+      "title": "Occurred At",
+      "type": "string"
+    },
+    "payload": {
+      "$ref": "#/$defs/DeliveryFoodReadyPayload"
+    }
+  },
+  "required": [
+    "event_id",
+    "aggregate_id",
+    "occurred_at",
+    "event_type",
+    "payload"
+  ],
+  "title": "DeliveryFoodReady",
+  "type": "object"
+}
