@@ -1,0 +1,89 @@
+{
+  "$defs": {
+    "RiderShiftChangedPayload": {
+      "additionalProperties": false,
+      "description": "Only offline \u2194 on shift (W3-D8c); the saga's available \u2194 busy flips\ndon't emit it. `reason`: `rider` (they chose), `suspended`, `dropped_out`.",
+      "properties": {
+        "from_status": {
+          "title": "From Status",
+          "type": "string"
+        },
+        "on_shift": {
+          "title": "On Shift",
+          "type": "boolean"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "rider_id": {
+          "title": "Rider Id",
+          "type": "string"
+        },
+        "rider_user_id": {
+          "title": "Rider User Id",
+          "type": "string"
+        },
+        "to_status": {
+          "title": "To Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "rider_id",
+        "rider_user_id",
+        "from_status",
+        "to_status",
+        "on_shift",
+        "reason"
+      ],
+      "title": "RiderShiftChangedPayload",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "aggregate_id": {
+      "title": "Aggregate Id",
+      "type": "string"
+    },
+    "correlation_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Correlation Id"
+    },
+    "event_id": {
+      "title": "Event Id",
+      "type": "string"
+    },
+    "event_type": {
+      "const": "RiderShiftChanged",
+      "title": "Event Type",
+      "type": "string"
+    },
+    "occurred_at": {
+      "format": "date-time",
+      "title": "Occurred At",
+      "type": "string"
+    },
+    "payload": {
+      "$ref": "#/$defs/RiderShiftChangedPayload"
+    }
+  },
+  "required": [
+    "event_id",
+    "aggregate_id",
+    "occurred_at",
+    "event_type",
+    "payload"
+  ],
+  "title": "RiderShiftChanged",
+  "type": "object"
+}

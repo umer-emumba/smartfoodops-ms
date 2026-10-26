@@ -2,6 +2,7 @@ import asyncio
 import logging
 from datetime import UTC, datetime
 
+from sfo_observability import quiet
 from sqlalchemy import text
 
 from app import repository
@@ -45,7 +46,8 @@ async def run_refresh_token_purge_loop() -> None:
     while True:
         await asyncio.sleep(settings.refresh_token_purge_interval_seconds)
         try:
-            deleted = await purge_expired_refresh_tokens_once()
+            with quiet():
+                deleted = await purge_expired_refresh_tokens_once()
             if deleted:
                 _logger.info(
                     "Purged expired refresh tokens", extra={"extra_fields": {"count": deleted}}

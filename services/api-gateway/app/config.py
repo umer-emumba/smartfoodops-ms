@@ -14,8 +14,10 @@ class Settings(BaseSettings):
 
     redis_url: str = "redis://redis:6379/0"
 
-    jwt_secret: str
-    jwt_algorithm: str = "HS256"
+    # Where this service gets the public keys that verify access tokens
+    # (user-service's JWKS; see sfo_auth.keys). Public keys only: this
+    # service can verify a token but never issue one.
+    jwt_jwks_url: str = "http://user-service:8000/.well-known/jwks.json"
 
     cors_origins: str = ""
 
@@ -25,6 +27,8 @@ class Settings(BaseSettings):
     delivery_service_url: str = "http://delivery-service:8000"
     payment_service_url: str = "http://payment-service:8000"
     notification_service_url: str = "http://notification-service:8000"
+    tracking_service_url: str = "http://tracking-service:8000"
+    analytics_service_url: str = "http://analytics-service:8000"
 
     rate_limit_default_per_minute: int = 120
     rate_limit_auth_per_minute: int = 10
@@ -53,6 +57,8 @@ class Settings(BaseSettings):
             "delivery-service": self.delivery_service_url,
             "payment-service": self.payment_service_url,
             "notification-service": self.notification_service_url,
+            "tracking-service": self.tracking_service_url,
+            "analytics-service": self.analytics_service_url,
         }
 
     @property
@@ -67,8 +73,11 @@ class Settings(BaseSettings):
             "restaurants": "restaurant-service",
             "orders": "order-service",
             "riders": "delivery-service",
+            "deliveries": "delivery-service",
             "payments": "payment-service",
             "notifications": "notification-service",
+            "tracking": "tracking-service",
+            "analytics": "analytics-service",
         }
 
 

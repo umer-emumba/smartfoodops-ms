@@ -7,7 +7,12 @@ import jwt
 from pydantic import BaseModel, ValidationError
 from sfo_common import new_id
 
+from sfo_auth.keys import ALGORITHM, ISSUER, KeyStore, TokenSigner
 from sfo_auth.roles import Role
+
+# Clocks on different hosts drift a little; without slack a token issued a
+# second "in the future" (iat) or just expired would be rejected at random.
+CLOCK_SKEW_SECONDS = 10
 
 
 class TokenPayload(BaseModel):
@@ -17,26 +22,44 @@ class TokenPayload(BaseModel):
     iat: int
 
 
-def create_access_token(
-    *, user_id: str, role: Role, secret: str, algorithm: str, ttl_minutes: int
-) -> str:
+def create_access_token(*, user_id: str, role: Role, signer: TokenSigner, ttl_minutes: int) -> str:
+    """Signed with user-service's private key (EdDSA); the `kid` header says
+    which public key verifies it (sfo_auth.keys)."""
     now = datetime.now(UTC)
     payload = {
+        "iss": ISSUER,
         "sub": user_id,
         "role": role.value,
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(minutes=ttl_minutes)).timestamp()),
     }
-    return jwt.encode(payload, secret, algorithm=algorithm)
+    return jwt.encode(payload, signer.private_key, algorithm=ALGORITHM, headers={"kid": signer.kid})
 
 
-def decode_access_token(token: str, *, secret: str, algorithm: str) -> TokenPayload:
-    """Raises jwt.InvalidTokenError (or a subclass) on bad signature/expiry —
-    callers turn that into an UnauthorizedError. Signature + expiry only, no DB
-    call — see docs/technical-documentation.md, "Auth: 15-minute access
-    tokens, rotating refresh tokens, Redis deny-list"."""
+async def decode_access_token(token: str, *, keys: KeyStore) -> TokenPayload:
+    """Raises jwt.InvalidTokenError (or a subclass) on a bad token — callers
+    turn that into an UnauthorizedError — and KeyStoreUnavailable when the
+    public keys can't be fetched (a 503, not the token's fault). Signature +
+    expiry only, no DB call — see docs/technical-documentation.md, "Auth:
+    15-minute access tokens, rotating refresh tokens, Redis deny-list"."""
+    header = jwt.get_unverified_header(token)
+    # Checked before any key lookup, and decode below pins it again: the
+    # header must never choose the algorithm.
+    if header.get("alg") != ALGORITHM:
+        raise jwt.InvalidAlgorithmError("Unexpected token signing algorithm")
+    kid = header.get("kid")
+    if not isinstance(kid, str):
+        raise jwt.InvalidTokenError("Token has no key ID")
+    key = await keys.get(kid)
+    if key is None:
+        raise jwt.InvalidTokenError("Token was signed with an unknown key")
     raw = jwt.decode(
-        token, secret, algorithms=[algorithm], options={"require": ["sub", "role", "exp", "iat"]}
+        token,
+        key,
+        algorithms=[ALGORITHM],
+        issuer=ISSUER,
+        leeway=CLOCK_SKEW_SECONDS,
+        options={"require": ["iss", "sub", "role", "exp", "iat"]},
     )
     try:
         return TokenPayload(**raw)

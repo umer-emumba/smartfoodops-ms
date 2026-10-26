@@ -1,6 +1,20 @@
 from sfo_observability.logging import configure_logging
+from sfo_observability.metrics import instrument_celery_metrics, instrument_metrics
+from sfo_observability.tracing import (
+    instrument_celery,
+    instrument_engine,
+    instrument_fastapi,
+    quiet,
+    setup_tracing,
+)
 
-__all__ = ["configure_logging"]
-
-# OpenTelemetry + Prometheus wiring lands here in Week 3
-# (docs/PROGRESS.md) — kept out of Week 1 scope intentionally.
+__all__ = [
+    "configure_logging",
+    "instrument_celery_metrics",
+    "instrument_metrics",
+    "instrument_celery",
+    "instrument_engine",
+    "instrument_fastapi",
+    "quiet",
+    "setup_tracing",
+]

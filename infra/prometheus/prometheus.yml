@@ -1,0 +1,59 @@
+# Prometheus for docker compose (docs/week3-plan.md W3-D14). Every app
+# process serves metrics on :9100 (sfo_observability.metrics) — APIs and
+# Celery workers alike — and the services that run Temporal workers also
+# serve the Temporal SDK's on :9101. Nothing here is published to the host
+# except Prometheus' own UI.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files: [/etc/prometheus/rules.yml]
+
+scrape_configs:
+  - job_name: app
+    # `service` = the compose service the target belongs to (reused below).
+    relabel_configs: &service_label
+      - source_labels: [__address__]
+        regex: "([^:]+):\\d+"
+        target_label: service
+    static_configs:
+      - targets:
+          - api-gateway:9100
+          - user-service:9100
+          - restaurant-service:9100
+          - order-service:9100
+          - delivery-service:9100
+          - payment-service:9100
+          - notification-service:9100
+          - tracking-service:9100
+          - analytics-service:9100
+          - order-worker:9100
+          - payment-worker:9100
+          - delivery-worker:9100
+          - notification-worker:9100
+
+  # Temporal SDK metrics from the workers embedded in these services:
+  # activity/workflow task latency and failures, schedule-to-start, polls.
+  - job_name: temporal-sdk
+    relabel_configs: *service_label
+    static_configs:
+      - targets:
+          - order-service:9101
+          - restaurant-service:9101
+          - payment-service:9101
+          - delivery-service:9101
+
+  - job_name: temporal-server
+    relabel_configs: *service_label
+    static_configs:
+      - targets: [temporal:9100]
+
+  # RabbitMQ's built-in Prometheus plugin (enabled in the management image).
+  - job_name: rabbitmq
+    relabel_configs: *service_label
+    static_configs:
+      - targets: [rabbitmq:15692]
+
+  - job_name: prometheus
+    static_configs:
+      - targets: [localhost:9090]

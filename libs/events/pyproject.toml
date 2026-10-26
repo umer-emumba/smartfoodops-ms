@@ -6,7 +6,15 @@ dependencies = [
     "pydantic>=2.9",
     "sqlalchemy[asyncio]>=2.0.35",
     "sfo-common",
+    "confluent-kafka[json,schemaregistry]>=2.6",
+    "opentelemetry-api>=1.45.1",
+    "opentelemetry-instrumentation>=0.66b1",
+    "prometheus-client>=0.21",
 ]
+
+[project.optional-dependencies]
+# sfo_events.relay's Celery tasks — only the services that relay an outbox.
+relay = ["sfo-common[celery]"]
 
 [build-system]
 requires = ["hatchling"]

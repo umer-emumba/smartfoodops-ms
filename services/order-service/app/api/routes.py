@@ -1,18 +1,24 @@
 import hashlib
+import logging
 from collections import Counter
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Header, Query, Response
 from sfo_auth import CurrentUser, Role
 from sfo_common.errors import ConflictError, ForbiddenError, NotFoundError, ValidationAppError
+from sfo_common.geo import haversine_km
 from sfo_common.middleware import get_correlation_id
 from sfo_common.pagination import Page
+from sfo_contracts import OrderSagaSignal
+from sfo_contracts.activities import Actor
+from sfo_contracts.workflows import CancelRequest, OrderRefundInput, RestaurantResponse
 from sfo_events import EventType, new_outbox_row
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import repository, restaurant_client
+from app import repository, restaurant_client, temporal_client, tracking
 from app.auth_deps import get_current_user, require_roles
+from app.config import settings
 from app.db import get_session
 from app.models import (
     Order,
@@ -21,13 +27,22 @@ from app.models import (
     OrderStatusHistory,
     OutboxEvent,
 )
-from app.schemas import OrderCreate, OrderResponse
+from app.schemas import (
+    CancelOrderRequest,
+    OrderCreate,
+    OrderResponse,
+    RefundRequest,
+    RestaurantResponseRequest,
+)
+from app.state_machine import can_cancel
 
 router = APIRouter(prefix="/v1", tags=["orders"])
+_logger = logging.getLogger(__name__)
 
-# Week 1: basic order creation only, no saga yet — see docs/PROGRESS.md.
-# Week 2 adds the Temporal OrderSagaWorkflow that drives status transitions
-# (capacity check, promo/tax/fee pricing, payment, restaurant acceptance).
+# Status transitions are made only by the Temporal order saga (its
+# transition_order activity, app/activities.py). Endpoints that change an
+# order's course — restaurant response, cancel — check the current status
+# for a fast 409, then signal the saga.
 
 _CENTS = Decimal("0.01")
 
@@ -36,11 +51,30 @@ def _request_hash(body: OrderCreate) -> str:
     return hashlib.sha256(body.model_dump_json().encode()).hexdigest()
 
 
-def _replay_or_conflict(existing: Order, request_hash: str, response: Response) -> Order:
+async def _replay_or_conflict(existing: Order, request_hash: str, response: Response) -> Order:
     if existing.request_hash != request_hash:
         raise ConflictError("Idempotency-Key was already used with a different request body")
     response.status_code = 200
+    if existing.status == OrderStatus.CREATED:
+        # The original request may have committed without starting the saga.
+        await _start_saga(existing)
     return existing
+
+
+async def _start_saga(order: Order) -> None:
+    """Starts the order's saga (D3, D4). The order is already committed, so a
+    failure here isn't the client's problem: the reconciler starts it within
+    a minute (app/reconciler.py)."""
+    try:
+        # Temporal starts the order saga (workflows/order_saga.py), which takes
+        # the order from here to delivery.
+        await temporal_client.start_order_saga(await temporal_client.get_client(), order)
+    except Exception:
+        _logger.warning(
+            "Order saga not started; the reconciler will start it",
+            exc_info=True,
+            extra={"extra_fields": {"order_id": order.id}},
+        )
 
 
 def _can_supply(item: restaurant_client.MenuItemSnapshot, quantity: int) -> bool:
@@ -48,7 +82,9 @@ def _can_supply(item: restaurant_client.MenuItemSnapshot, quantity: int) -> bool
     return item.is_available and (item.stock_count is None or item.stock_count >= quantity)
 
 
-async def _build_items(body: OrderCreate) -> list[OrderItem]:
+async def _build_items(
+    body: OrderCreate,
+) -> tuple[restaurant_client.RestaurantSnapshot, list[OrderItem]]:
     """Validates the order against restaurant-service's live data and returns
     priced line items. Raises before anything is written, so a rejected order
     leaves no trace in order_db."""
@@ -58,6 +94,8 @@ async def _build_items(body: OrderCreate) -> list[OrderItem]:
     for line in body.items:
         requested[line.menu_item_id] += line.quantity
 
+    # Calls restaurant-service directly (HTTP) for the live prices, stock and
+    # status of just these items; 503 if it doesn't answer within 5s.
     restaurant, menu = await restaurant_client.get_quote(body.restaurant_id, list(requested))
     # Same rule the public endpoints apply: a pending/suspended restaurant
     # doesn't exist as far as customers are concerned.
@@ -65,6 +103,15 @@ async def _build_items(body: OrderCreate) -> list[OrderItem]:
         raise NotFoundError("Restaurant not found")
     if not restaurant.is_accepting_orders:
         raise ConflictError("Restaurant is not accepting orders right now")
+    distance_km = haversine_km(restaurant.lat, restaurant.lng, body.delivery_lat, body.delivery_lng)
+    if distance_km > settings.max_delivery_km:
+        raise ValidationAppError(
+            "Delivery address is outside this restaurant's delivery area",
+            details={
+                "distance_km": round(distance_km, 1),
+                "max_delivery_km": settings.max_delivery_km,
+            },
+        )
 
     unknown = [item_id for item_id in requested if item_id not in menu]
     if unknown:
@@ -79,7 +126,7 @@ async def _build_items(body: OrderCreate) -> list[OrderItem]:
             "Some items are unavailable or out of stock", details={"menu_item_ids": unavailable}
         )
 
-    return [
+    return restaurant, [
         OrderItem(
             menu_item_id=line.menu_item_id,
             item_name_snapshot=menu[line.menu_item_id].name,
@@ -99,19 +146,23 @@ async def create_order(
     current: CurrentUser = Depends(require_roles(Role.CUSTOMER)),
     session: AsyncSession = Depends(get_session),
 ) -> Order:
-    """Requires an `Idempotency-Key` header. Retrying with the same key and
+    """Places the order and returns at once (201, `created`); the order saga
+    then reserves stock, prices, authorizes payment and waits for the
+    restaurant — follow it on GET /v1/orders/{id} or live tracking.
+
+    Requires an `Idempotency-Key` header. Retrying with the same key and
     body returns the original order (200) instead of creating a duplicate —
     safe for a client to retry after a timeout or a double-tap."""
     request_hash = _request_hash(body)
     existing = await repository.get_order_by_idempotency_key(session, current.id, idempotency_key)
     if existing is not None:
-        return _replay_or_conflict(existing, request_hash, response)
+        return await _replay_or_conflict(existing, request_hash, response)
     # End the read transaction before the network call below, so this request
     # doesn't hold a pooled DB connection idle while waiting on
     # restaurant-service. The session starts a fresh transaction for the write.
     await session.rollback()
 
-    items = await _build_items(body)
+    restaurant, items = await _build_items(body)
     subtotal = sum((i.unit_price * i.quantity for i in items), Decimal("0")).quantize(_CENTS)
     # Tax/delivery-fee/discount computation (and promo_code validation) is
     # the saga's "price/discount" step starting Week 2 — Week 1 prices the
@@ -119,6 +170,9 @@ async def create_order(
     order = Order(
         customer_id=current.id,
         restaurant_id=body.restaurant_id,
+        restaurant_admin_id=restaurant.admin_user_id,
+        restaurant_lat=restaurant.lat,
+        restaurant_lng=restaurant.lng,
         idempotency_key=idempotency_key,
         request_hash=request_hash,
         delivery_address_text=body.delivery_address_text,
@@ -126,6 +180,7 @@ async def create_order(
         delivery_lng=body.delivery_lng,
         special_instructions=body.special_instructions,
         promo_code=body.promo_code,
+        payment_method=body.payment_method,
         subtotal=subtotal,
         total_amount=subtotal,
     )
@@ -140,8 +195,9 @@ async def create_order(
     ]
     try:
         order = await repository.create_order(session, order)
-        # Same transaction as the order insert — the transactional outbox.
-        # Week 3's relay publishes undispatched rows to Kafka.
+        # Saved in the same transaction as the order (the outbox). order-worker
+        # sends it to Kafka; notification-service tells the customer,
+        # analytics-service counts the order.
         session.add(
             new_outbox_row(
                 OutboxEvent,
@@ -152,7 +208,8 @@ async def create_order(
                     "order_number": order.order_number,
                     "customer_id": order.customer_id,
                     "restaurant_id": order.restaurant_id,
-                    "total_amount": str(order.total_amount),
+                    "restaurant_admin_id": order.restaurant_admin_id,
+                    "total_amount": order.total_amount,
                     "items": [
                         {"menu_item_id": i.menu_item_id, "quantity": i.quantity} for i in items
                     ],
@@ -169,7 +226,10 @@ async def create_order(
         )
         if existing is None:
             raise
-        return _replay_or_conflict(existing, request_hash, response)
+        return await _replay_or_conflict(existing, request_hash, response)
+    # Trackable at once, before the saga's first status change.
+    await tracking.write_state(order)
+    await _start_saga(order)
     return order
 
 
@@ -205,7 +265,10 @@ async def get_order(
     order = await repository.get_order(session, order_id)
     if order is None:
         raise NotFoundError("Order not found")
-    if order.customer_id != current.id and current.role != Role.SYSTEM_ADMIN:
+    # The ordering customer, the restaurant's owner, or a system_admin.
+    if current.id not in (order.customer_id, order.restaurant_admin_id) and (
+        current.role != Role.SYSTEM_ADMIN
+    ):
         raise ForbiddenError("Not your order")
     return order
 
@@ -220,3 +283,140 @@ async def list_my_orders(
     return await repository.list_orders_for_customer(
         session, current.id, cursor=cursor, limit=limit
     )
+
+
+@router.get("/orders/restaurant/{restaurant_id}", response_model=Page[OrderResponse])
+async def list_restaurant_orders(
+    restaurant_id: str,
+    status: OrderStatus | None = Query(default=None),
+    cursor: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    current: CurrentUser = Depends(require_roles(Role.RESTAURANT_ADMIN, Role.SYSTEM_ADMIN)),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """A restaurant's order queue, newest first — e.g. `?status=awaiting_restaurant_acceptance`
+    for orders waiting on accept/reject. Owning restaurant_admin or system_admin."""
+    admin_id = None
+    if current.role == Role.RESTAURANT_ADMIN:
+        # Ownership from the owner snapshotted on the restaurant's orders
+        # (week2-plan D10) — no call to restaurant-service. A restaurant with
+        # no orders yet has nothing to show anyway.
+        owner = await repository.get_restaurant_owner(session, restaurant_id)
+        if owner is not None and owner != current.id:
+            raise ForbiddenError("Not your restaurant")
+        admin_id = current.id
+    return await repository.list_orders_for_restaurant(
+        session, restaurant_id, admin_id=admin_id, status=status, cursor=cursor, limit=limit
+    )
+
+
+async def _get_order_or_404(session: AsyncSession, order_id: str) -> Order:
+    order = await repository.get_order(session, order_id)
+    if order is None:
+        raise NotFoundError("Order not found")
+    return order
+
+
+async def _signal_and_respond(
+    session: AsyncSession, order: Order, signal: OrderSagaSignal, payload: object
+) -> OrderResponse:
+    """Responds with the order as it is now (202 — the saga applies the
+    change asynchronously; GET /v1/orders/{id} or live tracking shows it)."""
+    snapshot = OrderResponse.model_validate(order)
+    # Release the DB connection before the network call. This expires
+    # `order`, so only `snapshot` is used from here on.
+    await session.rollback()
+    # Sent to the order's running saga, which applies it (e.g. confirms,
+    # rejects or cancels the order).
+    await temporal_client.signal_order_saga(snapshot.id, signal, payload)
+    return snapshot
+
+
+@router.post(
+    "/orders/{order_id}/restaurant-response", response_model=OrderResponse, status_code=202
+)
+async def restaurant_response(
+    order_id: str,
+    body: RestaurantResponseRequest,
+    current: CurrentUser = Depends(require_roles(Role.RESTAURANT_ADMIN)),
+    session: AsyncSession = Depends(get_session),
+) -> OrderResponse:
+    """The owning restaurant accepts or rejects an order that is
+    `awaiting_restaurant_acceptance`. Rejecting releases stock and voids
+    the payment (saga compensation)."""
+    order = await _get_order_or_404(session, order_id)
+    if order.restaurant_admin_id != current.id:
+        raise ForbiddenError("Not your restaurant's order")
+    if order.status != OrderStatus.AWAITING_RESTAURANT_ACCEPTANCE:
+        raise ConflictError(f"Order is {order.status}, not awaiting restaurant acceptance")
+    return await _signal_and_respond(
+        session,
+        order,
+        OrderSagaSignal.RESTAURANT_RESPONSE,
+        RestaurantResponse(
+            decision=body.decision,
+            reason=body.reason,
+            actor=Actor(id=current.id, role=current.role.value),
+        ),
+    )
+
+
+@router.post("/orders/{order_id}/cancel", response_model=OrderResponse, status_code=202)
+async def cancel_order(
+    order_id: str,
+    body: CancelOrderRequest,
+    current: CurrentUser = Depends(require_roles(Role.CUSTOMER, Role.SYSTEM_ADMIN)),
+    session: AsyncSession = Depends(get_session),
+) -> OrderResponse:
+    """The ordering customer (or a system_admin) cancels, up until pickup.
+    The saga compensates for whatever has happened so far."""
+    order = await _get_order_or_404(session, order_id)
+    if current.role == Role.CUSTOMER and order.customer_id != current.id:
+        raise ForbiddenError("Not your order")
+    if not can_cancel(order.status):
+        raise ConflictError(f"Order is {order.status} and can no longer be cancelled")
+    return await _signal_and_respond(
+        session,
+        order,
+        OrderSagaSignal.CANCEL,
+        CancelRequest(actor=Actor(id=current.id, role=current.role.value), reason=body.reason),
+    )
+
+
+@router.post("/orders/{order_id}/refund", response_model=OrderResponse, status_code=202)
+async def refund_order(
+    order_id: str,
+    body: RefundRequest,
+    current: CurrentUser = Depends(require_roles(Role.SYSTEM_ADMIN)),
+    session: AsyncSession = Depends(get_session),
+) -> OrderResponse:
+    """Refunds a delivered order, fully or partly (week2-plan D13) — e.g.
+    after a support complaint. Starts the refund workflow; the order's
+    `refunded_amount` shows it once done. One refund per order."""
+    order = await _get_order_or_404(session, order_id)
+    if order.status != OrderStatus.DELIVERED:
+        raise ConflictError(f"Order is {order.status}; only delivered orders are refunded")
+    if order.refunded_at is not None:
+        raise ConflictError("This order has already been refunded")
+    refundable = order.total_amount - order.refunded_amount
+    amount = body.amount if body.amount is not None else refundable
+    if amount > refundable:
+        raise ValidationAppError(
+            "Refund is more than was paid",
+            details={"amount": str(amount), "refundable": str(refundable)},
+        )
+    snapshot = OrderResponse.model_validate(order)
+    await session.rollback()
+    # Temporal starts the refund workflow (workflows/refund.py): payment-service
+    # gives the money back, then the order records it.
+    started = await temporal_client.start_refund(
+        OrderRefundInput(
+            order_id=snapshot.id,
+            amount=amount,
+            reason=body.reason,
+            actor=Actor(id=current.id, role=current.role.value),
+        )
+    )
+    if not started:
+        raise ConflictError("A refund for this order is already in progress or done")
+    return snapshot

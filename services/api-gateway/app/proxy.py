@@ -1,8 +1,9 @@
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
 
 import httpx
 from fastapi import APIRouter, Depends, Request, Response
+from fastapi.responses import StreamingResponse
 from sfo_common.errors import (
     BadGatewayError,
     GatewayTimeoutError,
@@ -38,6 +39,13 @@ _UPSTREAM_POLICIES: dict[str, _UpstreamPolicy] = {
     "delivery-service": _UpstreamPolicy(max_connections=100, timeout_seconds=5.0),
     "payment-service": _UpstreamPolicy(max_connections=50, timeout_seconds=5.0),
     "notification-service": _UpstreamPolicy(max_connections=50, timeout_seconds=5.0),
+    # Aggregations over a window can take longer than a CRUD read.
+    "analytics-service": _UpstreamPolicy(max_connections=20, timeout_seconds=10.0),
+    # Long-lived SSE streams (stream_tracking below), in a pool of their own
+    # so they can never take connections from regular API calls. The read
+    # timeout is 3 missed heartbeats (tracking-service sends one every 15s):
+    # a dead upstream ends the stream and the client reconnects.
+    "tracking-service": _UpstreamPolicy(max_connections=1000, timeout_seconds=45.0),
 }
 
 
@@ -163,6 +171,60 @@ async def forward_request(resource: str, rest_of_path: str, request: Request) ->
 _default_rate_limit = Depends(
     RateLimiter(times=settings.rate_limit_default_per_minute, seconds=60, bucket="default")
 )
+
+
+# Registered before the generic catch-all below, which would otherwise
+# match /v1/tracking/... and buffer the never-ending response.
+@router.get("/v1/tracking/{rest_of_path:path}", dependencies=[_default_rate_limit])
+async def stream_tracking(rest_of_path: str, request: Request) -> Response:
+    """Streaming proxy for tracking-service's Server-Sent Events
+    (docs/week2-plan.md step 7): bytes are relayed as they arrive, nothing
+    is buffered (every middleware here is pure ASGI). Auth happens once, when
+    the stream opens. Errors from tracking-service (403/404 JSON) pass
+    through as normal responses. When the client disconnects, the upstream
+    stream is closed with it."""
+    if ".." in rest_of_path.split("/"):
+        raise NotFoundError("Not found")
+    await authenticate(request, public=False)
+
+    service = "tracking-service"
+    client = clients[service]
+    forward_headers = _filter_headers(request.headers, _EXCLUDED_REQUEST_HEADERS)
+    forward_headers[CORRELATION_ID_HEADER] = get_correlation_id()
+    upstream_request = client.build_request(
+        "GET",
+        f"{settings.service_urls[service]}/v1/tracking/{rest_of_path}",
+        params=request.query_params,
+        headers=forward_headers,
+    )
+    try:
+        upstream = await client.send(upstream_request, stream=True)
+    except httpx.PoolTimeout as exc:
+        raise ServiceUnavailableError("Too many live streams, please retry") from exc
+    except httpx.TimeoutException as exc:
+        raise GatewayTimeoutError("'tracking' service timed out") from exc
+    except httpx.RequestError as exc:
+        raise BadGatewayError("'tracking' service is unavailable") from exc
+
+    response_headers = _filter_headers(upstream.headers, _EXCLUDED_RESPONSE_HEADERS)
+    if not upstream.headers.get("content-type", "").startswith("text/event-stream"):
+        body = await upstream.aread()
+        await upstream.aclose()
+        return Response(content=body, status_code=upstream.status_code, headers=response_headers)
+
+    async def relay() -> AsyncIterator[bytes]:
+        try:
+            # Decoded bytes: the upstream's Content-Encoding isn't forwarded.
+            async for chunk in upstream.aiter_bytes():
+                yield chunk
+        except httpx.HTTPError:
+            # Upstream died or went silent past the read timeout: end the
+            # stream; EventSource reconnects and gets a fresh snapshot.
+            pass
+        finally:
+            await upstream.aclose()
+
+    return StreamingResponse(relay(), status_code=upstream.status_code, headers=response_headers)
 
 
 # Two routes, one handler: "/v1/{resource}/{rest_of_path:path}" requires at

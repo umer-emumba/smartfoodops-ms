@@ -17,6 +17,7 @@ config.set_main_option("sqlalchemy.url", settings.database_url)
 target_metadata = Base.metadata
 
 
+# Offline: prints the SQL instead of running it (`alembic upgrade head --sql`).
 def run_migrations_offline() -> None:
     context.configure(
         url=settings.database_url,
@@ -36,6 +37,8 @@ def _do_run_migrations(connection) -> None:
         context.run_migrations()
 
 
+# Online (the normal path, run by entrypoint.sh): connects to this service's
+# database. NullPool: one short-lived connection, nothing kept after the run.
 async def run_migrations_online() -> None:
     connectable = async_engine_from_config(
         config.get_section(config.config_ini_section, {}),

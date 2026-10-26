@@ -1,6 +1,6 @@
 # Week 2 Implementation Plan — Order Lifecycle + Delivery Workflow
 
-Status: **working plan** (2026-10-09). Supersedes the Week 2 section of the original
+Status: **done** (steps 0–8, 2026-10-12; started 2026-10-09). Supersedes the Week 2 section of the original
 Part A plan; it folds in the design changes from the Week 1 production review. Work goes
 step by step (§3); `technical-documentation.md` and `architecture.md` are updated to match
 what's actually built, and `PROGRESS.md` tracks progress.

@@ -1,0 +1,29 @@
+[project]
+name = "tracking-service"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "redis>=5.0",
+    "prometheus-client>=0.21",
+    "httpx>=0.27",
+    "sfo-common",
+    "sfo-auth",
+    "sfo-observability",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.3", "pytest-asyncio>=0.24", "httpx>=0.27"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.uv.sources]
+sfo-common = { workspace = true }
+sfo-auth = { workspace = true }
+sfo-observability = { workspace = true }

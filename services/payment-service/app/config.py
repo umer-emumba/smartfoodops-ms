@@ -1,7 +1,8 @@
 from sfo_common import BaseServiceSettings
+from sfo_common.config import OutboxRelaySettings, TemporalSettings
 
 
-class Settings(BaseServiceSettings):
+class Settings(BaseServiceSettings, TemporalSettings, OutboxRelaySettings):
     pass
 
 

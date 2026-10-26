@@ -15,6 +15,8 @@ class PaymentResponse(BaseModel):
     refunded_amount: MoneyAmount
     created_at: datetime
     authorized_at: datetime | None
+    captured_at: datetime | None
+    voided_at: datetime | None
     refunded_at: datetime | None
 
     model_config = {"from_attributes": True}

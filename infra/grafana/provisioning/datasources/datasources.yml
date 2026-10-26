@@ -1,0 +1,36 @@
+# Provisioned at start-up (docs/week3-plan.md step 5). `$$` is a literal
+# `$` — Grafana expands environment variables in provisioning files.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    url: http://prometheus:9090
+    isDefault: true
+
+  - name: Loki
+    uid: loki
+    type: loki
+    url: http://loki:3100
+    jsonData:
+      # A log line's trace_id → that trace (W3-D13).
+      derivedFields:
+        - name: trace_id
+          matcherType: label
+          matcherRegex: trace_id
+          datasourceUid: jaeger
+          url: "$${__value.raw}"
+          urlDisplayLabel: View trace
+
+  - name: Jaeger
+    uid: jaeger
+    type: jaeger
+    url: http://jaeger:16686
+    jsonData:
+      # From a span back to its log lines.
+      tracesToLogsV2:
+        datasourceUid: loki
+        filterByTraceID: true
+        customQuery: true
+        query: '{service=~".+"} | trace_id = "$${__span.traceId}"'

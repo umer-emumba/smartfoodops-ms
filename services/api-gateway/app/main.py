@@ -4,10 +4,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from sfo_common import create_app
 from sfo_common.health import add_health_routes
-from sfo_observability import configure_logging
+from sfo_observability import configure_logging, instrument_fastapi, instrument_metrics
 
 from app import auth_routes, docs, proxy
 from app.config import settings
+from app.query_token import QueryTokenMiddleware
 from app.redis_client import redis
 
 configure_logging(settings.service_name, settings.log_level)
@@ -35,6 +36,18 @@ app = create_app(
 # registered before the generic /v1/{resource} catch-all, or the catch-all
 # would shadow them. Auth (JWT + deny-list) runs inside forward_request, not
 # as middleware, so its errors get the normal JSON envelope.
+# Outermost: the token must be in the Authorization header before the rate
+# limiter and auth run (app/query_token.py).
+app.add_middleware(QueryTokenMiddleware)
+
+# Tracing: every request becomes a span in its trace (sent to Jaeger), and an
+# incoming `traceparent` header joins the caller's trace. This is what links
+# one order across all services. Health checks and metrics scrapes are skipped.
+instrument_fastapi(app)
+# Metrics: counts every request by route and status code, and times it.
+# Prometheus reads them from this process's port 9100 every 15s; they feed the
+# Grafana "Service overview" dashboard and the HighErrorRate alert.
+instrument_metrics(app)
 app.include_router(auth_routes.router)
 app.include_router(docs.router)
 app.include_router(proxy.router)

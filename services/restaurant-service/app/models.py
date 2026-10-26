@@ -3,7 +3,17 @@ from decimal import Decimal
 
 from sfo_common import new_id
 from sfo_events import OutboxEventMixin
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, Numeric, String
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -39,6 +49,10 @@ class Restaurant(Base):
     # simplification, see docs/technical-documentation.md).
     is_accepting_orders: Mapped[bool] = mapped_column(Boolean, default=True)
     max_concurrent_orders: Mapped[int] = mapped_column(Integer, default=20)
+    # Orders reserved and not yet picked up (or released). Changed only by
+    # the order saga's activities (app/activities.py), always with an atomic
+    # UPDATE that checks it against max_concurrent_orders.
+    active_order_count: Mapped[int] = mapped_column(Integer, default=0)
     avg_prep_time_minutes: Mapped[int] = mapped_column(Integer, default=20)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
@@ -124,3 +138,62 @@ class RestaurantStatusHistory(Base):
 
 class OutboxEvent(Base, OutboxEventMixin):
     __tablename__ = "outbox_events"
+
+
+class ReservationStatus:
+    RESERVED = "reserved"
+    RELEASED = "released"  # compensated: stock back, capacity freed
+    CONSUMED = "consumed"  # picked up: capacity freed, stock stays used
+
+
+class StockReservation(Base):
+    """What one order took from stock and capacity, keyed by order — makes
+    reserve/release/complete idempotent across activity retries, and records
+    exactly what to give back on release."""
+
+    __tablename__ = "stock_reservations"
+
+    order_id: Mapped[str] = mapped_column(String, primary_key=True)  # opaque ref to order-service
+    # Null only on a release that arrived before any reservation (a tombstone,
+    # see app/activities.py release_reservation).
+    restaurant_id: Mapped[str | None] = mapped_column(
+        ForeignKey("restaurants.id"), nullable=True, index=True
+    )
+    # [{"menu_item_id": ..., "quantity": ...}], one entry per item.
+    items: Mapped[list[dict]] = mapped_column(JSON, default=list)
+    status: Mapped[str] = mapped_column(String, default=ReservationStatus.RESERVED)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+
+class RedemptionStatus:
+    REDEEMED = "redeemed"
+    RELEASED = "released"
+
+
+class PromotionRedemption(Base):
+    """One promotion use per order — makes redeem/release idempotent, and
+    is the per-order record behind `promotions.times_used`."""
+
+    __tablename__ = "promotion_redemptions"
+
+    order_id: Mapped[str] = mapped_column(String, primary_key=True)  # opaque ref to order-service
+    # Null only on a release-before-redeem tombstone (app/activities.py).
+    promotion_id: Mapped[str | None] = mapped_column(
+        ForeignKey("promotions.id"), nullable=True, index=True
+    )
+    status: Mapped[str] = mapped_column(String, default=RedemptionStatus.REDEEMED)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )

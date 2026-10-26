@@ -1,0 +1,84 @@
+{
+  "$defs": {
+    "PaymentSuccessfulPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "amount": {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "title": "Amount",
+          "type": "string"
+        },
+        "customer_id": {
+          "title": "Customer Id",
+          "type": "string"
+        },
+        "order_id": {
+          "title": "Order Id",
+          "type": "string"
+        },
+        "payment_id": {
+          "title": "Payment Id",
+          "type": "string"
+        },
+        "status": {
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "payment_id",
+        "order_id",
+        "customer_id",
+        "amount",
+        "status"
+      ],
+      "title": "PaymentSuccessfulPayload",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "aggregate_id": {
+      "title": "Aggregate Id",
+      "type": "string"
+    },
+    "correlation_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Correlation Id"
+    },
+    "event_id": {
+      "title": "Event Id",
+      "type": "string"
+    },
+    "event_type": {
+      "const": "PaymentSuccessful",
+      "title": "Event Type",
+      "type": "string"
+    },
+    "occurred_at": {
+      "format": "date-time",
+      "title": "Occurred At",
+      "type": "string"
+    },
+    "payload": {
+      "$ref": "#/$defs/PaymentSuccessfulPayload"
+    }
+  },
+  "required": [
+    "event_id",
+    "aggregate_id",
+    "occurred_at",
+    "event_type",
+    "payload"
+  ],
+  "title": "PaymentSuccessful",
+  "type": "object"
+}

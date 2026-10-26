@@ -2,6 +2,8 @@
 # local artifacts out of every image — env vars come from env_file at runtime.
 **/.env
 **/.env.*
+# Token-signing keys: mounted into user-service at runtime, never built in.
+secrets
 **/.venv
 **/__pycache__
 **/*.py[cod]

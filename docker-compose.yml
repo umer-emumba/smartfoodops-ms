@@ -9,6 +9,42 @@ x-logging: &default-logging
     max-size: "10m"
     max-file: "3"
 
+# Celery workers (docs/week3-plan.md W3-D1, W3-D7) — the outbox relays and
+# notification sending: the service's own image, running Celery (worker +
+# beat) instead of the API. They start after their service is healthy, i.e.
+# after its migrations ran. Dev-only broker credentials, like the Postgres
+# ones below.
+# Observability (docs/week3-plan.md W3-D11, W3-D14): every service and
+# worker sends spans over OTLP/HTTP straight to Jaeger (sampling everything
+# in dev) and serves Prometheus metrics on an internal port — 9100, plus
+# 9101 for the Temporal SDK's where a Temporal worker runs. Neither port is
+# published.
+x-observability-env: &observability-env
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+  OTEL_TRACES_SAMPLER: parentbased_traceidratio
+  OTEL_TRACES_SAMPLER_ARG: "1.0"
+  METRICS_PORT: "9100"
+  TEMPORAL_METRICS_PORT: "9101"
+
+x-broker-env: &broker-env
+  <<: *observability-env
+  CELERY_BROKER_URL: amqp://sfo:sfo@rabbitmq:5672//
+
+x-celery-worker: &celery-worker
+  logging: *default-logging
+  command:
+    - celery
+    - -A
+    - app.celery_app
+    - worker
+    - --beat
+    - --pool=solo
+    # Both rely on remote control, which is off (sfo_common.celery).
+    - --without-mingle
+    - --without-gossip
+    - --loglevel=INFO
+  environment: *broker-env
+
 x-postgres-common: &postgres-common
   logging: *default-logging
   image: postgres:16-alpine
@@ -35,6 +71,8 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: restaurant_db
     volumes: ["restaurant-db-data:/var/lib/postgresql/data"]
+    # Host access for the real-DB tests (scripts/check.sh --with-db), localhost only.
+    ports: ["127.0.0.1:15433:5432"]
 
   order-db:
     <<: *postgres-common
@@ -43,6 +81,8 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: order_db
     volumes: ["order-db-data:/var/lib/postgresql/data"]
+    # Host access for the real-DB tests (scripts/check.sh --with-db), localhost only.
+    ports: ["127.0.0.1:15434:5432"]
 
   delivery-db:
     <<: *postgres-common
@@ -51,6 +91,8 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: delivery_db
     volumes: ["delivery-db-data:/var/lib/postgresql/data"]
+    # Host access for the real-DB tests (scripts/check.sh --with-db), localhost only.
+    ports: ["127.0.0.1:15435:5432"]
 
   payment-db:
     <<: *postgres-common
@@ -59,6 +101,8 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: payment_db
     volumes: ["payment-db-data:/var/lib/postgresql/data"]
+    # Host access for the real-DB tests (scripts/check.sh --with-db), localhost only.
+    ports: ["127.0.0.1:15436:5432"]
 
   notification-db:
     <<: *postgres-common
@@ -67,12 +111,16 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: notification_db
     volumes: ["notification-db-data:/var/lib/postgresql/data"]
+    # Host access for the real-DB tests (scripts/check.sh --with-db), localhost only.
+    ports: ["127.0.0.1:15437:5432"]
 
   # ---------- Infra: shared stores/brokers ----------
   mongo:
     logging: *default-logging
     image: mongo:7
     volumes: ["mongo-data:/data/db"]
+    # Host access for analytics-service's db tests, localhost only.
+    ports: ["127.0.0.1:27018:27017"]
     healthcheck:
       test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
       interval: 5s
@@ -82,6 +130,14 @@ services:
   redis:
     logging: *default-logging
     image: redis:7-alpine
+    # Persistent: the JWT deny-list (revoked tokens) and rate-limit counters
+    # must survive a restart. AOF fsynced every second — at most ~1s of writes
+    # lost on a crash; caches and live rider positions rebuild on their own.
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    volumes: ["redis-data:/data"]
+    # Host access for the real-Redis tests (scripts/check.sh --with-db,
+    # Redis DB 15), localhost only.
+    ports: ["127.0.0.1:16379:6379"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -93,6 +149,11 @@ services:
     # 4.3: the community-supported series (3.13 is commercial-support only).
     # Pinned to a patch so builds are reproducible.
     image: rabbitmq:4.3.6-management-alpine
+    # The default `guest` user may only connect from localhost, so the
+    # workers get their own (dev-only) user.
+    environment:
+      RABBITMQ_DEFAULT_USER: sfo
+      RABBITMQ_DEFAULT_PASS: sfo
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 5s
@@ -134,6 +195,30 @@ services:
       timeout: 10s
       retries: 10
 
+  kafka-init:
+    logging: *default-logging
+    # One-shot: creates the topics explicitly instead of relying on
+    # auto-create (week3-plan W3-D15) — 3 partitions each (keyed by aggregate
+    # ID, so consumers can scale out to 3), 7-day retention. Idempotent
+    # (--if-not-exists); exits 0 when done. Workers depend on it completing.
+    image: confluentinc/cp-kafka:8.3.2
+    depends_on:
+      kafka: { condition: service_healthy }
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        for topic in order-events delivery-events payment-events; do
+          for name in "$$topic" "$$topic.dlq"; do
+            kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists \
+              --topic "$$name" --partitions 3 --replication-factor 1 \
+              --config retention.ms=604800000
+          done
+        done
+        kafka-topics --bootstrap-server kafka:9092 --describe \
+          --topic 'order-events|delivery-events|payment-events' --exclude-internal
+
   schema-registry:
     logging: *default-logging
     image: confluentinc/cp-schema-registry:8.3.2
@@ -154,6 +239,67 @@ services:
       timeout: 5s
       retries: 10
 
+  # Traces (week3-plan W3-D11): Jaeger v2 — itself an OpenTelemetry
+  # Collector distribution, so services export OTLP to it directly. The
+  # default all-in-one config keeps traces in memory (lost on restart),
+  # which is what dev needs. UI on localhost only; OTLP stays internal.
+  jaeger:
+    logging: *default-logging
+    image: jaegertracing/jaeger:2.22.0
+    ports: ["127.0.0.1:16686:16686"]
+
+  # Metrics, dashboards and logs (docs/week3-plan.md step 5). UIs on
+  # localhost only: Prometheus :9090, Grafana :3001 (anonymous read-only
+  # viewer in dev; admin/admin to edit). Loki and Alloy stay internal.
+  prometheus:
+    logging: *default-logging
+    image: prom/prometheus:v3.15.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+    volumes:
+      - ./infra/prometheus:/etc/prometheus:ro
+      - prometheus-data:/prometheus
+    ports: ["127.0.0.1:9090:9090"]
+
+  loki:
+    logging: *default-logging
+    # Single-binary mode with the image's own local config (filesystem
+    # storage, schema v13 — structured metadata for trace_id).
+    image: grafana/loki:3.7.8
+    volumes: ["loki-data:/loki"]
+
+  # Ships every container's logs to Loki (infra/alloy/config.alloy). The
+  # Docker socket is mounted read-only — local development only.
+  alloy:
+    logging: *default-logging
+    image: grafana/alloy:v1.20.1
+    command:
+      - run
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./infra/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on: [loki]
+
+  grafana:
+    logging: *default-logging
+    image: grafana/grafana:13.2.4
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/service-overview.json
+      GF_FEATURE_TOGGLES_ENABLE: jaegerEnableGrpcEndpoint
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    # 3001 on the host: 3000 is the demo UI's static server (demo-ui/).
+    ports: ["127.0.0.1:3001:3000"]
+    depends_on: [prometheus, loki, jaeger]
+
   temporal:
     logging: *default-logging
     # Temporal CLI dev server — Temporal's recommended local setup, replacing the
@@ -168,6 +314,8 @@ services:
       - --ip=0.0.0.0
       - --ui-ip=0.0.0.0
       - --db-filename=/home/temporal/temporal.db
+      # Server metrics for Prometheus (internal network only).
+      - --metrics-port=9100
     # Mounted on the image's own temporal-owned home dir: the container runs as
     # the non-root `temporal` user, and a fresh named volume takes the
     # ownership of the directory it's mounted over (a new /data would be
@@ -189,6 +337,7 @@ services:
     logging: *default-logging
     build: { context: ., dockerfile: services/api-gateway/Dockerfile }
     env_file: [services/api-gateway/.env]
+    environment: *observability-env
     depends_on:
       redis: { condition: service_healthy }
     ports: ["127.0.0.1:8080:8000"]
@@ -202,6 +351,11 @@ services:
     logging: *default-logging
     build: { context: ., dockerfile: services/user-service/Dockerfile }
     env_file: [services/user-service/.env]
+    environment: *observability-env
+    # The token-signing private key: only this service gets it. Everyone else
+    # verifies with the public keys it serves at /.well-known/jwks.json.
+    # The additional public keys are the next/previous key during a rotation.
+    secrets: [jwt_private_key, jwt_additional_public_keys]
     depends_on:
       user-db: { condition: service_healthy }
       redis: { condition: service_healthy }
@@ -215,11 +369,13 @@ services:
     logging: *default-logging
     build: { context: ., dockerfile: services/restaurant-service/Dockerfile }
     env_file: [services/restaurant-service/.env]
+    environment: *observability-env
     depends_on:
       restaurant-db: { condition: service_healthy }
       # Public-read cache (app/cache.py). Not strictly required — a Redis
       # outage only means cache misses — but start with it available.
       redis: { condition: service_healthy }
+      temporal: { condition: service_healthy }
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 5s
@@ -230,8 +386,10 @@ services:
     logging: *default-logging
     build: { context: ., dockerfile: services/order-service/Dockerfile }
     env_file: [services/order-service/.env]
+    environment: *observability-env
     depends_on:
       order-db: { condition: service_healthy }
+      temporal: { condition: service_healthy }
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 5s
@@ -242,9 +400,11 @@ services:
     logging: *default-logging
     build: { context: ., dockerfile: services/delivery-service/Dockerfile }
     env_file: [services/delivery-service/.env]
+    environment: *observability-env
     depends_on:
       delivery-db: { condition: service_healthy }
       mongo: { condition: service_healthy }
+      temporal: { condition: service_healthy }
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 5s
@@ -255,8 +415,71 @@ services:
     logging: *default-logging
     build: { context: ., dockerfile: services/payment-service/Dockerfile }
     env_file: [services/payment-service/.env]
+    environment: *observability-env
     depends_on:
       payment-db: { condition: service_healthy }
+      temporal: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Start order: this worker waits for its API (so migrations have run),
+  # the DB, RabbitMQ (Celery broker), Schema Registry, and kafka-init (topics
+  # exist). Same image as the API, but runs Celery: the outbox relay (beat)
+  # publishes outbox rows to Kafka.
+  order-worker:
+    <<: *celery-worker
+    environment:
+      <<: *broker-env
+      OTEL_SERVICE_NAME: order-worker
+    build: { context: ., dockerfile: services/order-service/Dockerfile }
+    env_file: [services/order-service/.env]
+    depends_on:
+      order-service: { condition: service_healthy }
+      order-db: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      schema-registry: { condition: service_healthy }
+      kafka-init: { condition: service_completed_successfully }
+
+  payment-worker:
+    <<: *celery-worker
+    environment:
+      <<: *broker-env
+      OTEL_SERVICE_NAME: payment-worker
+    build: { context: ., dockerfile: services/payment-service/Dockerfile }
+    env_file: [services/payment-service/.env]
+    depends_on:
+      payment-service: { condition: service_healthy }
+      payment-db: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      schema-registry: { condition: service_healthy }
+      kafka-init: { condition: service_completed_successfully }
+
+  delivery-worker:
+    <<: *celery-worker
+    environment:
+      <<: *broker-env
+      OTEL_SERVICE_NAME: delivery-worker
+    build: { context: ., dockerfile: services/delivery-service/Dockerfile }
+    env_file: [services/delivery-service/.env]
+    depends_on:
+      delivery-service: { condition: service_healthy }
+      delivery-db: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      schema-registry: { condition: service_healthy }
+      kafka-init: { condition: service_completed_successfully }
+
+  # Live feeds over SSE (docs/week2-plan.md D8): stateless, talks only to
+  # Redis — no database. Long-lived connections stay off the REST services.
+  tracking-service:
+    logging: *default-logging
+    build: { context: ., dockerfile: services/tracking-service/Dockerfile }
+    env_file: [services/tracking-service/.env]
+    environment: *observability-env
+    depends_on:
+      redis: { condition: service_healthy }
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 5s
@@ -267,13 +490,56 @@ services:
     logging: *default-logging
     build: { context: ., dockerfile: services/notification-service/Dockerfile }
     env_file: [services/notification-service/.env]
+    # The Kafka consumer runs in this process (KAFKA_CONSUMER_MODE=embedded)
+    # and enqueues sends on RabbitMQ.
+    environment: *broker-env
     depends_on:
       notification-db: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      schema-registry: { condition: service_healthy }
+      kafka-init: { condition: service_completed_successfully }
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 5s
       timeout: 5s
       retries: 10
+
+  # Analytics read model (docs/week3-plan.md step 3): consumes every topic
+  # and DLQ into Mongo; no Postgres, so no migrations.
+  analytics-service:
+    logging: *default-logging
+    build: { context: ., dockerfile: services/analytics-service/Dockerfile }
+    env_file: [services/analytics-service/.env]
+    environment: *observability-env
+    depends_on:
+      mongo: { condition: service_healthy }
+      schema-registry: { condition: service_healthy }
+      kafka-init: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  notification-worker:
+    <<: *celery-worker
+    environment:
+      <<: *broker-env
+      OTEL_SERVICE_NAME: notification-worker
+    build: { context: ., dockerfile: services/notification-service/Dockerfile }
+    env_file: [services/notification-service/.env]
+    depends_on:
+      notification-service: { condition: service_healthy }
+      notification-db: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+
+# Dev-only: a file on the host (scripts/gen_jwt_key.py creates it, git-ignored).
+# Real deployments use a secrets manager instead.
+secrets:
+  jwt_private_key:
+    file: ./secrets/jwt_private_key.pem
+  jwt_additional_public_keys:
+    file: ./secrets/jwt_additional_public_keys.pem
 
 volumes:
   user-db-data:
@@ -283,5 +549,9 @@ volumes:
   payment-db-data:
   notification-db-data:
   temporal-data:
+  redis-data:
   mongo-data:
   kafka-data:
+  prometheus-data:
+  loki-data:
+  grafana-data:

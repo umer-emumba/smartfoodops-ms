@@ -11,8 +11,8 @@ from app.schemas import PaymentResponse
 
 router = APIRouter(prefix="/v1", tags=["payments"])
 
-# Week 1: read-only skeleton. authorize/capture/refund (with idempotency-key
-# handling) is driven by the order saga starting Week 2 — see docs/PROGRESS.md.
+# Read-only for clients. Payments are created and moved through their
+# lifecycle only by the order saga's activities (app/activities.py).
 
 
 @router.get("/payments/by-order/{order_id}", response_model=PaymentResponse)

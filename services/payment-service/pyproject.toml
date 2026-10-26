@@ -9,9 +9,11 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0.35",
     "alembic>=1.13",
     "redis>=5.0",
-    "sfo-common",
+    "temporalio>=1.34",
+    "sfo-common[temporal]",
+    "sfo-contracts",
     "sfo-auth",
-    "sfo-events",
+    "sfo-events[relay]",
     "sfo-observability",
 ]
 
@@ -27,6 +29,7 @@ packages = ["app"]
 
 [tool.uv.sources]
 sfo-common = { workspace = true }
+sfo-contracts = { workspace = true }
 sfo-auth = { workspace = true }
 sfo-events = { workspace = true }
 sfo-observability = { workspace = true }

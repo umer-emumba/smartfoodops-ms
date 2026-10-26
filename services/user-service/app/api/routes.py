@@ -42,6 +42,7 @@ from app.schemas import (
     TokenResponse,
     UserResponse,
 )
+from app.signing import get_signer
 
 router = APIRouter(prefix="/v1", tags=["auth"])
 
@@ -73,8 +74,7 @@ def _issue_tokens(user: User) -> tuple[str, RefreshToken, str]:
     access_token = create_access_token(
         user_id=user.id,
         role=Role(user.role),
-        secret=settings.jwt_secret,
-        algorithm=settings.jwt_algorithm,
+        signer=get_signer(),
         ttl_minutes=settings.access_token_ttl_minutes,
     )
     lookup_id, raw_secret, token_str = generate_refresh_token()
@@ -296,6 +296,8 @@ async def unblock(
         raise NotFoundError("User not found")
     user.is_blocked = False
     await session.commit()
+    # Removes the user from the Redis deny-list, so the gateway and the services
+    # accept their tokens again.
     await unblock_user(redis, user_id)
     return user
 
