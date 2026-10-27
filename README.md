@@ -307,11 +307,13 @@ docker compose exec order-db psql -U postgres -d order_db -tAc \
 ### Test UI (click through an order by hand)
 
 ```bash
-cd demo-ui && python3 -m http.server 3000 --bind 127.0.0.1   # then open http://localhost:3000
+cd demo-ui/static && python3 -m http.server 3000 --bind 127.0.0.1   # then open http://localhost:3000
 ```
 
 A plain HTML/JS page with customer, restaurant, two riders and an admin side by side,
-including the live feeds — see [demo-ui/README.md](demo-ui/README.md). For testing and
+including the live feeds. There is also a React app with a portal per role
+(`cd demo-ui/react && npm install --legacy-peer-deps && npm run dev`, then
+http://localhost:5173) — see [demo-ui/README.md](demo-ui/README.md). For testing and
 demos only; not part of Docker.
 
 ### Smoke test (whole running system)

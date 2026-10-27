@@ -298,7 +298,7 @@ services:
       - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana-data:/var/lib/grafana
-    # 3001 on the host: 3000 is the demo UI's static server (demo-ui/).
+    # 3001 on the host: 3000 is the static demo UI's server (demo-ui/static/).
     ports: ["127.0.0.1:3001:3000"]
     depends_on: [prometheus, loki, jaeger]
 
