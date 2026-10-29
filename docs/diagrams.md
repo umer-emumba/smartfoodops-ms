@@ -50,7 +50,7 @@ graph TD
     PaymentDB -->|"outbox → payment-worker"| Kafka
     Kafka -->|consumer group| NS
     Kafka -->|"consumer group (+ .dlq topics)"| AS
-    Kafka -->|"consumer group (order-events)"| TS
+    Kafka -->|"consumer group (order-, delivery-events)"| TS
     AS --> AnalyticsDB[(MongoDB: analytics)]
     NS -->|"send tasks"| Rabbit[(RabbitMQ)]
     Rabbit --> NW[notification-worker]
@@ -325,7 +325,7 @@ flowchart LR
     OB -->|"relay worker, every 1s:<br/>advisory lock → read → produce → flush → dispatched_at<br/>(Kafka down: rows wait, retried each tick)"| K[("Kafka topic<br/>key = aggregate ID")]
     K -->|"poll → deserialize (Schema Registry)"| NC["notification-service consumer"]
     K --> AC["analytics-service consumer"]
-    K -->|"order-events"| TC["tracking-service consumer"]
+    K -->|"order-, delivery-events"| TC["tracking-service consumer"]
     TC -->|"Lua: state + PUBLISH, never backwards;<br/>Redis down: wait and retry"| RDS[(Redis → live feeds)]
     NC -->|"notifications + processed_events<br/>(one transaction), then commit offset"| NDB[(notification_db)]
     NC -->|"after commit: one task per row"| MQ[(RabbitMQ)]
@@ -461,6 +461,10 @@ sequenceDiagram
     W->>OS: transition → assigned (RiderAssigned)
     R->>GW: PATCH /v1/riders/me/location (repeated)
     DS-)TS: Redis PUBLISH → customer `location`
+    A->>GW: POST /v1/orders/{id}/food-ready
+    GW->>OS: forward → signal food_ready
+    W->>DS: mark_food_ready (ready_at = now, rider's ETAs recomputed)
+    DS-)TS: DeliveryFoodReady via Kafka → customer and rider `food_ready`
     R->>GW: POST …/picked-up → signal
     W->>DS: transition_delivery → picked_up
     W->>OS: transition → picked_up
@@ -472,6 +476,34 @@ sequenceDiagram
     W->>DS: release_rider (rider available again)
     TS-->>C: `status: delivered`, stream ends
 ```
+
+The restaurant can mark the food ready any time from `confirmed` to pickup, including
+during the rider search. Deadlines while waiting for pickup and delivery:
+
+```mermaid
+stateDiagram-v2
+    [*] --> WaitingForFood: rider assigned
+    WaitingForFood --> WaitingForPickup: food_ready
+    WaitingForFood --> Cancelled: kitchen timeout
+    WaitingForFood --> RiderSearch: rider drops out
+    WaitingForPickup --> RiderSearch: rider drops out or is late
+    RiderSearch --> WaitingForFood: assigned, food not ready
+    RiderSearch --> WaitingForPickup: assigned, food ready
+    WaitingForPickup --> PickedUp: picked_up
+    PickedUp --> Delivered: delivered
+    Cancelled --> [*]
+    Delivered --> [*]
+```
+
+| Deadline | When | What happens |
+|---|---|---|
+| Food overdue | 15 min after it was due | flagged `food_overdue`; the order carries on |
+| Kitchen timeout | 1 h after it was due | order `cancelled` (`kitchen_timeout`), full compensation |
+| Rider late | 15 min after the later of "ready" and the rider's pickup ETA | rider released (`late`, back in the pool), next rider searched |
+| Delivery overdue | 2 h after pickup | flagged `delivery_overdue`; a system admin can `mark-delivered` |
+
+"Due" is confirmation + the restaurant's prep time. Flags count `order_saga_overdue`
+and raise the `OrdersOverdue` alert; they don't change the order.
 
 ## Rider assignment and reassignment
 
@@ -504,6 +536,9 @@ sequenceDiagram
         R1->>DS: POST …/drop-out (or no location ping for 3 min → stale-rider detector)
         DS->>W: signal rider_dropped
         W->>DS: release_rider(dropped) → R1 offline, reassignment_count + 1
+        W->>DS: offer_to_nearest_rider(exclude = [R1]) → R2 …
+    else R1 accepts, but hasn't picked up ready food 15 min after the later of "ready" and their pickup ETA
+        W->>DS: release_rider(late) → R1 available, reassignment_count + 1
         W->>DS: offer_to_nearest_rider(exclude = [R1]) → R2 …
     end
     Note over W,DS: Riders who turned it down are asked again after 2 min.<br/>Nobody free → look again every 30s, farther out (5 → 8 → 12 km).<br/>After 10 min: compensate → order `cancelled` (no_rider_available)
@@ -543,8 +578,9 @@ sequenceDiagram
 
 The same compensation runs on every failure before pickup: restaurant rejects or doesn't
 answer in 5 min (`rejected`), out of stock / at capacity / card declined (`rejected`), no
-rider (`cancelled`). After pickup nothing is undone — the remaining steps retry until they
-succeed, and a problem becomes a refund.
+rider (`cancelled`), food not ready 1 h after it was due (`cancelled`, `kitchen_timeout`).
+After pickup nothing is undone — the remaining steps retry until they succeed, and a
+problem becomes a refund.
 
 ## Post-delivery refund
 
@@ -797,7 +833,8 @@ erDiagram
         float dropoff_lat
         float dropoff_lng
         float distance_km
-        datetime ready_at "food ready: now + restaurant prep time"
+        datetime ready_at "due: confirmation + prep time; the real time once marked"
+        datetime food_ready_at "set when the restaurant marks the food ready"
         datetime offer_expires_at
         datetime pickup_eta
         datetime dropoff_eta

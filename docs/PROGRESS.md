@@ -787,6 +787,27 @@ processes in dev.
       enabled (`smoke_test.py --events`, failure drills)
 - [x] Docs fully reflect the finished Part A system, ready for mentor review
 
+## Improvements after Week 3
+
+Built after Part A was complete; each commit message has the details.
+
+- [x] Asymmetric JWT signing: Ed25519 + JWKS from `user-service` instead of a shared
+      HS256 secret, with key rotation (`a991fbc`)
+- [x] First admin created by a `create_admin` command, not an endpoint; `seed.py`
+      re-runnable (`3e96d9e`)
+- [x] Live-feed order status driven from Kafka (tracking-service consumer), streams
+      resynced after a Pub/Sub reconnect (`6c164b5`)
+- [x] Rider live feed; delivery status and ETAs reach the live feeds through Kafka
+      (`1f5ba9a`)
+- [x] Rider search re-offers riders who turned it down (after 2 min) and widens the
+      radius 5 → 8 → 12 km (`d580bc7`)
+- [x] Saga: a confirmed order whose later step fails ends `cancelled`, not `rejected`
+      (`ab73ef1`)
+- [x] Restaurant marks food ready (`DeliveryFoodReady`); pickup and delivery deadlines
+      in the saga, `OrdersOverdue` alert, admin `mark-delivered` (`22c887c`)
+- [x] React demo UI with a portal per role; static test UI moved to `demo-ui/static`
+      (`a1d5c44`)
+
 ## Documentation & Submission
 
 - [x] `README.md`: overview, architecture diagram + order/delivery sequence diagram, core

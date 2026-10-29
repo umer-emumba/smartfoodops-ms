@@ -90,6 +90,7 @@ sequenceDiagram
     A->>T: accept (POST …/restaurant-response → signal) → `confirmed`
     T->>DS: create delivery, offer the nearest available rider
     R->>T: accept (signal) → `assigned`, ETA
+    A->>T: food ready (POST …/food-ready → signal) → ETAs updated
     R->>T: picked up → `picked_up` (kitchen capacity freed)
     R->>T: delivered
     T->>PS: capture payment (final settlement) → `delivered`
@@ -110,7 +111,11 @@ Full state transitions, compensation matrix and consistency model:
   every later transition, with a 5-minute restaurant decision timeout.
 - **Delivery lifecycle**: rider registration, admin vetting, availability and location
   pings → nearest available rider offered (Redis GEO), 60s to accept → reassignment on
-  decline, expiry or drop-out → pickup → delivery, with ETAs.
+  decline, expiry or drop-out → restaurant marks the food ready → pickup → delivery, with
+  ETAs. Deadlines tell a late kitchen from a late rider: food not ready 1 h after it was
+  due cancels the order; a rider who doesn't collect ready food in time is replaced; an
+  order not delivered 2 h after pickup is flagged, and a system admin can mark it
+  delivered.
 - **Live tracking**: customers follow their order, restaurants get new orders and riders
   get offers over SSE (`/v1/tracking/...`), served by `tracking-service`. Order and
   delivery updates come from Kafka (so none is lost), and Redis Pub/Sub delivers them to
@@ -125,7 +130,7 @@ Full state transitions, compensation matrix and consistency model:
   computes the nine Part A metrics (`/v1/analytics/...`). Consumers are idempotent, and a
   message they can't process goes to a dead-letter topic.
 - **Observability**: one trace per order across every service in Jaeger; Prometheus
-  metrics, 4 Grafana dashboards and 7 alerts; all logs searchable in Grafana (Loki), each
+  metrics, 4 Grafana dashboards and 8 alerts; all logs searchable in Grafana (Loki), each
   line linked to its trace.
 
 ## Tech stack
