@@ -2,7 +2,7 @@
 (docs/week2-plan.md §5). REST endpoints in order-service and delivery-service
 signal the order saga with these."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import StrEnum
 from typing import Literal
@@ -21,6 +21,7 @@ class OrderSagaSignal(StrEnum):
     RESTAURANT_RESPONSE = "restaurant_response"
     RIDER_RESPONSE = "rider_response"
     RIDER_DROPPED = "rider_dropped"
+    FOOD_READY = "food_ready"
     PICKED_UP = "picked_up"
     DELIVERED = "delivered"
     CANCEL = "cancel"
@@ -100,10 +101,25 @@ class OrderSagaInput:
     promo_code: str | None = None
     # Rider assignment (docs/week2-plan.md §7).
     rider_offer_timeout_seconds: int = 60
-    max_rider_offers: int = 5
     rider_search_timeout_seconds: int = 600
     # How often to look again while no rider is free.
     rider_search_retry_seconds: int = 30
+    # A rider who declined or let the offer expire is asked again after this.
+    rider_reoffer_after_seconds: int = 120
+    # Search radius around the restaurant: starts at the first and widens
+    # one step each time nobody is free, staying at the last.
+    rider_search_radii_km: list[float] = field(default_factory=lambda: [5.0, 8.0, 12.0])
+    # Kitchen deadlines, from when the food was due (confirmation + prep
+    # time): not marked ready this long after → flagged; this long → the
+    # order is cancelled (`kitchen_timeout`).
+    food_overdue_seconds: int = 900
+    kitchen_timeout_seconds: int = 3600
+    # Food ready but not picked up this long after the later of "ready" and
+    # the rider's pickup ETA → the rider is replaced.
+    pickup_grace_seconds: int = 900
+    # Not delivered this long after pickup: flagged for support (who can mark
+    # it delivered); the saga keeps waiting.
+    delivery_overdue_seconds: int = 7200
 
 
 @dataclass(frozen=True)

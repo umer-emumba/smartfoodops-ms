@@ -90,7 +90,8 @@ function follow(id) {
       },
       delivery: (e) => {
         const eta = e.pickup_eta ? `, pickup ETA ${time(e.pickup_eta)}, drop-off ETA ${time(e.dropoff_eta)}` : "";
-        log(`delivery: ${e.status}${eta}`, "event");
+        const ready = e.food_ready_at ? " — food ready" : "";
+        log(`delivery: ${e.status}${ready}${eta}`, "event");
         refreshDetails();
       },
       location: (e) => log(`rider at ${e.lat.toFixed(4)}, ${e.lng.toFixed(4)}`, "event"),
@@ -123,6 +124,7 @@ export async function refreshDetails() {
       ["Refunded", order.refunded_amount || null],
       ["Payment", payment && `${payment.status}${payment.failure_reason ? ` (${payment.failure_reason})` : ""}`],
       ["Delivery", delivery && `${delivery.status}, reassigned ${delivery.reassignment_count}×`],
+      ["Food ready", time(delivery?.food_ready_at)],
       ["Pickup ETA", time(delivery?.pickup_eta)],
       ["Drop-off ETA", time(delivery?.dropoff_eta)],
     ]),

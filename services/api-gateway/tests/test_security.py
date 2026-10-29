@@ -21,7 +21,6 @@ def test_public_routes_classified_correctly() -> None:
     assert is_public_route("POST", "auth", "login")
     assert is_public_route("POST", "auth", "register")
     assert is_public_route("POST", "auth", "refresh")
-    assert is_public_route("POST", "auth", "bootstrap-admin")
     assert is_public_route("GET", "restaurants", "")
     assert is_public_route("GET", "restaurants", "0198abc1-2345-7def-8901-abcdef123456")
     assert is_public_route("GET", "restaurants", "0198abc1-2345-7def-8901-abcdef123456/menu")
@@ -47,6 +46,8 @@ def test_private_routes_not_misclassified_as_public() -> None:
     )
     assert not is_public_route("GET", "users", "")
     assert not is_public_route("GET", "orders", "admin")
+    # The old admin-bootstrap endpoint is gone; the path must not be open.
+    assert not is_public_route("POST", "auth", "bootstrap-admin")
 
 
 @pytest.fixture

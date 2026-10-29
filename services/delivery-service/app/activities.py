@@ -5,9 +5,11 @@ Assignment (D6): the nearest available riders come from Redis GEO; a rider
 is claimed with one atomic `UPDATE riders SET status='busy' WHERE ...
 status='available'`, so two deliveries can never get the same rider.
 
-Every status change writes a history row and a `DeliveryStatusUpdated`
-outbox event in the same transaction, then publishes to the order's
-live-tracking channel. Each activity locks the delivery row and is safe to
+Every status change, creation included, writes a history row and a
+`DeliveryStatusUpdated` outbox event in the same transaction; new ETAs write
+a `DeliveryEtaUpdated` event. Those events are also what the live feeds show
+(tracking-service consumes them): the customer's delivery status and ETAs,
+and the rider's offers. Each activity locks the delivery row and is safe to
 re-run (Temporal retries)."""
 
 from datetime import UTC, datetime, timedelta
@@ -33,7 +35,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from temporalio import activity
 
-from app import eta, repository, rider_locations, tracking
+from app import eta, repository, rider_locations
 from app.config import settings
 from app.db import SessionFactory
 from app.models import Delivery, DeliveryOffer, DeliveryStatusHistory, OutboxEvent, Rider
@@ -42,8 +44,14 @@ from app.state_machine import DeliveryStatus, can_transition
 D = DeliveryStatus
 
 # Offer outcomes that put the delivery back up for assignment.
-_REASSIGN = {RiderReleaseOutcome.DECLINED, RiderReleaseOutcome.EXPIRED, RiderReleaseOutcome.DROPPED}
+_REASSIGN = {
+    RiderReleaseOutcome.DECLINED,
+    RiderReleaseOutcome.EXPIRED,
+    RiderReleaseOutcome.DROPPED,
+    RiderReleaseOutcome.LATE,
+}
 _OPEN_OFFER = ("pending", "accepted")
+_BEFORE_PICKUP = (D.PENDING_ASSIGNMENT, D.OFFERED, D.ASSIGNED)
 
 
 def _now() -> datetime:
@@ -67,18 +75,57 @@ def _invalid(delivery: Delivery, action: str) -> Exception:
     )
 
 
-async def _set_status(
-    session: AsyncSession, delivery: Delivery, to_status: DeliveryStatus, reason: str | None = None
-) -> None:
-    """Status + history row + outbox event, in the caller's transaction. The
-    event names the rider's user account so notification-service can reach
-    them without asking this service (week3-plan W3-D8)."""
-    from_status = delivery.status
-    rider_user_id = (
-        await session.scalar(select(Rider.user_id).where(Rider.id == delivery.rider_id))
-        if delivery.rider_id is not None
-        else None
+async def _user_id_of(session: AsyncSession, rider_id: str | None) -> str | None:
+    if rider_id is None:
+        return None
+    return await session.scalar(select(Rider.user_id).where(Rider.id == rider_id))
+
+
+async def _status_event(
+    session: AsyncSession,
+    delivery: Delivery,
+    from_status: str | None,
+    *,
+    reason: str | None = None,
+    released_rider_user_id: str | None = None,
+) -> OutboxEvent:
+    """The `DeliveryStatusUpdated` outbox row for the delivery's current
+    status. It names the rider's user account so notification-service and
+    the rider's live feed can reach them without asking this service
+    (week3-plan W3-D8)."""
+    return new_outbox_row(
+        OutboxEvent,
+        aggregate_id=delivery.id,
+        event_type=EventType.DELIVERY_STATUS_UPDATED,
+        payload={
+            "delivery_id": delivery.id,
+            "order_id": delivery.order_id,
+            "customer_id": delivery.customer_id,
+            "rider_id": delivery.rider_id,
+            "rider_user_id": await _user_id_of(session, delivery.rider_id),
+            "from_status": from_status,
+            "to_status": delivery.status,
+            "reason": reason,
+            "released_rider_user_id": released_rider_user_id,
+            "pickup_eta": delivery.pickup_eta,
+            "dropoff_eta": delivery.dropoff_eta,
+        },
     )
+
+
+async def _set_status(
+    session: AsyncSession,
+    delivery: Delivery,
+    to_status: DeliveryStatus,
+    reason: str | None = None,
+    *,
+    released_rider_user_id: str | None = None,
+) -> None:
+    """Status + history row + outbox event, in the caller's transaction.
+    delivery-worker sends the event to Kafka: notification-service tells the
+    rider (new offer, assigned, cancelled), analytics-service tracks the
+    delivery, tracking-service updates the live feeds."""
+    from_status = delivery.status
     delivery.status = to_status
     session.add(
         DeliveryStatusHistory(
@@ -89,23 +136,13 @@ async def _set_status(
             reason=reason,
         )
     )
-    # delivery-worker sends it to Kafka; notification-service tells the rider
-    # (new offer, assigned, cancelled), analytics-service tracks the delivery.
     session.add(
-        new_outbox_row(
-            OutboxEvent,
-            aggregate_id=delivery.id,
-            event_type=EventType.DELIVERY_STATUS_UPDATED,
-            payload={
-                "delivery_id": delivery.id,
-                "order_id": delivery.order_id,
-                "customer_id": delivery.customer_id,
-                "rider_id": delivery.rider_id,
-                "rider_user_id": rider_user_id,
-                "from_status": from_status,
-                "to_status": to_status.value,
-                "reason": reason,
-            },
+        await _status_event(
+            session,
+            delivery,
+            from_status,
+            reason=reason,
+            released_rider_user_id=released_rider_user_id,
         )
     )
 
@@ -173,18 +210,19 @@ async def create_delivery(data: CreateDeliveryInput) -> CreateDeliveryResult:
                     delivery_id=delivery.id, from_status=None, to_status=D.PENDING_ASSIGNMENT
                 )
             )
+            # The customer's live feed shows "looking for a rider" from this.
+            session.add(await _status_event(session, delivery, None))
             await session.commit()
         except IntegrityError:
             await session.rollback()
             return await create_delivery(data)
-        await tracking.publish_delivery(delivery)
         return CreateDeliveryResult(delivery_id=delivery.id, status=delivery.status)
 
 
 @activity.defn(name=DeliveryActivity.OFFER_TO_NEAREST_RIDER)
 async def offer_to_nearest_rider(data: OfferRiderInput) -> RiderOffer | None:
     """Offers the delivery to the nearest available, approved rider within
-    the search radius (excluding riders who already had it), holding that
+    the saga's search radius (excluding riders who had it recently), holding that
     rider (`busy`) until they answer or the offer expires. None if nobody is
     free. Re-running while the offer is open returns the same offer."""
     async with SessionFactory() as session:
@@ -200,7 +238,9 @@ async def offer_to_nearest_rider(data: OfferRiderInput) -> RiderOffer | None:
         assert delivery.pickup_lat is not None and delivery.pickup_lng is not None
 
         candidates = await rider_locations.nearest_available(
-            delivery.pickup_lat, delivery.pickup_lng, settings.rider_search_radius_km
+            delivery.pickup_lat,
+            delivery.pickup_lng,
+            data.radius_km or settings.rider_search_radius_km,
         )
         excluded = set(data.exclude_rider_ids)
         claimed: tuple[str, float] | None = None
@@ -248,7 +288,6 @@ async def offer_to_nearest_rider(data: OfferRiderInput) -> RiderOffer | None:
     # Out of the pool now; riders whose claim failed were stale entries.
     for stale_or_claimed in [rider_id, *unavailable]:
         await rider_locations.remove(stale_or_claimed)
-    await tracking.publish_delivery(delivery)
     return RiderOffer(rider_id=rider_id, distance_km=round(km, 2), expires_at=expires_at)
 
 
@@ -279,16 +318,21 @@ async def release_rider(data: ReleaseRiderInput) -> None:
         if data.outcome in _REASSIGN:
             if delivery.status not in (D.OFFERED, D.ASSIGNED):
                 raise _invalid(delivery, f"release ({data.outcome})")
+            # Before clearing it: the event tells this rider they lost it.
+            released = await _user_id_of(session, delivery.rider_id)
             delivery.rider_id = None
             delivery.offer_expires_at = None
             delivery.pickup_eta = delivery.dropoff_eta = None
             delivery.reassignment_count += 1
             await _set_status(
-                session, delivery, D.PENDING_ASSIGNMENT, reason=f"rider_{data.outcome}"
+                session,
+                delivery,
+                D.PENDING_ASSIGNMENT,
+                reason=f"rider_{data.outcome}",
+                released_rider_user_id=released,
             )
         await session.commit()
     await _after_release(rider)
-    await tracking.publish_delivery(delivery)
 
 
 @activity.defn(name=DeliveryActivity.TRANSITION_DELIVERY)
@@ -317,36 +361,97 @@ async def transition_delivery(data: TransitionDeliveryInput) -> None:
             delivery.delivered_at = now
         await _set_status(session, delivery, to_status)
         await session.commit()
-    await tracking.publish_delivery(delivery)
+
+
+async def _estimate(session: AsyncSession, delivery: Delivery) -> tuple[datetime, datetime]:
+    """Pickup and drop-off ETAs for the rider holding `delivery` (app/eta.py)."""
+    rider = await session.get(Rider, delivery.rider_id)
+    assert rider is not None
+    position = await rider_locations.latest(rider.id)
+    if position is None and rider.last_lat is not None and rider.last_lng is not None:
+        position = (rider.last_lat, rider.last_lng)
+    assert delivery.pickup_lat is not None and delivery.pickup_lng is not None
+    assert delivery.dropoff_lat is not None and delivery.dropoff_lng is not None
+    return eta.estimate(
+        now=_now(),
+        rider_position=position,
+        pickup=(delivery.pickup_lat, delivery.pickup_lng),
+        dropoff=(delivery.dropoff_lat, delivery.dropoff_lng),
+        vehicle_type=rider.vehicle_type,
+        ready_at=delivery.ready_at,
+    )
 
 
 @activity.defn(name=DeliveryActivity.COMPUTE_ETA)
 async def compute_eta(data: DeliveryRef) -> DeliveryEta:
     """Pickup and drop-off ETAs for the assigned rider (app/eta.py), stored
-    on the delivery and published to the customer's tracking channel."""
+    on the delivery with a `DeliveryEtaUpdated` event (the customer's live
+    feed shows them from it)."""
     async with SessionFactory() as session:
         delivery = await _locked(session, data.delivery_id)
         if delivery.rider_id is None:
             raise _invalid(delivery, "estimate ETA for")
-        rider = await session.get(Rider, delivery.rider_id)
-        assert rider is not None
-        position = await rider_locations.latest(rider.id)
-        if position is None and rider.last_lat is not None and rider.last_lng is not None:
-            position = (rider.last_lat, rider.last_lng)
-        assert delivery.pickup_lat is not None and delivery.pickup_lng is not None
-        assert delivery.dropoff_lat is not None and delivery.dropoff_lng is not None
-        pickup_eta, dropoff_eta = eta.estimate(
-            now=_now(),
-            rider_position=position,
-            pickup=(delivery.pickup_lat, delivery.pickup_lng),
-            dropoff=(delivery.dropoff_lat, delivery.dropoff_lng),
-            vehicle_type=rider.vehicle_type,
-            ready_at=delivery.ready_at,
-        )
+        pickup_eta, dropoff_eta = await _estimate(session, delivery)
         delivery.pickup_eta, delivery.dropoff_eta = pickup_eta, dropoff_eta
+        session.add(
+            new_outbox_row(
+                OutboxEvent,
+                aggregate_id=delivery.id,
+                event_type=EventType.DELIVERY_ETA_UPDATED,
+                payload={
+                    "delivery_id": delivery.id,
+                    "order_id": delivery.order_id,
+                    "customer_id": delivery.customer_id,
+                    "rider_id": delivery.rider_id,
+                    "status": delivery.status,
+                    "pickup_eta": pickup_eta,
+                    "dropoff_eta": dropoff_eta,
+                },
+            )
+        )
         await session.commit()
-    await tracking.publish_delivery(delivery)
     return DeliveryEta(pickup_eta=pickup_eta, dropoff_eta=dropoff_eta)
+
+
+@activity.defn(name=DeliveryActivity.MARK_FOOD_READY)
+async def mark_food_ready(data: DeliveryRef) -> DeliveryEta | None:
+    """The restaurant marked the food ready: `food_ready_at` is set and
+    `ready_at` becomes the real time, the assigned rider's ETAs are
+    recomputed from it (and returned), and a `DeliveryFoodReady` event tells
+    the customer and that rider. No-op (None) if already marked, or once
+    picked up or cancelled (a cancel may compensate while this runs); None
+    too while no rider is assigned."""
+    async with SessionFactory() as session:
+        delivery = await _locked(session, data.delivery_id)
+        if delivery.food_ready_at is not None or delivery.status not in _BEFORE_PICKUP:
+            return None
+        delivery.food_ready_at = delivery.ready_at = _now()
+        rider_user_id, new_eta = None, None
+        if delivery.status == D.ASSIGNED:
+            pickup_eta, dropoff_eta = await _estimate(session, delivery)
+            delivery.pickup_eta, delivery.dropoff_eta = pickup_eta, dropoff_eta
+            new_eta = DeliveryEta(pickup_eta=pickup_eta, dropoff_eta=dropoff_eta)
+            rider_user_id = await _user_id_of(session, delivery.rider_id)
+        session.add(
+            new_outbox_row(
+                OutboxEvent,
+                aggregate_id=delivery.id,
+                event_type=EventType.DELIVERY_FOOD_READY,
+                payload={
+                    "delivery_id": delivery.id,
+                    "order_id": delivery.order_id,
+                    "customer_id": delivery.customer_id,
+                    "rider_id": delivery.rider_id,
+                    "rider_user_id": rider_user_id,
+                    "status": delivery.status,
+                    "food_ready_at": delivery.food_ready_at,
+                    "pickup_eta": delivery.pickup_eta,
+                    "dropoff_eta": delivery.dropoff_eta,
+                },
+            )
+        )
+        await session.commit()
+    return new_eta
 
 
 @activity.defn(name=DeliveryActivity.CANCEL_DELIVERY)
@@ -382,7 +487,6 @@ async def cancel_delivery(data: OrderRef) -> None:
         await _set_status(session, delivery, D.CANCELLED, reason="order_cancelled")
         await session.commit()
     await _after_release(rider)
-    await tracking.publish_delivery(delivery)
 
 
 ACTIVITIES = [
@@ -391,5 +495,6 @@ ACTIVITIES = [
     release_rider,
     transition_delivery,
     compute_eta,
+    mark_food_ready,
     cancel_delivery,
 ]

@@ -42,6 +42,20 @@ groups:
         annotations:
           summary: "Order sagas ended with system_error in the last 15 minutes"
 
+      - alert: OrdersOverdue
+        # The saga flagged an order (stage label): food not marked ready 15
+        # min after it was due — the kitchen is late —, or picked up but not
+        # delivered 2h later — support should check; a system_admin can mark
+        # it delivered (POST /v1/orders/{id}/mark-delivered). The counter comes
+        # from the Temporal SDK (workflow code), so it can't be created at 0
+        # up front: a series that appeared in the window counts too.
+        expr: |
+          sum by (stage) (increase(order_saga_overdue[15m])) > 0
+            or sum by (stage) (order_saga_overdue unless order_saga_overdue offset 15m) > 0
+        labels: { severity: warning }
+        annotations:
+          summary: "Orders overdue at {{ $labels.stage }} in the last 15 minutes"
+
       - alert: NotificationsFailing
         expr: sum by (channel) (increase(notification_sends_total{result="failed"}[15m])) > 0
         labels: { severity: warning }

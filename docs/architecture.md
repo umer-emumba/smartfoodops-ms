@@ -21,7 +21,7 @@ database directly. Cross-service contact only happens through the mechanisms in
 | `order-service` | Order creation (server-side pricing from `restaurant-service`, idempotency keys), order history + status audit trail, order state machine, restaurant accept/reject, cancel, refunds; the Temporal **order saga** and refund workflow, plus a reconciler that starts sagas a crash left unstarted | Postgres (`order_db`) |
 | `delivery-service` | Rider registration/availability + vetting audit trail, rider location ingestion; deliveries, nearest-rider offers, reassignment, ETA, stale-rider detection | Postgres (`delivery_db`) + Redis (GEO rider pool, live positions) + MongoDB (high-frequency rider location pings, TTL-indexed) |
 | `payment-service` | Simulated card payments: authorize, capture, void, full/partial refund — idempotent per order and per refund | Postgres (`payment_db`) |
-| `tracking-service` | Live SSE feeds: a customer's order, a restaurant's incoming orders. Stateless; ownership checked from Redis state keys | Redis only (Pub/Sub + state keys written by order- and delivery-service) |
+| `tracking-service` | Live SSE feeds: a customer's order, a restaurant's incoming orders, a rider's offers. Stateless; ownership checked from Redis state keys. Its Kafka consumer turns order and delivery events into live-feed updates | Redis (Pub/Sub + state keys); consumer group `tracking-service` on `order-events` and `delivery-events` |
 | `notification-service` | Turns order, payment and delivery events into notifications for the customer, restaurant admin and rider (in-app, simulated email and SMS); the in-app inbox. Kafka consumer group `notification-service` | Postgres (`notification_db`) |
 | `analytics-service` | The nine Part A metrics, computed from events; read API for system admins and restaurant admins. Kafka consumer group `analytics-service` (also reads the `.dlq` topics) | MongoDB (`analytics`: `order_facts`, `rider_shift_facts`, `failed_events`) |
 
@@ -77,8 +77,9 @@ local Traefik-based version of it was removed rather than kept as a demo.
   exclusively, so clients can't reach them.
 - **Temporal** owns the **order saga** and post-delivery refunds — see
   [Order saga (Temporal)](#order-saga-temporal).
-- **Redis Pub/Sub** carries live tracking: order- and delivery-service publish each change,
-  `tracking-service` streams it to whoever is watching — see
+- **Redis Pub/Sub** carries live tracking to whoever is watching: order and delivery
+  changes arrive through Kafka (`tracking-service`'s consumer applies and publishes them),
+  rider positions are published by delivery-service directly — see
   [Real-time delivery tracking](#real-time-delivery-tracking).
 - **Kafka + Schema Registry** owns the domain event backbone — decoupled fan-out to
   `notification-service` and `analytics-service`. Every event is written as an outbox
@@ -96,7 +97,9 @@ local Traefik-based version of it was removed rather than kept as a demo.
 | | `OrderConfirmed`, `OrderRejected`, `OrderCancelled`, `RiderAssigned`, `OrderPickedUp`, `OrderDelivered` | saga transitions (`transition_order`) | from/to status, reason, customer, restaurant admin, total | notification, analytics |
 | `payment-events` | `PaymentSuccessful` | payment-service (authorize) | payment, customer, amount, status | — (published for future consumers; an authorization isn't worth a message, and analytics doesn't need it) |
 | | `RefundProcessed` | payment-service (refund) | amount, customer | notification, analytics |
-| `delivery-events` | `DeliveryStatusUpdated` | delivery-service (every delivery status) | from/to status, `rider_user_id`, customer, reason | notification (rider), analytics |
+| `delivery-events` | `DeliveryStatusUpdated` | delivery-service (every delivery status, creation included) | from/to status, `rider_user_id`, `released_rider_user_id` (who just lost it), customer, reason, ETAs | notification (rider), analytics, tracking |
+| | `DeliveryEtaUpdated` | delivery-service (new ETAs, no status change) | status, rider, pickup/drop-off ETA | tracking |
+| | `DeliveryFoodReady` | delivery-service (`mark_food_ready`: the restaurant marked the food ready) | status, `food_ready_at`, assigned rider's `rider_user_id`, recomputed ETAs | notification (customer, rider), tracking |
 | | `RiderShiftChanged` | delivery-service (offline ↔ on shift: status endpoint, suspension, drop-out) | on/off shift, reason | analytics |
 
 Every topic has a `<topic>.dlq` twin for messages a consumer gave up on; messages keep
@@ -135,11 +138,12 @@ Activity and signal contracts (names, task queues, input/output models) are shar
 | `order-activities` | `transition_order`, `apply_pricing`, `record_refund` | — (idempotent state writes) |
 | `delivery-activities` | `create_delivery` | `cancel_delivery` (also frees the rider) |
 | | `offer_to_nearest_rider` | `release_rider` |
-| | `transition_delivery`, `compute_eta` | — |
+| | `transition_delivery`, `compute_eta`, `mark_food_ready` | — |
 
-Signals: `restaurant_response`, `rider_response`, `rider_dropped`, `picked_up`,
-`delivered`, `cancel` — sent by the REST endpoint that owns the action (restaurant
-response and cancel → order-service; rider actions → delivery-service), and by
+Signals: `restaurant_response`, `rider_response`, `rider_dropped`, `food_ready`,
+`picked_up`, `delivered`, `cancel` — sent by the REST endpoint that owns the action
+(restaurant response, food ready, cancel and the support override for delivered →
+order-service; rider actions → delivery-service), and by
 delivery-service's stale-rider detector. Query: `status` (current step). A second
 workflow, `OrderRefundWorkflow` (`refund-{order_id}`), handles post-delivery refunds.
 
@@ -154,10 +158,26 @@ workflow, `OrderRefundWorkflow` (`refund-{order_id}`), handles post-delivery ref
   reconciler next to the order-service worker starts sagas for `created` orders aged
   60s–1h (start is idempotent by workflow ID).
 - **Timeouts and limits** (order-service settings): restaurant decision 5 min, rider
-  offer 60s, at most 5 offers or 10 min of searching (looking again every 30s while no
-  rider is free), maximum delivery distance 15 km (`MAX_DELIVERY_KM`, straight line,
+  offer 60s, a rider who turned it down asked again after 2 min, 10 min of searching
+  (looking again every 30s while no rider is free, the radius widening 5 → 8 → 12 km),
+  maximum delivery distance 15 km (`MAX_DELIVERY_KM`, straight line,
   checked at order creation). Delivery-service: a rider with no location ping for 3 min
   counts as dropped out.
+- **Food ready, pickup and delivery deadlines**: the restaurant marks the food ready
+  (`POST …/food-ready` → `food_ready` signal, any time from confirmation to pickup;
+  delivery-service's `mark_food_ready` records it, brings `ready_at` and the ETAs up to
+  date, and emits `DeliveryFoodReady`). The deadlines tell a late kitchen from a late
+  rider: food not marked ready 15 min after it was due (confirmation + prep time) is
+  flagged `food_overdue`, and 1 h after it the order is cancelled (`kitchen_timeout`);
+  ready food not picked up 15 min after the later of "ready" and the rider's pickup ETA
+  gets another rider (`late`, back in the pool). An order not delivered 2 h after pickup
+  is flagged `delivery_overdue`; a system admin can mark it delivered. The flags count
+  `order_saga_overdue` (Temporal SDK metric, `stage` = food / delivery) and raise the
+  `OrdersOverdue` alert. The kitchen deadlines are checked while waiting for pickup, not
+  during the rider search (which normally ends before the food is due). Settings
+  (order-service): `FOOD_OVERDUE_SECONDS`, `KITCHEN_TIMEOUT_SECONDS`,
+  `PICKUP_GRACE_SECONDS`, `DELIVERY_OVERDUE_SECONDS`. Sagas started before this change
+  keep the old waits (`workflow.patched`).
 
 ### Order and delivery endpoints
 
@@ -166,13 +186,16 @@ workflow, `OrderRefundWorkflow` (`refund-{order_id}`), handles post-delivery ref
 | order | `POST /v1/orders` — returns at `created`, starts the saga; `payment_method` `card_simulated` (approves) or `card_simulated_decline` | customer |
 | order | `GET /v1/orders/restaurant/{restaurant_id}?status=` | owning restaurant admin, system admin |
 | order | `POST /v1/orders/{id}/restaurant-response` `{decision, reason?}` → 202 | owning restaurant admin |
+| order | `POST /v1/orders/{id}/food-ready` → 202, confirmed/assigned orders, repeats ignored | owning restaurant admin |
 | order | `POST /v1/orders/{id}/cancel` `{reason?}` → 202, until pickup | ordering customer, system admin |
+| order | `POST /v1/orders/{id}/mark-delivered` → 202, picked-up orders (support override when the rider never marked it) | system admin |
 | order | `POST /v1/orders/{id}/refund` `{amount?, reason}` → 202, delivered orders, once | system admin |
 | delivery | `GET /v1/riders/me/offer` | rider |
 | delivery | `POST /v1/riders/me/deliveries/{id}/accept`, `/decline`, `/drop-out`, `/picked-up`, `/delivered` → 202 | the rider it's offered/assigned to |
 | delivery | `GET /v1/deliveries/by-order/{order_id}` | ordering customer, the rider, system admin |
 | tracking | `GET /v1/tracking/orders/{id}` (SSE) | ordering customer, system admin |
 | tracking | `GET /v1/tracking/restaurants/{restaurant_id}` (SSE) | owning restaurant admin, system admin |
+| tracking | `GET /v1/tracking/riders/me` (SSE) | rider (their own feed only) |
 
 Every action endpoint checks ownership and state, then signals the saga and returns 202;
 only the saga changes order and delivery status, so a rider's pickup can't race a
@@ -323,18 +346,22 @@ before they're operationally trusted:
   allowed), and suspending a rider forces them `offline`, so unvetted riders never
   enter the assignment pool. The assignment claim also requires
   `verification_status = 'approved'`, as defense in depth.
-- **Bootstrapping the first `system_admin`**: since `system_admin` is excluded from
+- **Creating the first `system_admin`**: since `system_admin` is excluded from
   `PUBLIC_ROLES` (self-registration would let anyone grant themselves the role that can
-  block any user and approve/suspend any restaurant or rider), the only way one is created
-  is `POST /v1/auth/bootstrap-admin` on `user-service`, gated by a shared secret
-  (`ADMIN_BOOTSTRAP_SECRET`, compared with `hmac.compare_digest`) sent as an
-  `X-Bootstrap-Secret` header — not JWT-gated, since no admin session can exist yet to
-  gate it with. It is **one-shot**: once any `system_admin` exists it returns 409, so a
-  leaked secret can't mint more admins later. The gateway gives it the same strict
-  per-IP rate limit as login. `user-service` refuses to start if
-  `ENVIRONMENT != local` and the secret is still the public dummy value from
-  `env.example`. `scripts/seed.py` calls this to create the demo admin (and tolerates
-  the 409 on re-runs) and approve the seeded restaurant/rider.
+  block any user and approve/suspend any restaurant or rider), there is **no HTTP
+  endpoint** that creates one. It's a command inside `user-service`, run by an operator:
+  `docker compose exec -T user-service python -m app.create_admin --email ... --full-name
+  ... --phone ... --password-stdin` (`app/create_admin.py`; in Kubernetes, a one-off Job
+  or `kubectl exec`). Only someone who can already run commands in that container can
+  create an admin, so there is nothing reachable from outside to attack and no shared
+  secret to manage. The password is read from stdin or a prompt, never from an argument
+  (which would show in `ps` and shell history), and checked by the same rules as
+  self-registration. It is **one-shot**: once any `system_admin` exists it exits with code
+  3 and creates nothing; a Postgres advisory lock makes two runs at once create only one.
+  `scripts/seed.py` runs it for the demo admin (treating exit code 3 as done) and then
+  approves the seeded restaurant and riders. This replaced `POST
+  /v1/auth/bootstrap-admin`, which was gated by a shared `ADMIN_BOOTSTRAP_SECRET` and
+  reachable through the gateway.
 
 ## Real-time delivery tracking
 
@@ -342,7 +369,7 @@ before they're operationally trusted:
   ~every 5–15s. Stateless, so any `delivery-service` replica can handle any rider's
   ping — no connection-affinity needed. Each ping updates Redis, appends a Mongo ping,
   and (while the rider has an order) publishes the position to that order's channel.
-- **Server → customer and restaurant (live feeds)**: Server-Sent Events from
+- **Server → customer, restaurant and rider (live feeds)**: Server-Sent Events from
   `tracking-service`, through the gateway's streaming proxy.
   - `GET /v1/tracking/orders/{id}`: a `snapshot` (order status, delivery status, rider,
     ETAs, last position), then `status`, `delivery` and `location` events; the stream
@@ -350,9 +377,38 @@ before they're operationally trusted:
   - `GET /v1/tracking/restaurants/{id}`: a `snapshot` of orders awaiting a decision, then
     `new_order` and `order_cancelled`. This is how a restaurant "receives the order
     notification" in real time; notification-service also sends it in-app and by SMS.
-- **How it's wired**: publishers write the latest state (`tracking:order:{id}:state`
-  hash; `tracking:restaurant:{id}:pending` set) and `PUBLISH` to `tracking:order:{id}` /
-  `tracking:restaurant:{id}` in one Redis pipeline. `tracking-service` subscribes
+  - `GET /v1/tracking/riders/me` (riders only, their own channel): a `snapshot` of the
+    delivery they currently have, then `offer`, `released` (offer declined or expired,
+    drop-out, order cancelled) and `delivery` (assigned, picked up, delivered). Each is a
+    nudge: the app fetches the details from `GET /v1/riders/me/offer` (the source of
+    truth), on every event and every (re)connect, plus a 30s safety check — instead of
+    polling every 2s.
+- **How it's wired**: the latest state lives in Redis (`tracking:order:{id}:state` hash;
+  `tracking:restaurant:{id}:pending` set), and each change is `PUBLISH`ed to
+  `tracking:order:{id}` / `tracking:restaurant:{id}` together with the state write.
+  - **Order status** (placed → … → delivered, rejected, cancelled): from Kafka.
+    `tracking-service`'s consumer (group `tracking-service`, `order-events`,
+    `app/projection.py`) applies each order event in one Lua script: state, pending set
+    and publishes, all or nothing. It never moves an order backwards (statuses only go
+    forward), so duplicates, replays and events older than a rebuilt state change
+    nothing. While Redis is down the consumer waits and retries (an outage, not a poison
+    message), then catches up — a status update can't be lost. Events older than a day
+    (their state would have expired) are skipped, so the group can start at the oldest
+    events without filling Redis with finished orders. order-service still writes the
+    state itself when an order is created (trackable at once) and when rebuilding a
+    missing key.
+  - **Delivery details and rider offers** (`DeliveryStatusUpdated`, `DeliveryEtaUpdated`,
+    `DeliveryFoodReady` on `delivery-events`): the same consumer updates the customer's delivery status and
+    ETAs and the rider's feed (`tracking:rider:{user_id}`, with a state hash for its
+    snapshot). Deliveries can go back (a declined offer), so these are compared by event
+    time per delivery instead of by status; a rider's state is cleared only by an event
+    about the delivery it holds, since two deliveries' events can arrive in either order.
+  - **Rider positions**: published by delivery-service directly, best-effort — they
+    arrive every few seconds, so losing one doesn't matter.
+  - Kafka adds up to about a second (the outbox relay runs every second) to a status
+    update, for the guarantee that it arrives.
+
+  `tracking-service` subscribes
   *before* reading the snapshot, so nothing falls between the two, and checks ownership
   from the same state (`customer_id`, `restaurant:{id}:owner`) before streaming — 403/404
   are normal JSON errors. If a state key is missing (e.g. Redis was flushed) it rebuilds
@@ -360,7 +416,10 @@ before they're operationally trusted:
 - **Scaling**: one shared Redis Pub/Sub connection per `tracking-service` replica; a
   channel is subscribed only while one of that replica's clients watches it, so a replica
   receives only what its own clients need. A client too slow to keep up (100 queued
-  events) is disconnected and reconnects for a fresh snapshot. Heartbeat comment every
+  events) is disconnected and reconnects for a fresh snapshot. Pub/Sub keeps nothing, and
+  redis-py reconnects (and re-subscribes) without telling the caller, so the hub registers
+  for every reconnect and read error and then ends all its open streams: each client
+  reconnects for a fresh snapshot instead of showing a status it missed. Heartbeat comment every
   15s; the gateway's tracking pool has its own 1,000 connections, so long-lived streams
   can't starve REST traffic.
 - **Auth**: bearer header, or `?access_token=` for browser `EventSource` (which can't send
@@ -380,9 +439,9 @@ that was always going to reject it.
 `app/security.py`'s `authenticate` now verifies signature, expiry and claims at the gateway
 itself (via `sfo_auth.decode_access_token`, the same check every backend service runs), and
 checks the blocked-user deny-list with the same decoded token, before forwarding — for every route *except* an explicit public-route allowlist
-(`_PUBLIC_ROUTES` in the same file): `POST /v1/auth/{register,login,refresh,logout,
-bootstrap-admin}` (these authenticate via a refresh token, shared secret, or issue the
-token itself — there's no bearer token to check yet) and the read-only restaurant-browsing
+(`_PUBLIC_ROUTES` in the same file): `POST /v1/auth/{register,login,refresh,logout}`
+(these authenticate via a refresh token, or issue the token itself — there's no bearer
+token to check yet) and the read-only restaurant-browsing
 routes (`GET /v1/restaurants`, `/{id}`, `/{id}/menu`, `/{id}/menu/categories`, `/{id}/promotions` — public by
 design). Everything else needs a valid bearer token to even reach a backend service.
 
@@ -560,8 +619,7 @@ A full pass over every route in all 7 services (the gateway plus six domain serv
 - **Rate limiting**: keyed by user ID for requests with a valid token, by client IP
   otherwise — per-IP alone would throttle unrelated customers behind one mobile-carrier
   IP, and user+IP would hand a user a fresh limit every time their IP changes.
-  `/v1/auth/login`, `/v1/auth/register`, and `/v1/auth/bootstrap-admin` share a stricter,
-  separate limit. Fails open if Redis is unreachable (the blocked-user check fails closed).
+  `/v1/auth/login` and `/v1/auth/register` share a stricter, separate limit. Fails open if Redis is unreachable (the blocked-user check fails closed).
   The rate-limit counter and the blocked-user lookup go to Redis in one pipelined
   round-trip per request.
 - **Database connections**: explicit per-replica pool (`DB_POOL_SIZE` 10 +

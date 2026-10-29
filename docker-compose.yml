@@ -63,6 +63,8 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: user_db
     volumes: ["user-db-data:/var/lib/postgresql/data"]
+    # Host access for the real-DB tests (scripts/check.sh --with-db), localhost only.
+    ports: ["127.0.0.1:15432:5432"]
 
   restaurant-db:
     <<: *postgres-common
@@ -296,7 +298,7 @@ services:
       - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana-data:/var/lib/grafana
-    # 3001 on the host: 3000 is the demo UI's static server (demo-ui/).
+    # 3001 on the host: 3000 is the static demo UI's server (demo-ui/static/).
     ports: ["127.0.0.1:3001:3000"]
     depends_on: [prometheus, loki, jaeger]
 
@@ -478,8 +480,12 @@ services:
     build: { context: ., dockerfile: services/tracking-service/Dockerfile }
     env_file: [services/tracking-service/.env]
     environment: *observability-env
+    # The Kafka consumer that turns order events into live-feed updates runs
+    # in this process (KAFKA_CONSUMER_MODE=embedded, app/consumer.py).
     depends_on:
       redis: { condition: service_healthy }
+      schema-registry: { condition: service_healthy }
+      kafka-init: { condition: service_completed_successfully }
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 5s

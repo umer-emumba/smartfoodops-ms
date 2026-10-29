@@ -1,7 +1,6 @@
-import hmac
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, Header, Query, status
+from fastapi import APIRouter, Depends, Query, status
 from sfo_auth import (
     CurrentUser,
     Role,
@@ -16,17 +15,16 @@ from sfo_auth import (
 )
 from sfo_auth.denylist import block_user, unblock_user
 from sfo_common.errors import (
-    ConflictError,
     ForbiddenError,
     NotFoundError,
     UnauthorizedError,
     ValidationAppError,
 )
 from sfo_common.pagination import Page
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import repository
+from app.accounts import create_user_or_conflict
 from app.auth_deps import get_current_user, require_roles
 from app.config import settings
 from app.db import get_session
@@ -35,7 +33,6 @@ from app.redis_client import redis
 from app.schemas import (
     AddressCreate,
     AddressResponse,
-    BootstrapAdminRequest,
     LoginRequest,
     RefreshRequest,
     RegisterRequest,
@@ -50,23 +47,6 @@ router = APIRouter(prefix="/v1", tags=["auth"])
 # same argon2 work as a wrong password — response time doesn't reveal which
 # emails have accounts.
 _DUMMY_PASSWORD_HASH = hash_password_blocking("timing-equalizer-not-a-real-password")
-
-
-async def _create_user_or_conflict(session: AsyncSession, user: User) -> User:
-    """Pre-checks give a specific message; the IntegrityError catch covers the
-    race where two signups with the same email/phone pass the pre-check
-    concurrently — a 409 either way, never a raw 500."""
-    if await repository.get_user_by_email(session, user.email) is not None:
-        raise ConflictError("Email is already registered")
-    if await repository.get_user_by_phone(session, user.phone_number) is not None:
-        raise ConflictError("Phone number is already registered")
-    try:
-        user = await repository.create_user(session, user=user)
-        await session.commit()
-    except IntegrityError as exc:
-        await session.rollback()
-        raise ConflictError("Email or phone number is already registered") from exc
-    return user
 
 
 def _issue_tokens(user: User) -> tuple[str, RefreshToken, str]:
@@ -97,41 +77,7 @@ async def register(body: RegisterRequest, session: AsyncSession = Depends(get_se
         full_name=body.full_name,
         phone_number=body.phone_number,
     )
-    return await _create_user_or_conflict(session, user)
-
-
-@router.post(
-    "/auth/bootstrap-admin", response_model=UserResponse, status_code=status.HTTP_201_CREATED
-)
-async def bootstrap_admin(
-    body: BootstrapAdminRequest,
-    session: AsyncSession = Depends(get_session),
-    x_bootstrap_secret: str = Header(...),
-) -> User:
-    """The only way a system_admin account is created — self-registration is
-    limited to PUBLIC_ROLES (see docs/architecture.md#restaurant--rider-approval). Gated by a
-    shared secret rather than open registration, since this role can block
-    any user and approve/suspend any restaurant or rider.
-
-    One-shot: once any system_admin exists this endpoint refuses (409), so a
-    leaked secret can't be used to mint further admins later. Further admins
-    are an explicit follow-up (an admin-only "promote user" action), not this
-    endpoint."""
-    # Compared as bytes — compare_digest raises TypeError on non-ASCII str.
-    if not hmac.compare_digest(
-        x_bootstrap_secret.encode(), settings.admin_bootstrap_secret.encode()
-    ):
-        raise UnauthorizedError("Invalid bootstrap secret")
-    if await repository.any_user_with_role(session, Role.SYSTEM_ADMIN.value):
-        raise ConflictError("A system_admin already exists — bootstrap is disabled")
-    user = User(
-        email=body.email,
-        hashed_password=await hash_password(body.password),
-        role=Role.SYSTEM_ADMIN,
-        full_name=body.full_name,
-        phone_number=body.phone_number,
-    )
-    return await _create_user_or_conflict(session, user)
+    return await create_user_or_conflict(session, user)
 
 
 @router.post("/auth/login", response_model=TokenResponse)
@@ -268,7 +214,7 @@ async def block(
     if user is None:
         raise NotFoundError("User not found")
     # An admin blocking themselves would lock the platform out of its only
-    # admin (bootstrap-admin is one-shot). Blocking other admins is refused
+    # admin (app/create_admin.py is one-shot). Blocking other admins is refused
     # too: admin-vs-admin disputes need an out-of-band process, not an
     # endpoint any single admin can use against the others.
     if user.id == current.id:

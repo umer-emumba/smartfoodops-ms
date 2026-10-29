@@ -22,9 +22,3 @@ async def login(request: Request) -> Response:
 @router.post("/v1/auth/register", dependencies=[_auth_rate_limit])
 async def register(request: Request) -> Response:
     return await forward_request("auth", "register", request)
-
-
-# Shared-secret-gated, so it gets the same brute-force protection as login.
-@router.post("/v1/auth/bootstrap-admin", dependencies=[_auth_rate_limit])
-async def bootstrap_admin(request: Request) -> Response:
-    return await forward_request("auth", "bootstrap-admin", request)

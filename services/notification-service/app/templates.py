@@ -13,6 +13,7 @@ from decimal import Decimal
 
 from sfo_events import DomainEvent, EventType
 from sfo_events.payloads import (
+    DeliveryFoodReadyPayload,
     DeliveryStatusUpdatedPayload,
     OrderPlacedPayload,
     OrderTransitionPayload,
@@ -45,6 +46,11 @@ _REJECTION_WORDING = {
     "restaurant_rejected": "the restaurant couldn't take it",
 }
 _FALLBACK_REJECTION = "something went wrong on our side"
+# Appended to "… has been cancelled" for cancellations the customer didn't ask for.
+_CANCELLATION_WORDING = {
+    "no_rider_available": ", as no rider was available",
+    "kitchen_timeout": ", as the restaurant couldn't prepare it in time",
+}
 
 # Order statuses in which the restaurant knows about the order — only then is
 # it told about a cancellation.
@@ -122,7 +128,7 @@ def _rejected(p: OrderTransitionPayload) -> list[Message]:
 
 
 def _cancelled(p: OrderTransitionPayload) -> list[Message]:
-    why = ", as no rider was available" if p.reason == "no_rider_available" else ""
+    why = _CANCELLATION_WORDING.get(p.reason or "", "")
     messages = [
         _to_customer(
             p,
@@ -193,6 +199,22 @@ def _delivery_status(p: DeliveryStatusUpdatedPayload) -> list[Message]:
     return [Message(p.rider_user_id, RIDER, type_, channels, content, p.order_id)]
 
 
+def _food_ready(p: DeliveryFoodReadyPayload) -> list[Message]:
+    messages = []
+    if p.customer_id is not None:
+        who = "your rider is picking it up" if p.rider_user_id else "we're finding a rider"
+        content = f"Your food is ready — {who}."
+        messages.append(
+            Message(p.customer_id, CUSTOMER, "order_update", (IN_APP,), content, p.order_id)
+        )
+    if p.rider_user_id is not None:
+        content = "The food is ready — head to the restaurant for pickup."
+        messages.append(
+            Message(p.rider_user_id, RIDER, "delivery_update", (IN_APP, SMS), content, p.order_id)
+        )
+    return messages
+
+
 _BUILDERS: dict[EventType, Callable[..., list[Message]]] = {
     EventType.ORDER_PLACED: _order_placed,
     EventType.ORDER_AWAITING_RESTAURANT: _awaiting_restaurant,
@@ -204,6 +226,7 @@ _BUILDERS: dict[EventType, Callable[..., list[Message]]] = {
     EventType.ORDER_DELIVERED: _delivered,
     EventType.REFUND_PROCESSED: _refund,
     EventType.DELIVERY_STATUS_UPDATED: _delivery_status,
+    EventType.DELIVERY_FOOD_READY: _food_ready,
     # PaymentSuccessful (an authorization isn't worth a message) and
     # RiderShiftChanged (analytics only): nothing.
 }

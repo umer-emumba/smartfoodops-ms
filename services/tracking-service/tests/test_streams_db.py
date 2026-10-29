@@ -225,3 +225,70 @@ async def test_client_too_far_behind_is_flagged(env: Env) -> None:
     assert subscription.overflowed
     await hub.unsubscribe(subscription)
     await hub.close()
+
+
+# ---------- Pub/Sub connection drops ----------
+
+
+async def test_stream_ends_when_its_pubsub_connection_drops(env: Env) -> None:
+    """Pub/Sub keeps nothing, and redis-py reconnects without telling: the
+    hub ends the stream, so the client reconnects for a fresh snapshot
+    instead of showing a status it missed."""
+    await _order_state(env)
+    channel = "tracking:order:o-1"
+    async with httpx.AsyncClient(base_url=env.base_url, timeout=10) as client:
+        async with client.stream("GET", "/v1/tracking/orders/o-1", headers=auth(CUSTOMER)) as resp:
+            stream = events(resp)
+            assert (await anext(stream))[0] == "snapshot"
+            for _ in range(100):
+                if await _numsub(env, channel):
+                    break
+                await asyncio.sleep(0.02)
+            # Only this test's connection (DB 15), not the running stack's.
+            killed = 0
+            for client_info in await env.redis.client_list(_type="pubsub"):
+                if client_info.get("db") == "15":
+                    await env.redis.client_kill_filter(_id=client_info["id"])
+                    killed += 1
+            assert killed
+            rest = await asyncio.wait_for(_rest(stream), timeout=8)
+    assert rest == []  # ended by itself, nothing stale delivered
+
+
+async def _rest(stream: AsyncIterator[tuple[str, Any]]) -> list[tuple[str, Any]]:
+    return [(n, d) async for n, d in stream if n != "heartbeat"]
+
+
+# ---------- Rider feed ----------
+
+
+async def test_rider_feed_snapshot_then_offer(env: Env) -> None:
+    rider = "u-rider"
+    await env.redis.hset(
+        f"tracking:rider:{rider}:state", mapping={"delivery_id": "d-0", "status": "assigned"}
+    )
+    async with httpx.AsyncClient(base_url=env.base_url, timeout=5) as client:
+        async with client.stream(
+            "GET", "/v1/tracking/riders/me", headers=auth(rider, Role.RIDER)
+        ) as resp:
+            assert resp.status_code == 200
+            stream = events(resp)
+            name, snapshot = await anext(stream)
+            assert (name, snapshot["delivery"]["delivery_id"]) == ("snapshot", "d-0")
+            await _publish(env, f"tracking:rider:{rider}", {"type": "offer", "delivery_id": "d-1"})
+            name, offer = await anext(_skip_heartbeats(stream))
+    assert (name, offer["delivery_id"]) == ("offer", "d-1")
+
+
+async def test_rider_feed_is_for_riders_only(env: Env) -> None:
+    async with httpx.AsyncClient(base_url=env.base_url, timeout=5) as client:
+        resp = await client.get("/v1/tracking/riders/me", headers=auth(CUSTOMER))
+    assert resp.status_code == 403
+
+
+async def _skip_heartbeats(
+    stream: AsyncIterator[tuple[str, Any]],
+) -> AsyncIterator[tuple[str, Any]]:
+    async for name, data in stream:
+        if name != "heartbeat":
+            yield name, data

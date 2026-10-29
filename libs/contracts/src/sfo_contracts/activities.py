@@ -199,12 +199,16 @@ class DeliveryActivity(StrEnum):
     # signal the saga, the saga makes the change.
     TRANSITION_DELIVERY = "transition_delivery"
     COMPUTE_ETA = "compute_eta"
+    # The restaurant marked the food ready (DeliveryFoodReady event); returns
+    # the assigned rider's new ETAs.
+    MARK_FOOD_READY = "mark_food_ready"
 
 
 class RiderReleaseOutcome(StrEnum):
     DECLINED = "declined"
     EXPIRED = "expired"
     DROPPED = "dropped"
+    LATE = "late"  # hadn't picked up the ready food in time
     CANCELLED = "cancelled"
     COMPLETED = "completed"
 
@@ -238,6 +242,8 @@ class OfferRiderInput:
     exclude_rider_ids: list[str] = field(default_factory=list)
     # The saga's offer timer, so the offer's stored expiry matches it.
     offer_timeout_seconds: int | None = None
+    # The saga's current search radius; None = delivery-service's default.
+    radius_km: float | None = None
 
 
 @dataclass(frozen=True)

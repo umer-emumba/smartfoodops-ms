@@ -4,18 +4,31 @@
     reserve stock + capacity → redeem promotion → price → authorize payment
     → awaiting_restaurant_acceptance → restaurant accepts → confirmed
     → create delivery → offer to the nearest rider (decline / expiry → next
-      rider, at most 5 offers or 10 minutes) → assigned
+      rider, decliners asked again after 2 minutes, search radius widening;
+      up to 10 minutes) → assigned
     → picked_up (capacity freed) → delivered → payment captured
 
 Until pickup, a failure, rejection, timeout, cancellation or "no rider"
 undoes the steps already taken in reverse order (cancel delivery — which
 releases the rider —, void payment, release promotion, release reservation)
-and the order ends `rejected` or `cancelled` with a `status_reason`. A rider
-dropping out after accepting is replaced (D12); the order stays `assigned`.
+and the order ends `rejected` (before confirmation) or `cancelled` with a
+`status_reason`. A rider dropping out after accepting is replaced (D12); the
+order stays `assigned`.
+
+The restaurant marks the food ready (`food_ready` signal, any time after
+confirmation; delivery-service records it and tells the customer and rider).
+Pickup has deadlines, so a late kitchen and a late rider are told apart:
+food not marked ready `food_overdue` after it was due (confirmation + prep
+time) is flagged, and `kitchen_timeout` after it the order is cancelled
+(`kitchen_timeout`); food that is ready but not picked up `pickup_grace`
+after the later of "ready" and the rider's pickup ETA gets another rider.
 
 After pickup nothing is undone — the food is on its way. Cancel and
 drop-out are ignored from then on (the endpoints already refuse them), and
-the remaining steps are retried until they succeed.
+the remaining steps are retried until they succeed. An order not delivered
+`delivery_overdue` after pickup is flagged (step `delivery_overdue`, a log
+line, the `order_saga_overdue` metric); a system_admin can mark it
+delivered.
 
 Each forward step registers its compensation *before* it runs: a step can
 commit and still report failure (a timeout after the commit), so its
@@ -26,7 +39,8 @@ also stops a late-arriving forward step.
 Signals that arrive together are applied in arrival order: a cancel after
 pickup, or a pickup after a cancel, is ignored."""
 
-from datetime import timedelta
+from collections.abc import Callable
+from datetime import datetime, timedelta
 from typing import Any
 
 from temporalio import workflow
@@ -93,6 +107,11 @@ COMPENSATION_RETRY_POLICY = RetryPolicy(
 )
 MUST_SUCCEED = COMPENSATION_RETRY_POLICY
 
+# workflow.patched IDs: sagas started before a change replay the old code
+# path, new ones take the new one.
+PICKUP_DEADLINES = "pickup-deadlines"
+DELIVERY_OVERDUE = "delivery-overdue"
+
 # `orders.status_reason` for each business failure.
 FAILURE_REASONS: dict[str, str] = {
     BusinessErrorType.OUT_OF_STOCK: "out_of_stock",
@@ -138,6 +157,8 @@ class OrderSagaWorkflow:
     def __init__(self) -> None:
         self._step = "starting"
         self._order_id = ""
+        # Set once the order may be `confirmed`: it can't be rejected from then on.
+        self._confirmed = False
         self._restaurant_response: RestaurantResponse | None = None
         self._cancel: CancelRequest | None = None
         # (activity, task queue) — every compensation takes OrderRef.
@@ -148,8 +169,14 @@ class OrderSagaWorkflow:
         self._rider_response: RiderResponse | None = None
         self._assigned_rider: str | None = None
         self._dropped: RiderDropped | None = None
+        self._food_ready_signalled = False
+        self._food_ready_at: datetime | None = None  # once delivery-service has it
+        self._food_flagged = False  # flagged food_overdue already
+        self._pickup_eta: datetime | None = None  # the assigned rider's latest
         self._picked_up = False
         self._delivered = False
+        self._delivered_by: Actor | None = None  # a system_admin, not the rider
+        self._finished = False
 
     # ---------- Signals and query ----------
 
@@ -185,15 +212,42 @@ class OrderSagaWorkflow:
         ):
             self._dropped = dropped
 
+    @workflow.signal(name=OrderSagaSignal.FOOD_READY)
+    async def food_ready(self) -> None:
+        # From the restaurant, once, between confirmation and pickup. Recorded
+        # in delivery-service as soon as the delivery exists (it's created
+        # right after confirmation); run() waits for this before finishing.
+        if (
+            not self._confirmed
+            or self._food_ready_signalled
+            or self._picked_up
+            or self._cancel is not None
+        ):
+            return
+        self._food_ready_signalled = True
+        await workflow.wait_condition(lambda: self._delivery_id is not None or self._finished)
+        if self._delivery_id is None:
+            return
+        # The assigned rider's ETAs, recomputed now that the food is ready.
+        eta: DeliveryEta | None = await self._delivery(
+            DeliveryActivity.MARK_FOOD_READY, DeliveryRef(self._delivery_id), DeliveryEta | None
+        )
+        if eta is not None:
+            self._pickup_eta = eta.pickup_eta
+        self._food_ready_at = workflow.now()
+
     @workflow.signal(name=OrderSagaSignal.PICKED_UP)
     def picked_up(self) -> None:
         if self._cancel is None and self._assigned_rider is not None:
             self._picked_up = True
 
     @workflow.signal(name=OrderSagaSignal.DELIVERED)
-    def delivered(self) -> None:
-        if self._picked_up:
+    def delivered(self, actor: Actor | None = None) -> None:
+        # From the rider's app (no actor), or a system_admin marking an
+        # overdue order delivered.
+        if self._picked_up and not self._delivered:
             self._delivered = True
+            self._delivered_by = actor
 
     @workflow.query(name=OrderSagaQuery.STATUS)
     def status(self) -> str:
@@ -261,6 +315,26 @@ class OrderSagaWorkflow:
         if self._cancel is not None:
             raise _Cancelled(self._cancel)
 
+    async def _wait_until(self, condition: Callable[[], bool], deadline: datetime) -> bool:
+        """Waits for `condition` until `deadline`. False if the deadline came first."""
+        remaining = deadline - workflow.now()
+        if remaining <= timedelta(0):
+            return condition()
+        try:
+            await workflow.wait_condition(condition, timeout=remaining)
+        except TimeoutError:
+            return False
+        return True
+
+    def _flag_overdue(self, stage: str, message: str) -> None:
+        # For support: the saga step (Temporal UI), a log line, and a metric
+        # to alert on.
+        self._step = f"{stage}_overdue"
+        workflow.logger.warning("Order %s: %s", self._order_id, message)
+        workflow.metric_meter().create_counter(
+            "order_saga_overdue", "Orders past a pickup or delivery deadline"
+        ).add(1, {"stage": stage})
+
     async def _undo_and_finish(self, status: OrderStatus, reason: str, actor: Actor) -> str:
         self._step = "compensating"
         # Undo what was done so far, newest first (e.g. void the payment, give
@@ -284,6 +358,13 @@ class OrderSagaWorkflow:
 
     @workflow.run
     async def run(self, data: OrderSagaInput) -> str:
+        result = await self._run(data)
+        # A food_ready handler may still be recording it.
+        self._finished = True
+        await workflow.wait_condition(workflow.all_handlers_finished)
+        return result
+
+    async def _run(self, data: OrderSagaInput) -> str:
         self._order_id = data.order_id
         try:
             prep_time_minutes = await self._place_order(data)
@@ -296,8 +377,12 @@ class OrderSagaWorkflow:
         except _Failed as failed:
             return await self._undo_and_finish(failed.status, failed.reason, failed.actor)
         except ActivityError as error:
-            return await self._undo_and_finish(OrderStatus.REJECTED, failure_reason(error), SYSTEM)
-        return await self._deliver_and_settle()
+            # Retries exhausted, or an unexpected business error: rejected
+            # before confirmation, cancelled after (the only way out of
+            # `confirmed` / `assigned` besides pickup).
+            status = OrderStatus.CANCELLED if self._confirmed else OrderStatus.REJECTED
+            return await self._undo_and_finish(status, failure_reason(error), SYSTEM)
+        return await self._deliver_and_settle(data)
 
     async def _place_order(self, data: OrderSagaInput) -> int:
         """Up to `confirmed`. Returns the restaurant's prep time (minutes)."""
@@ -403,6 +488,9 @@ class OrderSagaWorkflow:
             raise _Failed(reason, actor=response.actor)
 
         # 7. Confirmed. The customer is notified.
+        # Flagged before the transition: it can commit and still report
+        # failure, and `cancelled` is valid from either status.
+        self._confirmed = True
         await self._transition(OrderStatus.CONFIRMED, actor=response.actor)
         self._step = OrderStatus.CONFIRMED
         return reservation.prep_time_minutes
@@ -417,6 +505,7 @@ class OrderSagaWorkflow:
         self._compensations.append(
             (DeliveryActivity.CANCEL_DELIVERY, TaskQueue.DELIVERY_ACTIVITIES)
         )
+        ready_at = workflow.now() + timedelta(minutes=prep_time_minutes)
         created: CreateDeliveryResult = await self._delivery(
             DeliveryActivity.CREATE_DELIVERY,
             CreateDeliveryInput(
@@ -424,7 +513,7 @@ class OrderSagaWorkflow:
                 customer_id=data.customer_id,
                 pickup=data.pickup,
                 dropoff=data.dropoff,
-                ready_at=workflow.now() + timedelta(minutes=prep_time_minutes),
+                ready_at=ready_at,
             ),
             CreateDeliveryResult,
             ACTIVITY_RETRY_POLICY,
@@ -433,10 +522,12 @@ class OrderSagaWorkflow:
             raise _Failed("delivery_cancelled", status=OrderStatus.CANCELLED)
         self._delivery_id = created.delivery_id
 
-        offered_to: list[str] = []
+        # Riders who turned the delivery down (declined, let it expire,
+        # dropped out) → when; kept across reassignments.
+        turned_down: dict[str, datetime] = {}
         while True:
             # 9. Find a rider who accepts.
-            rider_id = await self._find_rider(data, offered_to)
+            rider_id = await self._find_rider(data, turned_down)
             self._assigned_rider = rider_id
             self._dropped = None
 
@@ -447,9 +538,10 @@ class OrderSagaWorkflow:
                 DeliveryActivity.TRANSITION_DELIVERY,
                 TransitionDeliveryInput(delivery_id=self._delivery_id, to_status="assigned"),
             )
-            await self._delivery(
+            eta: DeliveryEta = await self._delivery(
                 DeliveryActivity.COMPUTE_ETA, DeliveryRef(self._delivery_id), DeliveryEta
             )
+            self._pickup_eta = eta.pickup_eta
             # A replacement rider leaves the order `assigned` (no-op).
             # The customer is told a rider is on the way.
             await self._transition(OrderStatus.ASSIGNED)
@@ -457,26 +549,77 @@ class OrderSagaWorkflow:
             # 11. Wait for pickup — or a cancel, or the rider dropping out.
             # (sent in by the rider's picked-up / drop-out endpoints, or a cancel)
             self._step = "awaiting_pickup"
-            await workflow.wait_condition(
-                lambda: self._picked_up or self._cancel is not None or self._dropped is not None
-            )
+            if workflow.patched(PICKUP_DEADLINES):
+                rider_late = await self._await_pickup(data, ready_at)
+            else:
+                await workflow.wait_condition(self._pickup_wait_over)
+                rider_late = False
             if self._picked_up:
                 return
             self._check_cancelled()
-            # Rider dropped out (D12): off shift, find someone else.
-            await self._release_rider(RiderReleaseOutcome.DROPPED)
+            if rider_late:
+                # Didn't come for the ready food: back in the pool, find
+                # someone else.
+                await self._release_rider(RiderReleaseOutcome.LATE)
+            else:
+                # Rider dropped out (D12): off shift, find someone else.
+                await self._release_rider(RiderReleaseOutcome.DROPPED)
+            turned_down[rider_id] = workflow.now()
             self._assigned_rider = None
 
-    async def _find_rider(self, data: OrderSagaInput, offered_to: list[str]) -> str:
+    def _pickup_wait_over(self) -> bool:
+        return self._picked_up or self._cancel is not None or self._dropped is not None
+
+    async def _await_pickup(self, data: OrderSagaInput, ready_at: datetime) -> bool:
+        """Waits for pickup, a cancel or a drop-out. True if instead the rider
+        is late: the food is ready and they haven't come for it `pickup_grace`
+        after the later of "ready" and their pickup ETA. Until the food is
+        ready the kitchen is the one running late: flagged `food_overdue`
+        after it was due (`ready_at`), the order is cancelled
+        `kitchen_timeout` after it."""
+        flag_at = ready_at + timedelta(seconds=data.food_overdue_seconds)
+        give_up = ready_at + timedelta(seconds=data.kitchen_timeout_seconds)
+        while (food_ready_at := self._food_ready_at) is None:
+            deadline = give_up if self._food_flagged else min(flag_at, give_up)
+            if await self._wait_until(
+                lambda: self._pickup_wait_over() or self._food_ready_at is not None, deadline
+            ):
+                if self._pickup_wait_over():
+                    return False
+                self._step = "awaiting_pickup"  # ready: the rider's turn
+            elif deadline == give_up:
+                raise _Failed("kitchen_timeout", status=OrderStatus.CANCELLED)
+            else:
+                self._food_flagged = True
+                self._flag_overdue("food", "the restaurant hasn't marked the food ready")
+        pickup_eta = self._pickup_eta or food_ready_at
+        late_at = max(food_ready_at, pickup_eta) + timedelta(seconds=data.pickup_grace_seconds)
+        if await self._wait_until(self._pickup_wait_over, late_at):
+            return False
+        workflow.logger.info(
+            "Order %s: rider %s hasn't picked up the ready food; replacing them",
+            self._order_id,
+            self._assigned_rider,
+        )
+        return True
+
+    async def _find_rider(self, data: OrderSagaInput, turned_down: dict[str, datetime]) -> str:
         """Offers the delivery to the nearest free rider, one at a time, until
-        one accepts. Each rider is offered it once. Gives up — cancelling the
-        order — after `max_rider_offers` offers or `rider_search_timeout`."""
+        one accepts. A rider who turned it down is asked again only after
+        `rider_reoffer_after_seconds` — so a few riders nearby get another
+        chance instead of the search running dry. Starts with riders close to
+        the restaurant and looks farther out each time nobody is free
+        (`rider_search_radii_km`). Gives up — cancelling the order — after
+        `rider_search_timeout`."""
         assert self._delivery_id is not None
         deadline = workflow.now() + timedelta(seconds=data.rider_search_timeout_seconds)
         offer_timeout = timedelta(seconds=data.rider_offer_timeout_seconds)
+        reoffer_after = timedelta(seconds=data.rider_reoffer_after_seconds)
+        radius_step = 0
         while True:
             self._check_cancelled()
-            if len(offered_to) >= data.max_rider_offers or workflow.now() >= deadline:
+            now = workflow.now()
+            if now >= deadline:
                 raise _Failed("no_rider_available", status=OrderStatus.CANCELLED)
 
             self._step = "searching_rider"
@@ -486,14 +629,19 @@ class OrderSagaWorkflow:
                 DeliveryActivity.OFFER_TO_NEAREST_RIDER,
                 OfferRiderInput(
                     delivery_id=self._delivery_id,
-                    exclude_rider_ids=list(offered_to),
+                    exclude_rider_ids=[
+                        rider for rider, at in turned_down.items() if now - at < reoffer_after
+                    ],
                     offer_timeout_seconds=data.rider_offer_timeout_seconds,
+                    radius_km=data.rider_search_radii_km[radius_step],
                 ),
                 RiderOffer | None,
                 ACTIVITY_RETRY_POLICY,
             )
             if offer is None:
-                # Nobody free nearby: look again shortly (or stop on cancel).
+                # Nobody free: look again shortly, a step farther out (or stop
+                # on cancel).
+                radius_step = min(radius_step + 1, len(data.rider_search_radii_km) - 1)
                 remaining = deadline - workflow.now()
                 retry = min(timedelta(seconds=data.rider_search_retry_seconds), remaining)
                 try:
@@ -502,7 +650,6 @@ class OrderSagaWorkflow:
                     pass
                 continue
 
-            offered_to.append(offer.rider_id)
             self._offered_rider = offer.rider_id
             self._rider_response = None
             self._step = f"offered:{offer.rider_id}"
@@ -516,6 +663,7 @@ class OrderSagaWorkflow:
             except TimeoutError:
                 self._offered_rider = None
                 await self._release_rider(RiderReleaseOutcome.EXPIRED)
+                turned_down[offer.rider_id] = workflow.now()
                 continue
             self._offered_rider = None
             # A cancel arriving now is handled by cancel_delivery, which also
@@ -525,8 +673,9 @@ class OrderSagaWorkflow:
             if self._rider_response.accepted:
                 return offer.rider_id
             await self._release_rider(RiderReleaseOutcome.DECLINED)
+            turned_down[offer.rider_id] = workflow.now()
 
-    async def _deliver_and_settle(self) -> str:
+    async def _deliver_and_settle(self, data: OrderSagaInput) -> str:
         """After pickup: nothing is undone any more, every step must succeed."""
         assert self._delivery_id is not None
         self._compensations.clear()
@@ -547,8 +696,13 @@ class OrderSagaWorkflow:
             retry_policy=MUST_SUCCEED,
         )
 
-        # 13. Wait for delivery (sent in by the rider's delivered endpoint).
+        # 13. Wait for delivery (sent in by the rider's delivered endpoint, or
+        # a system_admin's for an overdue order).
         self._step = "delivering"
+        if workflow.patched(DELIVERY_OVERDUE):
+            overdue_at = workflow.now() + timedelta(seconds=data.delivery_overdue_seconds)
+            if not await self._wait_until(lambda: self._delivered, overdue_at):
+                self._flag_overdue("delivery", "not delivered yet; a system_admin can mark it")
         await workflow.wait_condition(lambda: self._delivered)
 
         # 14. Delivered: final settlement (payment captured), rider freed.
@@ -566,7 +720,13 @@ class OrderSagaWorkflow:
             PaymentResult,
             MUST_SUCCEED,
         )
-        await self._transition(OrderStatus.DELIVERED, retry_policy=MUST_SUCCEED)
+        by_admin = self._delivered_by is not None
+        await self._transition(
+            OrderStatus.DELIVERED,
+            actor=self._delivered_by or SYSTEM,
+            reason="marked_delivered_by_admin" if by_admin else None,
+            retry_policy=MUST_SUCCEED,
+        )
         await self._release_rider(RiderReleaseOutcome.COMPLETED)
         self._step = OrderStatus.DELIVERED
         return OrderStatus.DELIVERED

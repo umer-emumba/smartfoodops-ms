@@ -12,8 +12,9 @@ import pytest
 import pytest_asyncio
 from app.workflows.refund import OrderRefundWorkflow
 from sfo_common.temporal import DATA_CONVERTER
-from sfo_contracts import OrderSagaSignal, TaskQueue, refund_workflow_id
+from sfo_contracts import OrderSagaQuery, OrderSagaSignal, TaskQueue, refund_workflow_id
 from sfo_contracts.activities import (
+    Actor,
     DeliveryActivity,
     OrderActivity,
     PaymentActivity,
@@ -76,6 +77,10 @@ def released(fakes: FakeServices) -> list[str]:
 
 def offers_excluded(fakes: FakeServices) -> list[list[str]]:
     return [a.exclude_rider_ids for a in fakes.args(DeliveryActivity.OFFER_TO_NEAREST_RIDER)]
+
+
+def search_radii(fakes: FakeServices) -> list[float | None]:
+    return [a.radius_km for a in fakes.args(DeliveryActivity.OFFER_TO_NEAREST_RIDER)]
 
 
 CANCEL_ALL = [
@@ -214,14 +219,38 @@ async def test_drop_out_after_pickup_is_ignored(env: WorkflowEnvironment) -> Non
 # ---------- No rider ----------
 
 
-async def test_five_failed_offers_cancel_the_order(env: WorkflowEnvironment) -> None:
+async def test_riders_who_declined_are_asked_again_after_two_minutes(
+    env: WorkflowEnvironment,
+) -> None:
     fakes = FakeServices()
+    fakes.pool = ["r1", "r2"]  # the only riders nearby
     async with running(env, fakes):
         handle = await confirmed(env)
-        for rider in ("r1", "r2", "r3", "r4", "r5"):
-            await answer(handle, rider, accepted=False)
+        await answer(handle, "r1", accepted=False)
+        await answer(handle, "r2", accepted=False)
+        await wait_for_step(handle, "searching_rider")
+        await env.sleep(timedelta(seconds=150))
+        await answer(handle, "r1", accepted=True)
+        await wait_for_step(handle, "awaiting_pickup")
+    excluded = offers_excluded(fakes)
+    assert excluded[:3] == [[], ["r1"], ["r1", "r2"]]
+    # Nobody else came free; r1 was asked again once the 2 minutes were up.
+    assert "r1" not in excluded[-1]
+    assert released(fakes) == [RiderReleaseOutcome.DECLINED] * 2
+    assert order_transitions(fakes)[-1] == "assigned"
+
+
+async def test_riders_turning_it_down_for_ten_minutes_cancels_the_order(
+    env: WorkflowEnvironment,
+) -> None:
+    fakes = FakeServices()
+    fakes.pool = ["r1"]  # never answers; each offer expires
+    async with running(env, fakes):
+        handle = await confirmed(env)
         assert await handle.result() == "cancelled"
-    assert released(fakes) == [RiderReleaseOutcome.DECLINED] * 5
+    released_outcomes = released(fakes)
+    assert len(released_outcomes) >= 3
+    assert set(released_outcomes) == {RiderReleaseOutcome.EXPIRED}
     assert fakes.names()[-5:] == CANCEL_ALL
     cancelled = final_transition(fakes)
     assert (cancelled.to_status, cancelled.reason) == ("cancelled", "no_rider_available")
@@ -233,9 +262,10 @@ async def test_nobody_free_for_ten_minutes_cancels_the_order(env: WorkflowEnviro
     async with running(env, fakes):
         handle = await confirmed(env)
         assert await handle.result() == "cancelled"
-    # Looked again every 30s for 10 minutes.
-    searches = fakes.names().count(DeliveryActivity.OFFER_TO_NEAREST_RIDER)
-    assert 20 <= searches <= 21
+    # Looked again every 30s for 10 minutes, farther out each time.
+    searches = search_radii(fakes)
+    assert 20 <= len(searches) <= 21
+    assert searches[:4] == [5, 8, 12, 12]
     assert final_transition(fakes).reason == "no_rider_available"
 
 
@@ -249,6 +279,139 @@ async def test_rider_found_after_a_wait(env: WorkflowEnvironment) -> None:
         await answer(handle, "r1", accepted=True)
         await wait_for_step(handle, "awaiting_pickup")
     assert fakes.names().count(DeliveryActivity.OFFER_TO_NEAREST_RIDER) == 3
+
+
+# ---------- Failures after confirmation ----------
+
+
+async def test_retries_exhausted_after_confirmation_cancels(env: WorkflowEnvironment) -> None:
+    # A confirmed order can't become `rejected`: it ends `cancelled`.
+    fakes = FakeServices()
+    fakes.fail[DeliveryActivity.CREATE_DELIVERY] = [ConnectionError("delivery-db down")] * 5
+    async with running(env, fakes):
+        handle = await confirmed(env)
+        assert await handle.result() == "cancelled"
+    assert fakes.names()[-5:] == CANCEL_ALL
+    cancelled = final_transition(fakes)
+    assert (cancelled.to_status, cancelled.reason) == ("cancelled", "system_error")
+
+
+# ---------- Food ready, pickup and delivery deadlines ----------
+# The food is due 20 minutes after confirmation (the fakes' prep time) and the
+# rider's pickup ETA is "now": unless marked ready, the kitchen is flagged at
+# 35 minutes and the order cancelled at 80.
+
+ADMIN = Actor(id="u-admin", role="system_admin")
+KITCHEN_LATE = timedelta(minutes=35, seconds=1)
+
+
+async def assigned_to_r1(env: WorkflowEnvironment) -> WorkflowHandle:
+    handle = await confirmed(env)
+    await answer(handle, "r1", accepted=True)
+    await wait_for_step(handle, "awaiting_pickup")
+    return handle
+
+
+async def test_food_ready_is_recorded_once_even_during_the_search(
+    env: WorkflowEnvironment,
+) -> None:
+    fakes = FakeServices()
+    async with running(env, fakes):
+        handle = await confirmed(env)
+        await wait_for_step(handle, "offered:r1")
+        await handle.signal(OrderSagaSignal.FOOD_READY)
+        await handle.signal(OrderSagaSignal.FOOD_READY)  # a second tap
+        await answer(handle, "r1", accepted=True)
+        await wait_for_step(handle, "awaiting_pickup")
+        await handle.signal(OrderSagaSignal.PICKED_UP)
+        await wait_for_step(handle, "delivering")
+    assert [a.delivery_id for a in fakes.args(DeliveryActivity.MARK_FOOD_READY)] == [DELIVERY_ID]
+
+
+async def test_food_ready_before_confirmation_is_ignored(env: WorkflowEnvironment) -> None:
+    fakes = FakeServices()
+    async with running(env, fakes):
+        handle = await start(env, saga_input())
+        await wait_for_step(handle, "awaiting_restaurant")
+        await handle.signal(OrderSagaSignal.FOOD_READY)
+        await handle.signal(
+            OrderSagaSignal.RESTAURANT_RESPONSE, RestaurantResponse(decision="accept", actor=OWNER)
+        )
+        await wait_for_step(handle, "offered:r1")
+    assert DeliveryActivity.MARK_FOOD_READY not in fakes.names()
+
+
+async def test_rider_not_coming_for_ready_food_is_replaced(env: WorkflowEnvironment) -> None:
+    fakes = FakeServices()
+    async with running(env, fakes):
+        handle = await assigned_to_r1(env)
+        await handle.signal(OrderSagaSignal.FOOD_READY)
+        await env.sleep(timedelta(minutes=15, seconds=1))
+        await answer(handle, "r2", accepted=True)
+        await wait_for_step(handle, "awaiting_pickup")
+    # Back in the pool (not off shift like a drop-out), and not asked again soon.
+    assert released(fakes) == [RiderReleaseOutcome.LATE]
+    assert offers_excluded(fakes)[-1] == ["r1"]
+    assert "cancelled" not in order_transitions(fakes)
+
+
+async def test_riders_clock_follows_the_eta_from_food_ready(env: WorkflowEnvironment) -> None:
+    # The food is ready early; the rider is 5 minutes away, so they're late
+    # only 15 minutes after that.
+    fakes = FakeServices()
+    fakes.food_ready_pickup_in = timedelta(minutes=5)
+    async with running(env, fakes):
+        handle = await assigned_to_r1(env)
+        await handle.signal(OrderSagaSignal.FOOD_READY)
+        await env.sleep(timedelta(minutes=19))
+        assert await handle.query(OrderSagaQuery.STATUS) == "awaiting_pickup"
+        await env.sleep(timedelta(minutes=1, seconds=1))
+        await wait_for_step(handle, "offered:r2")
+    assert released(fakes) == [RiderReleaseOutcome.LATE]
+
+
+async def test_late_kitchen_is_flagged_then_the_order_cancelled(env: WorkflowEnvironment) -> None:
+    fakes = FakeServices()
+    async with running(env, fakes):
+        handle = await assigned_to_r1(env)
+        await env.sleep(KITCHEN_LATE)
+        await wait_for_step(handle, "food_overdue")
+        assert await handle.result() == "cancelled"
+    # The rider was never blamed; cancel_delivery frees them.
+    assert released(fakes) == []
+    assert fakes.names()[-5:] == CANCEL_ALL
+    assert final_transition(fakes).reason == "kitchen_timeout"
+
+
+async def test_late_kitchen_then_ready_and_picked_up(env: WorkflowEnvironment) -> None:
+    fakes = FakeServices()
+    async with running(env, fakes):
+        handle = await assigned_to_r1(env)
+        await env.sleep(KITCHEN_LATE)
+        await wait_for_step(handle, "food_overdue")
+        await handle.signal(OrderSagaSignal.FOOD_READY)
+        await wait_for_step(handle, "awaiting_pickup")
+        await handle.signal(OrderSagaSignal.PICKED_UP)
+        await wait_for_step(handle, "delivering")
+    assert released(fakes) == []
+    assert order_transitions(fakes)[-1] == "picked_up"
+
+
+async def test_overdue_delivery_is_flagged_and_marked_by_an_admin(
+    env: WorkflowEnvironment,
+) -> None:
+    fakes = FakeServices()
+    async with running(env, fakes):
+        handle = await assigned_to_r1(env)
+        await handle.signal(OrderSagaSignal.PICKED_UP)
+        await wait_for_step(handle, "delivering")
+        await env.sleep(timedelta(hours=2, seconds=1))
+        await wait_for_step(handle, "delivery_overdue")
+        await handle.signal(OrderSagaSignal.DELIVERED, ADMIN)
+        assert await handle.result() == "delivered"
+    assert fakes.names().count(PaymentActivity.CAPTURE) == 1
+    delivered = final_transition(fakes)
+    assert (delivered.actor, delivered.reason) == (ADMIN, "marked_delivered_by_admin")
 
 
 # ---------- Cancellation after confirmation ----------

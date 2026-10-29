@@ -125,8 +125,8 @@ def signals(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str, Any]]:
 
     sent: list[tuple[str, str, Any]] = []
 
-    async def _signal(order_id: str, signal: str, payload: Any) -> None:
-        sent.append((order_id, signal, payload))
+    async def _signal(order_id: str, signal: str, *payload: Any) -> None:
+        sent.append((order_id, signal, payload[0] if payload else None))
 
     monkeypatch.setattr(temporal_client, "signal_order_saga", _signal)
     return sent

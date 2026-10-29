@@ -1,9 +1,11 @@
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import SettingsConfigDict
+from sfo_common.config import KafkaConsumerSettings
 
 
-class Settings(BaseSettings):
+class Settings(KafkaConsumerSettings):
     """tracking-service has no database (docs/week2-plan.md D8), so it doesn't
-    inherit sfo_common.BaseServiceSettings, which requires DATABASE_URL."""
+    inherit sfo_common.BaseServiceSettings, which requires DATABASE_URL. It
+    consumes order-events (app/consumer.py), hence KafkaConsumerSettings."""
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

@@ -12,10 +12,11 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
+from app.state_machine import can_transition
 from app.workflows.order_saga import OrderSagaWorkflow
 from app.workflows.refund import OrderRefundWorkflow
 from sfo_common.temporal import WorkerSpec, run_workers
-from sfo_contracts import OrderSagaQuery, TaskQueue
+from sfo_contracts import BusinessErrorType, OrderSagaQuery, TaskQueue, business_error
 from sfo_contracts.activities import (
     Actor,
     ApplyPricingInput,
@@ -62,15 +63,22 @@ class FakeServices:
     """Stand-ins for every service's activities. Records each call;
     `fail[name]` is a list of exceptions raised by that activity's next calls
     (then it succeeds). `riders` is who each offer goes to, in order (None =
-    nobody free; an empty list = nobody free from then on)."""
+    nobody free; an empty list = nobody free from then on). Setting `pool`
+    instead models riders who stay free: each offer goes to the first one not
+    excluded. The order's status follows the real state machine, so the saga
+    can't ask for a transition the real activity would refuse."""
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, Any]] = []
         self.fail: dict[str, list[Exception]] = {}
+        self.order_status = "created"
         self.reserve_status = "reserved"
         self.payment_status = "authorized"
         self.delivery_status = "pending_assignment"
+        # mark_food_ready's new pickup ETA, from now (None: no rider assigned).
+        self.food_ready_pickup_in: timedelta | None = None
         self.riders: list[str | None] = ["r1", "r2", "r3", "r4", "r5", "r6"]
+        self.pool: list[str] | None = None
 
     def names(self) -> list[str]:
         return [name for name, _ in self.calls]
@@ -87,8 +95,29 @@ class FakeServices:
         if pending:
             raise pending.pop(0)
 
+    def _transition_order(self, data: TransitionOrderInput) -> TransitionOrderResult:
+        # Same checks as the real transition_order activity.
+        if self.order_status == data.to_status:
+            return TransitionOrderResult(status=data.to_status, changed=False)
+        if not can_transition(self.order_status, data.to_status):
+            raise business_error(
+                BusinessErrorType.INVALID_ORDER_TRANSITION,
+                f"Order can't go from {self.order_status} to {data.to_status}",
+            )
+        self.order_status = data.to_status
+        return TransitionOrderResult(status=data.to_status, changed=True)
+
+    def _mark_food_ready(self, _: DeliveryRef) -> DeliveryEta | None:
+        if self.food_ready_pickup_in is None:
+            return None
+        pickup = activity.info().current_attempt_scheduled_time + self.food_ready_pickup_in
+        return DeliveryEta(pickup_eta=pickup, dropoff_eta=pickup + timedelta(minutes=15))
+
     def _offer(self, data: OfferRiderInput) -> RiderOffer | None:
-        rider = self.riders.pop(0) if self.riders else None
+        if self.pool is not None:
+            rider = next((r for r in self.pool if r not in data.exclude_rider_ids), None)
+        else:
+            rider = self.riders.pop(0) if self.riders else None
         if rider is None:
             return None
         return RiderOffer(
@@ -135,10 +164,7 @@ class FakeServices:
                 ),
                 ApplyPricingInput,
             ),
-            Od.TRANSITION_ORDER: (
-                lambda d: TransitionOrderResult(status=d.to_status, changed=True),
-                TransitionOrderInput,
-            ),
+            Od.TRANSITION_ORDER: (self._transition_order, TransitionOrderInput),
             Od.RECORD_REFUND: (lambda _: None, RecordRefundInput),
             D.CREATE_DELIVERY: (
                 lambda _: CreateDeliveryResult(
@@ -156,6 +182,7 @@ class FakeServices:
                 ),
                 DeliveryRef,
             ),
+            D.MARK_FOOD_READY: (self._mark_food_ready, DeliveryRef),
             D.CANCEL_DELIVERY: (lambda _: None, OrderRef),
         }
 

@@ -1,10 +1,13 @@
 // Rider panel (used twice): go on shift near the restaurant, answer offers,
-// move, pick up, deliver, or drop out. Polls every 2s for an offer, or for
-// the state of the delivery it holds.
+// move, pick up, deliver, or drop out. Offers are pushed on the rider's live
+// feed (/v1/tracking/riders/me); each event — and each (re)connect's
+// snapshot — is a nudge to re-read the offer or held delivery over REST.
+// A slow safety poll covers the feed being down.
 import { api, find } from "./api.js";
+import { openFeed } from "./sse.js";
 import { $, attempt, button, logger, north } from "./ui.js";
 
-const POLL_MS = 2000;
+const SAFETY_POLL_MS = 30000;
 
 export function createRider(root, who, title, defaultKm) {
   root.append($("#rider-template").content.cloneNode(true));
@@ -14,7 +17,8 @@ export function createRider(root, who, title, defaultKm) {
   let restaurant = null;
   let me = null;
   let offer = null; // open offer
-  let delivery = null; // accepted: {id, order_id, pickup, dropoff, status}
+  let delivery = null; // accepted: {id, order_id, pickup, dropoff, status, foodReady}
+  let closeFeed = () => {};
 
   async function refreshMe() {
     me = await attempt(log, () => api(who, "GET", "/v1/riders/me"));
@@ -51,8 +55,9 @@ export function createRider(root, who, title, defaultKm) {
     render();
   }
 
-  async function poll() {
-    if (!restaurant || !me) return;
+  // The offer or held delivery, re-read over REST (the source of truth).
+  async function refresh() {
+    if (!me) return;
     if (delivery) {
       const current = await find(who, `/v1/deliveries/by-order/${delivery.order_id}`).catch(() => null);
       if (!current || current.rider_id !== me.id || ["delivered", "cancelled"].includes(current.status)) {
@@ -61,6 +66,7 @@ export function createRider(root, who, title, defaultKm) {
         await refreshMe();
       } else {
         delivery.status = current.status;
+        delivery.foodReady = Boolean(current.food_ready_at);
       }
     } else {
       const next = await find(who, "/v1/riders/me/offer").catch(() => null);
@@ -86,7 +92,7 @@ export function createRider(root, who, title, defaultKm) {
     deliveryBox.replaceChildren();
     if (delivery) {
       deliveryBox.append(
-        `Delivery: ${delivery.status} `,
+        `Delivery: ${delivery.status}${delivery.foodReady ? " · food ready" : ""} `,
         button("Ride to restaurant", () => move(delivery.pickup, "to the restaurant")),
         button("Picked up", () => act("picked-up")),
         button("Ride to customer", () => move(delivery.dropoff, "to the customer")),
@@ -96,12 +102,48 @@ export function createRider(root, who, title, defaultKm) {
     }
   }
 
+  function openRiderFeed() {
+    closeFeed();
+    closeFeed = openFeed(
+      who,
+      "/v1/tracking/riders/me",
+      {
+        snapshot: () => {
+          log("Live feed connected", "event");
+          refresh();
+        },
+        offer: () => {
+          log("Offer pushed", "event");
+          refresh();
+        },
+        released: (e) => {
+          log(`Released: ${e.reason}`, "event");
+          refresh();
+        },
+        delivery: (e) => {
+          log(`Delivery ${e.status}`, "event");
+          refresh();
+        },
+        food_ready: () => {
+          log("Food is ready for pickup", "event");
+          refresh();
+        },
+      },
+      () => log("Live feed closed; checking every 30s instead"),
+    );
+  }
+
   $(".r-shift", root).onclick = () => setStatus("available");
   $(".r-offline", root).onclick = () => setStatus("offline");
-  setInterval(poll, POLL_MS); // does nothing until logged in and a restaurant is picked
+  setInterval(refresh, SAFETY_POLL_MS); // does nothing until logged in
+  setInterval(() => offer && render(), 1000); // the offer's countdown; no requests
 
   return {
-    start: refreshMe, // after logging in
+    async start() {
+      // after logging in
+      await refreshMe();
+      openRiderFeed();
+    },
     setRestaurant(selected) {
       restaurant = selected;
     },

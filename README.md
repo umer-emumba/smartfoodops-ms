@@ -31,8 +31,8 @@ a new session.
                     activities └────────┬────────┘ activities      ┌───────┴───────┐
                                         │ activities               │     Redis     │
                                 ┌───────▼───────┐                  └───────▲───────┘
-                                │payment-service│        order- and delivery-service
-                                └───────────────┘        publish status, ETA, location
+                                │payment-service│        statuses, ETAs, offers: Kafka → tracking;
+                                └───────────────┘        rider location: delivery-service
 
    The gateway also routes to payment-, notification- and analytics-service (not drawn).
    Each service has its own database and runs its own Temporal worker on its own task
@@ -50,14 +50,16 @@ Events, notifications and analytics:
   order-, payment-, delivery-worker ──► Kafka ──┬──► notification-service ──► RabbitMQ ──► notification-worker
   (Celery beat relay, every 1s)                 │    (consumer)                            (in-app / email / SMS,
                                                 │                                           retries, then failed)
-                                                └──► analytics-service ──► MongoDB (metrics read model)
+                                                ├──► analytics-service ──► MongoDB (metrics read model)
+                                                │
+                                                └──► tracking-service ──► Redis (live-feed state + Pub/Sub → SSE)
 
   Every process: traces → Jaeger, metrics → Prometheus, logs → Loki; all three in Grafana.
 ```
 
 Every service owns its own database — no service reads another's DB directly.
 Cross-service contact happens only via sync REST (order → restaurant for the quote), the
-Temporal order saga, Redis Pub/Sub for live tracking, Kafka domain events, or Celery
+Temporal order saga, Redis Pub/Sub for live tracking (order status fed from Kafka), Kafka domain events, or Celery
 background jobs. Full rationale in [docs/architecture.md](docs/architecture.md);
 component, sequence and ER diagrams in [docs/diagrams.md](docs/diagrams.md).
 
@@ -109,8 +111,10 @@ Full state transitions, compensation matrix and consistency model:
 - **Delivery lifecycle**: rider registration, admin vetting, availability and location
   pings → nearest available rider offered (Redis GEO), 60s to accept → reassignment on
   decline, expiry or drop-out → pickup → delivery, with ETAs.
-- **Live tracking**: customers follow their order and restaurants get new orders over SSE
-  (`/v1/tracking/...`), served by `tracking-service` from Redis Pub/Sub.
+- **Live tracking**: customers follow their order, restaurants get new orders and riders
+  get offers over SSE (`/v1/tracking/...`), served by `tracking-service`. Order and
+  delivery updates come from Kafka (so none is lost), and Redis Pub/Sub delivers them to
+  whichever replica holds the stream.
 - **Cancellation/refund**: cancel until pickup — the saga compensates for whatever had
   happened (release stock, void payment, free the rider). After delivery a system admin
   can refund all or part of an order.
@@ -172,7 +176,8 @@ well as the tests and the seed script.
      JWT_ADDITIONAL_PUBLIC_KEYS_FILE=/run/secrets/jwt_additional_public_keys
      ```
 
-   - Any leftover `JWT_SECRET` / `JWT_ALGORITHM` lines are ignored and can be deleted.
+   - Any leftover `JWT_SECRET` / `JWT_ALGORITHM` / `ADMIN_BOOTSTRAP_SECRET` lines are
+     ignored and can be deleted.
 
 2. Bring the whole stack up:
 
@@ -195,6 +200,14 @@ well as the tests and the seed script.
    ```bash
    uv run --group dev python scripts/seed.py
    ```
+
+   Safe to re-run: nothing is duplicated, and the menu's stock is topped back up to 50,
+   so re-running it also resets the demo after many smoke-test orders. The admin is the
+   one thing not created through the API (there is no endpoint for it): the seed runs
+   `user-service`'s `app/create_admin` command via `docker compose exec`, so run it on the
+   machine where the stack is running. See
+   [architecture.md](docs/architecture.md#restaurant--rider-approval) to create a real
+   first admin.
 
 4. Everything is reachable through the gateway at `http://localhost:8080`. Try:
 
@@ -294,11 +307,13 @@ docker compose exec order-db psql -U postgres -d order_db -tAc \
 ### Test UI (click through an order by hand)
 
 ```bash
-cd demo-ui && python3 -m http.server 3000 --bind 127.0.0.1   # then open http://localhost:3000
+cd demo-ui/static && python3 -m http.server 3000 --bind 127.0.0.1   # then open http://localhost:3000
 ```
 
 A plain HTML/JS page with customer, restaurant, two riders and an admin side by side,
-including the live feeds — see [demo-ui/README.md](demo-ui/README.md). For testing and
+including the live feeds. There is also a React app with a portal per role
+(`cd demo-ui/react && npm install --legacy-peer-deps && npm run dev`, then
+http://localhost:5173) — see [demo-ui/README.md](demo-ui/README.md). For testing and
 demos only; not part of Docker.
 
 ### Smoke test (whole running system)

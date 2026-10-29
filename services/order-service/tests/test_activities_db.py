@@ -1,10 +1,9 @@
 """order-activities against a real Postgres (week2-plan step 1)."""
 
-import json
 from decimal import Decimal
 
 import pytest
-from app import activities, repository
+from app import activities, repository, tracking
 from app.models import Order, OrderStatus, OrderStatusHistory, OutboxEvent
 from sfo_contracts import BusinessErrorType
 from sfo_contracts.activities import (
@@ -56,7 +55,7 @@ def _to(order_id: str, status: OrderStatus, reason: str | None = None) -> Transi
     return TransitionOrderInput(order_id=order_id, to_status=status, reason=reason)
 
 
-async def test_transition_writes_history_event_and_publishes(
+async def test_transition_writes_history_and_event_but_publishes_nothing(
     session_factory: Factory, published: list
 ) -> None:
     order = await insert_order(session_factory)
@@ -65,13 +64,10 @@ async def test_transition_writes_history_event_and_publishes(
         _to(order.id, OrderStatus.AWAITING_RESTAURANT_ACCEPTANCE)
     )
     assert (result.status, result.changed) == (OrderStatus.AWAITING_RESTAURANT_ACCEPTANCE, True)
-    # The restaurant's "new order" event (week3-plan W3-D8a), and its live feed.
+    # The restaurant's "new order" event (week3-plan W3-D8a). The live feeds
+    # get it from Kafka (tracking-service), not from a publish here.
     assert await _events(session_factory, order.id) == ["OrderAwaitingRestaurant"]
-    assert [channel for channel, _ in published] == [
-        f"tracking:order:{order.id}",
-        f"tracking:restaurant:{RESTAURANT}",
-    ]
-    assert json.loads(published[1][1])["type"] == "new_order"
+    assert published == []
 
     actor = Actor(id=OWNER, role="restaurant_admin")
     await activities.transition_order(
@@ -246,14 +242,17 @@ async def test_record_refund_rejects(
     assert exc_info.value.type == error
 
 
-async def test_transitions_keep_the_tracking_state_current(
+async def test_write_state_records_the_order_for_the_live_feeds(
     session_factory: Factory, tracking_redis
 ) -> None:
-    order = await insert_order(session_factory)
+    """order-service writes the state only for a new order and when
+    rebuilding a missing key; status changes reach the live feeds through
+    their Kafka events (tracking-service's app/projection.py)."""
+    order = await insert_order(session_factory, status=OrderStatus.AWAITING_RESTAURANT_ACCEPTANCE)
     state_key = f"tracking:order:{order.id}:state"
     pending = f"tracking:restaurant:{RESTAURANT}:pending"
 
-    await activities.transition_order(_to(order.id, OrderStatus.AWAITING_RESTAURANT_ACCEPTANCE))
+    await tracking.write_state(order)
     state = tracking_redis.hashes[state_key]
     assert (state["status"], state["customer_id"], state["restaurant_admin_id"]) == (
         "awaiting_restaurant_acceptance",
@@ -264,6 +263,11 @@ async def test_transitions_keep_the_tracking_state_current(
     assert tracking_redis.ttls[state_key] == 24 * 3600
 
     await activities.transition_order(_to(order.id, OrderStatus.REJECTED, "restaurant_timeout"))
-    assert tracking_redis.hashes[state_key]["status_reason"] == "restaurant_timeout"
-    assert tracking_redis.sets[pending] == set()  # no longer waiting on the restaurant
-    assert tracking_redis.ttls[state_key] == 3600  # finished: kept 1h
+    # Untouched here: tracking-service applies the OrderRejected event.
+    assert tracking_redis.hashes[state_key]["status"] == "awaiting_restaurant_acceptance"
+    assert tracking_redis.published == []
+
+    rejected = await insert_order(session_factory, status=OrderStatus.REJECTED)
+    await tracking.write_state(rejected)
+    assert tracking_redis.ttls[f"tracking:order:{rejected.id}:state"] == 3600  # finished: 1h
+    assert order.id in tracking_redis.sets[pending]  # only the rejected one left it

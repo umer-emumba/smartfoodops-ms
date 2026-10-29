@@ -8,6 +8,9 @@
   dashboard: a `snapshot` of orders awaiting a decision, then `new_order`
   and `order_cancelled` events. Accept/reject goes through order-service's
   restaurant-response endpoint.
+- `GET /v1/tracking/riders/me` — a rider's offers: a `snapshot` of the
+  delivery they currently have, then `offer`, `released` and `delivery`
+  events. Replaces polling GET /v1/riders/me/offer every few seconds.
 
 Ownership is checked before streaming starts (403/404 as normal JSON). A
 `: heartbeat` comment is sent every 15s while idle. A client that falls too
@@ -29,7 +32,7 @@ from sfo_auth import CurrentUser, Role
 from sfo_common.errors import ForbiddenError, NotFoundError
 
 from app import sse, state
-from app.auth_deps import get_current_user
+from app.auth_deps import get_current_user, require_roles
 from app.config import settings
 from app.hub import hub
 
@@ -38,14 +41,6 @@ ACTIVE_STREAMS = Gauge("tracking_active_streams", "Open live-tracking streams", 
 router = APIRouter(prefix="/v1/tracking", tags=["tracking"])
 
 TERMINAL = {"delivered", "cancelled", "rejected"}
-
-
-def order_channel(order_id: str) -> str:
-    return f"tracking:order:{order_id}"
-
-
-def restaurant_channel(restaurant_id: str) -> str:
-    return f"tracking:restaurant:{restaurant_id}"
 
 
 def _is_terminal(message: dict[str, Any]) -> bool:
@@ -63,7 +58,7 @@ async def _stream(
     Unsubscribes however the stream ends — including the client
     disconnecting, which cancels this generator."""
     subscription = await hub.subscribe(channel)
-    feed = channel.split(":")[1]  # tracking:order:{id} / tracking:restaurant:{id}
+    feed = channel.split(":")[1]  # tracking:{order,restaurant,rider}:{id}
     ACTIVE_STREAMS.labels(feed).inc()
     try:
         first = await snapshot()
@@ -78,6 +73,8 @@ async def _stream(
             except TimeoutError:
                 yield sse.HEARTBEAT
                 continue
+            if subscription.overflowed:
+                return  # it may have missed a message; reconnecting resyncs it
             message = json.loads(raw)
             yield sse.event(message.get("type", "message"), message)
             if ends(message):
@@ -107,7 +104,7 @@ async def track_order(
 
     return _sse(
         _stream(
-            order_channel(order_id),
+            state.order_channel(order_id),
             snapshot,
             ends=lambda m: (
                 m.get("status") in TERMINAL if m.get("type") == "snapshot" else _is_terminal(m)
@@ -131,4 +128,21 @@ async def restaurant_feed(
     async def snapshot() -> dict[str, Any]:
         return {"type": "snapshot", "pending": await state.pending_orders(restaurant_id)}
 
-    return _sse(_stream(restaurant_channel(restaurant_id), snapshot, ends=lambda _: False))
+    return _sse(_stream(state.restaurant_channel(restaurant_id), snapshot, ends=lambda _: False))
+
+
+@router.get("/riders/me")
+async def rider_feed(
+    current: CurrentUser = Depends(require_roles(Role.RIDER)),
+) -> StreamingResponse:
+    """The calling rider's offers and deliveries: a `snapshot` of the
+    delivery they currently have (`delivery`: null if none), then `offer`
+    (a new offer — fetch it with GET /v1/riders/me/offer), `released` (an
+    offer declined or expired, a drop-out, or the order cancelled) and
+    `delivery` (the held delivery's status). Each rider sees only their own
+    channel, keyed by the token's user ID."""
+
+    async def snapshot() -> dict[str, Any]:
+        return {"type": "snapshot", "delivery": await state.rider_delivery(current.id)}
+
+    return _sse(_stream(state.rider_channel(current.id), snapshot, ends=lambda _: False))
