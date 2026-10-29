@@ -4,13 +4,13 @@ A microservices-based food ordering and delivery platform (Part A of the SmartFo
 assignment — core platform + distributed systems; the GenAI layer is Part B, built later
 on top of this).
 
-See [docs/PRD.md](docs/PRD.md) for requirements and feature → deliverable traceability,
-[docs/architecture.md](docs/architecture.md) for the full system design,
-[docs/technical-documentation.md](docs/technical-documentation.md) for the reasoning
-behind each decision, [docs/diagrams.md](docs/diagrams.md) for the component diagram, order-lifecycle
-sequence diagrams and per-service ER diagrams, and [docs/PROGRESS.md](docs/PROGRESS.md)
-for current build status — **read PROGRESS.md first** when picking this project back up in
-a new session.
+| To find | Read |
+|---|---|
+| Diagrams: components, one order step by step, event flow, sequences, an ER diagram per database | [docs/diagrams.md](docs/diagrams.md) |
+| What each part is: services, endpoints, the saga, data model, auth | [docs/architecture.md](docs/architecture.md) |
+| Why it's built this way: lifecycles, failure handling, consistency, tradeoffs | [docs/technical-documentation.md](docs/technical-documentation.md) |
+| Requirements and where each is built | [docs/PRD.md](docs/PRD.md) |
+| Build status and open gaps — **read first** when picking the project back up | [docs/PROGRESS.md](docs/PROGRESS.md) |
 
 ## Architecture at a glance
 

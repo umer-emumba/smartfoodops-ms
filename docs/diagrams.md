@@ -287,18 +287,8 @@ Messages that must arrive use the outbox: every change above writes an event row
 (`OrderPlaced`, `OrderAwaitingRestaurant`, `RiderAssigned`, …) in the same database
 transaction. A relay worker publishes it to Kafka within about a second; tracking-service
 updates the live screens (order and delivery status, ETAs, rider offers), notification-service tells the customer,
-restaurant and rider, and analytics-service updates its metrics. The full path, with failure handling, is in
-[Event flow](#event-flow-outbox--kafka--consumers--celery).
-
-```mermaid
-flowchart LR
-    DB[(each service's<br/>outbox_events)] -->|Celery beat relay| K[(Kafka topics)]
-    K --> NS[notification-service]
-    NS -->|Celery / RabbitMQ| Out[in-app / email / SMS]
-    K --> AS[analytics-service]
-    K --> TS[tracking-service]
-    TS -->|"state + PUBLISH"| RD[(Redis → SSE)]
-```
+restaurant and rider, and analytics-service updates its metrics. The full path, with
+failure handling, is in [Event flow](#event-flow-outbox--kafka--consumers--celery).
 
 ### Summary
 
@@ -413,6 +403,12 @@ flowchart LR
 
 All UIs are bound to localhost. Nothing is pushed to Prometheus — every process serves
 its metrics on an internal port, and Prometheus pulls them.
+
+## Order states
+
+The order state diagram, with every transition's trigger and side effects, is in
+[technical-documentation.md](./technical-documentation.md#order-lifecycle) (the
+assignment asks for it there).
 
 ## Order lifecycle (sequence)
 

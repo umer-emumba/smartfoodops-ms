@@ -18,17 +18,17 @@ another's.
 
 ## Service breakdown
 
-| Service | Responsibility | Key Week 1 endpoints (all under `/v1`) | Added later |
-|---|---|---|---|
-| `api-gateway` | Single entry point: routing, JWT fast-fail, deny-list, rate limiting, CORS, Swagger index, SSE streaming proxy | proxies everything below; `/docs` | — |
-| `user-service` | Accounts, roles, auth tokens, saved addresses | `auth/register`, `auth/login`, `auth/refresh`, `auth/logout`, `users/me`, `users/me/addresses`, `users` + `users/{id}` (admin search), `users/{id}/block`, `users/{id}/unblock` | — |
-| `restaurant-service` | Restaurant onboarding + approval, menus, categories, availability, promotions; stock + capacity reservation | `restaurants` (CRUD, `mine`, `admin`, `approve`, `suspend`, `status-history`), `.../menu`, `.../menu/categories`, `.../menu/items`, `.../promotions`; saga activities | — |
-| `order-service` | Order creation, pricing, history, state machine; the order saga and refund workflows | `POST orders` (Idempotency-Key), `GET orders`, `GET orders/{id}`, `GET orders/admin`, `GET orders/restaurant/{id}`, `orders/{id}/restaurant-response`, `orders/{id}/cancel`, `orders/{id}/refund` | — |
-| `delivery-service` | Riders, vetting, location; deliveries, rider offers, reassignment, ETA | `riders`, `riders/me`, `riders/me/status`, `riders/me/location`, `riders/me/offer`, `riders/me/deliveries/{id}/accept\|decline\|drop-out\|picked-up\|delivered`, `deliveries/by-order/{id}`, `riders/admin`, `approve`, `suspend`, `verification-history` | — |
-| `payment-service` | Simulated card payments: authorize, capture, void, refund | `GET payments/by-order/{id}`; saga activities | — |
-| `tracking-service` | Live SSE feeds for customers, restaurants and riders | `tracking/orders/{id}`, `tracking/restaurants/{id}`, `tracking/riders/me` | — |
-| `notification-service` | Customer/restaurant/rider notifications: in-app, simulated email and SMS | `GET notifications` (mine) | `POST notifications/{id}/read`; Kafka consumer; `notification-worker` (Celery) sends (W3) |
-| `analytics-service` | The nine Part A metrics, from events | — | `analytics/summary`, `analytics/restaurants/{id}`, `analytics/peak-hours` (W3) |
+| Service | Responsibility | Key endpoints (all under `/v1`) |
+|---|---|---|
+| `api-gateway` | Single entry point: routing, JWT fast-fail, deny-list, rate limiting, CORS, Swagger index, SSE streaming proxy | proxies everything below; `/docs` |
+| `user-service` | Accounts, roles, auth tokens, saved addresses | `auth/register`, `auth/login`, `auth/refresh`, `auth/logout`, `users/me`, `users/me/addresses`, `users` + `users/{id}` (admin search), `users/{id}/block`, `users/{id}/unblock` |
+| `restaurant-service` | Restaurant onboarding + approval, menus, categories, availability, promotions; stock + capacity reservation | `restaurants` (CRUD, `mine`, `admin`, `approve`, `suspend`, `status-history`), `.../menu`, `.../menu/categories`, `.../menu/items`, `.../promotions`; saga activities |
+| `order-service` | Order creation, pricing, history, state machine; the order saga and refund workflows | `POST orders` (Idempotency-Key), `GET orders`, `GET orders/{id}`, `GET orders/admin`, `GET orders/restaurant/{id}`, `orders/{id}/restaurant-response`, `orders/{id}/food-ready`, `orders/{id}/cancel`, `orders/{id}/mark-delivered`, `orders/{id}/refund` |
+| `delivery-service` | Riders, vetting, location; deliveries, rider offers, reassignment, ETA | `riders`, `riders/me`, `riders/me/status`, `riders/me/location`, `riders/me/offer`, `riders/me/deliveries/{id}/accept\|decline\|drop-out\|picked-up\|delivered`, `deliveries/by-order/{id}`, `riders/admin`, `approve`, `suspend`, `verification-history` |
+| `payment-service` | Simulated card payments: authorize, capture, void, refund | `GET payments/by-order/{id}`; saga activities |
+| `tracking-service` | Live SSE feeds for customers, restaurants and riders | `tracking/orders/{id}`, `tracking/restaurants/{id}`, `tracking/riders/me` |
+| `notification-service` | Customer/restaurant/rider notifications: in-app, simulated email and SMS | `GET notifications` (mine), `POST notifications/{id}/read`; Kafka consumer; `notification-worker` (Celery) sends |
+| `analytics-service` | The nine Part A metrics, from events | `analytics/summary`, `analytics/restaurants/{id}`, `analytics/peak-hours` |
 
 Background processes run from the same images: `order-worker`, `payment-worker` and
 `delivery-worker` relay their service's outbox to Kafka, and `notification-worker` sends
@@ -58,14 +58,17 @@ stateDiagram-v2
     awaiting_restaurant_acceptance --> cancelled: customer cancels
     confirmed --> assigned: rider accepts offer
     confirmed --> cancelled: customer cancels / no rider found
-    assigned --> assigned: rider drops out → replaced
+    assigned --> assigned: rider drops out or is late → replaced
     assigned --> picked_up: rider confirms pickup
-    assigned --> cancelled: customer cancels
-    picked_up --> delivered: rider confirms delivery
+    assigned --> cancelled: customer cancels / no rider found / kitchen timeout
+    picked_up --> delivered: rider confirms delivery (or a system admin marks it)
     delivered --> [*]
     rejected --> [*]
     cancelled --> [*]
 ```
+
+Food ready doesn't change the order's status; it updates the delivery's `ready_at` and
+ETAs.
 
 | Transition | Trigger | Side effects |
 |---|---|---|
@@ -74,9 +77,11 @@ stateDiagram-v2
 | `created` → `rejected` | saga | a business failure (`out_of_stock`, `restaurant_at_capacity`, `restaurant_unavailable`, `promotion_invalid`, `payment_declined`), or `system_error` once retries run out; whatever was done is undone |
 | → `confirmed` / `rejected` | `POST /v1/orders/{id}/restaurant-response` → signal; or no answer in 5 min (`restaurant_timeout`) | on reject: void payment, release promotion and stock (`restaurant_rejected[: reason]`) |
 | `confirmed` → `assigned` | rider accepts an offer ([Delivery orchestration](#delivery-orchestration)) | delivery `assigned`, ETAs, `RiderAssigned` |
+| (stays `confirmed` / `assigned`) | `POST /v1/orders/{id}/food-ready` (owning restaurant admin) → signal | delivery `ready_at` and the rider's ETAs updated, `DeliveryFoodReady` |
+| (stays `assigned`) | rider drops out, or hasn't collected ready food 15 min after the later of "ready" and their pickup ETA (`late`) | rider released, next rider offered |
 | `assigned` → `picked_up` | rider `POST …/picked-up` → signal | kitchen capacity freed (`complete_reservation`); no more cancelling |
-| `picked_up` → `delivered` | rider `POST …/delivered` → signal | payment captured (final settlement), rider back to `available` |
-| → `cancelled` | customer or system admin cancel (signal) before pickup; or no rider found (`no_rider_available`) | compensation depends on how far the order got ([Failure handling](#failure-handling)) |
+| `picked_up` → `delivered` | rider `POST …/delivered` → signal; or a system admin's `POST /v1/orders/{id}/mark-delivered` | payment captured (final settlement), rider back to `available` |
+| → `cancelled` | customer or system admin cancel (signal) before pickup; or no rider found (`no_rider_available`); or food not marked ready 1 h after it was due (`kitchen_timeout`) | compensation depends on how far the order got ([Failure handling](#failure-handling)) |
 | (stays `delivered`) | `POST /v1/orders/{id}/refund` (system admin) | `OrderRefundWorkflow`: payment refund, `orders.refunded_amount` |
 
 Every order event is visible three ways: `GET /v1/orders/{id}` (with `status_history`),
@@ -86,7 +91,8 @@ the live SSE feed, and Kafka (from the outbox — what notifications and analyti
 
 1. **Create delivery**: once `confirmed`, the saga creates the `deliveries` row —
    idempotent on `deliveries.order_id` (unique). Pickup (the restaurant) and dropoff are
-   snapshotted; `ready_at` = now + the restaurant's `avg_prep_time_minutes`.
+   snapshotted; `ready_at` = now + the restaurant's `avg_prep_time_minutes` (when the food
+   is due).
 2. **Find the nearest rider**: `GEOSEARCH` on the Redis GEO set `riders:available`
    (riders who are approved, on shift, and pinged recently), within the search radius
    (5 km, widening — step 4), nearest first, skipping riders who turned this delivery
@@ -97,26 +103,34 @@ the live SSE feed, and Kafka (from the outbox — what notifications and analyti
    candidate is tried, so two deliveries can never get the same rider. The offer is pushed
    on the rider's live feed (`GET /v1/tracking/riders/me`); the app then reads it from
    `GET /v1/riders/me/offer`, and the rider has 60s to accept or decline.
-4. **Reassignment**: a decline, an expired offer, or a drop-out after accepting (the rider
-   says so, or sends no location ping for 3 min) releases the rider, increments
+4. **Reassignment**: a decline, an expired offer, a drop-out after accepting (the rider
+   says so, or sends no location ping for 3 min), or a rider late for ready food (15 min
+   after the later of "ready" and their pickup ETA) releases the rider, increments
    `reassignment_count`, and offers the next-nearest rider. A rider who turned the order
    down is skipped for 2 min, then asked again — with only a few riders nearby, someone
    who declined may take it later. While nobody is free the saga looks again every 30s,
    each time farther out (5 → 8 → 12 km around the restaurant, then staying at 12). After
    10 min it gives up: the order is `cancelled` (`no_rider_available`) and the payment
-   voided. A dropped rider is set `offline`. After pickup a drop-out is not reassigned —
-   the food is with the rider, so it's a support case.
+   voided. A dropped rider is set `offline`; a late one goes back to the pool. After pickup
+   a drop-out is not reassigned — the food is with the rider, so it's a support case: an
+   order not delivered 2 h after pickup is flagged, and a system admin can mark it
+   delivered.
 5. **ETA**: pickup ETA = the later of the rider reaching the restaurant and the food being
-   ready (`ready_at`); dropoff ETA = pickup ETA + restaurant → dropoff travel time. Travel
+   ready (`ready_at`, the real time once the restaurant marks it ready); dropoff ETA = pickup ETA + restaurant → dropoff travel time. Travel
    time = straight-line distance × 1.3 (road factor) ÷ an average speed per vehicle (bike
    12, scooter 25, car 30 km/h).
-6. **Pickup and delivery**: the rider marks the delivery picked up, then delivered. The
+6. **Food ready**: the restaurant marks the food ready (`POST /v1/orders/{id}/food-ready` →
+   signal), any time from confirmation to pickup. delivery-service records it, recomputes
+   the assigned rider's ETAs and emits `DeliveryFoodReady` to the customer and rider. Food
+   not marked ready 15 min after it was due is flagged; after 1 h the order is cancelled
+   (`kitchen_timeout`). Deadlines: [diagrams.md](./diagrams.md#order-lifecycle-sequence).
+7. **Pickup and delivery**: the rider marks the delivery picked up, then delivered. The
    endpoints only check ownership and state and signal the saga; the saga changes the
    status, so a rider's update can't race a cancellation. Each change writes a
    `delivery_status_history` row and a `DeliveryStatusUpdated` outbox row, which pushes
    it to the customer's and the rider's live feeds (through Kafka). `delivered` triggers payment capture and returns the
    rider to `available`.
-7. **Tracking**: location pings continue during delivery and reach the customer within a
+8. **Tracking**: location pings continue during delivery and reach the customer within a
    second (see [Real-time tracking](#real-time-tracking-why-ingestion-and-fan-out-use-different-transports)).
 
 Delivery states: `pending_assignment → offered → assigned → picked_up → delivered`, back to

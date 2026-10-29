@@ -1,5 +1,9 @@
 # Week 2 Implementation Plan — Order Lifecycle + Delivery Workflow
 
+> **Design record, kept as written.** Code comments cite its decisions (D1…D13), so it
+> stays here. Later changes may supersede parts of it; the current design is in
+> [architecture.md](./architecture.md) and [technical-documentation.md](./technical-documentation.md).
+
 Status: **done** (steps 0–8, 2026-10-12; started 2026-10-09). Supersedes the Week 2 section of the original
 Part A plan; it folds in the design changes from the Week 1 production review. Work goes
 step by step (§3); `technical-documentation.md` and `architecture.md` are updated to match

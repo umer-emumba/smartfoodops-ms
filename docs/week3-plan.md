@@ -1,5 +1,9 @@
 # Week 3 Plan — Event-Driven System + Observability
 
+> **Design record, kept as written.** Code comments cite its decisions (W3-D1…D15), so it
+> stays here. Later changes may supersede parts of it; the current design is in
+> [architecture.md](./architecture.md) and [technical-documentation.md](./technical-documentation.md).
+
 ## Context
 
 Week 2 is done (`week2/order-delivery-lifecycle`, 82/82 lifecycle checks). Every domain event
