@@ -7,7 +7,7 @@ there. So one order's trace runs from the HTTP request, through the saga,
 across Kafka to every consumer. All of it is a no-op while tracing is off."""
 
 import contextlib
-from collections.abc import Iterator
+from collections.abc import Generator
 
 from opentelemetry import context, propagate, trace
 from opentelemetry.instrumentation.utils import suppress_instrumentation
@@ -48,7 +48,7 @@ def _from_headers(headers: HeadersLike) -> context.Context:
 @contextlib.contextmanager
 def publish_span(
     topic: str, event_type: str, event_id: str, traceparent: str | None
-) -> Iterator[Span]:
+) -> Generator[Span, None, None]:
     """The relay publishing one outbox row, inside the trace that wrote it.
     Not suppressed by `quiet()` — a manual span, unlike the poll's SQL."""
     with tracer.start_as_current_span(
@@ -71,7 +71,7 @@ def process_span(
     headers: HeadersLike,
     group: str,
     event_type: str | None = None,
-) -> Iterator[Span]:
+) -> Generator[Span, None, None]:
     """A consumer handling one message, continuing the producer's trace."""
     attributes = {
         "messaging.system": "kafka",
@@ -90,7 +90,7 @@ def process_span(
 
 
 @contextlib.contextmanager
-def quiet() -> Iterator[None]:
+def quiet() -> Generator[None, None, None]:
     """No spans from instrumented libraries (SQL, HTTP) inside."""
     with suppress_instrumentation():
         yield

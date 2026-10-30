@@ -1,4 +1,4 @@
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -16,7 +16,7 @@ configure_logging(settings.service_name, settings.log_level)
 
 
 @asynccontextmanager
-async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
+async def _lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
     """Embedded mode: the Kafka consumer that feeds the live streams
     (app/consumer.py) runs in this process. Standalone: `python -m
     app.consumer` runs it instead."""

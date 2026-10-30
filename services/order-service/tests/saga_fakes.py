@@ -5,7 +5,7 @@ server (`env` fixture in each test module)."""
 import asyncio
 import contextlib
 import uuid
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from datetime import timedelta
 from decimal import Decimal
@@ -215,7 +215,7 @@ _started: list[WorkflowHandle] = []
 
 
 @asynccontextmanager
-async def running(env: WorkflowEnvironment, fakes: FakeServices) -> AsyncIterator[None]:
+async def running(env: WorkflowEnvironment, fakes: FakeServices) -> AsyncGenerator[None, None]:
     task = asyncio.create_task(run_workers(env.client, fakes.specs(), service_name="test"))
     try:
         yield

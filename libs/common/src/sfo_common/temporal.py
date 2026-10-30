@@ -13,7 +13,7 @@ import contextlib
 import logging
 import os
 import signal
-from collections.abc import AsyncIterator, Callable, Coroutine, Sequence
+from collections.abc import AsyncGenerator, Callable, Coroutine, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
@@ -235,7 +235,7 @@ async def embedded_workers(
     *,
     service_name: str,
     background: Sequence[BackgroundTask] = (),
-) -> AsyncIterator[None]:
+) -> AsyncGenerator[None, None]:
     """For the API's lifespan: in `embedded` mode, runs the workers as a
     background task (restarted if they fail) and stops them on shutdown. A
     no-op in `standalone` mode, where `python -m app.worker` runs them."""
