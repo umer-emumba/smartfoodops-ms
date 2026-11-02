@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from sfo_common.pagination import build_page, paginate_newest_first
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import set_committed_value
 
 from app.models import (
     MenuCategory,
@@ -181,22 +182,31 @@ async def list_status_history(
     return list(result.scalars().all())
 
 
-async def add_review(session: AsyncSession, review: Review) -> Review:
-    """Inserts the review and bumps the restaurant's rating aggregate in the
-    same transaction. The bump is one UPDATE with relative increments, so two
-    reviews committing at once both count. A second review of the same order
-    fails on the primary key (IntegrityError) at flush."""
+async def add_review(session: AsyncSession, restaurant: Restaurant, review: Review) -> int:
+    """Inserts the review and, in the same transaction, bumps the
+    restaurant's rating aggregate and catalog version (app/events.py) —
+    one UPDATE with relative increments, so two reviews committing at once
+    both count. `restaurant` gets the new values; returns the version. A
+    second review of the same order fails on the primary key (IntegrityError)
+    at flush."""
     session.add(review)
     await session.flush()
-    await session.execute(
-        update(Restaurant)
-        .where(Restaurant.id == review.restaurant_id)
-        .values(
-            rating_sum=Restaurant.rating_sum + review.rating,
-            review_count=Restaurant.review_count + 1,
+    row = (
+        await session.execute(
+            update(Restaurant)
+            .where(Restaurant.id == review.restaurant_id)
+            .values(
+                rating_sum=Restaurant.rating_sum + review.rating,
+                review_count=Restaurant.review_count + 1,
+                catalog_version=Restaurant.catalog_version + 1,
+            )
+            .returning(Restaurant.rating_sum, Restaurant.review_count, Restaurant.catalog_version)
         )
-    )
-    return review
+    ).one()
+    set_committed_value(restaurant, "rating_sum", row.rating_sum)
+    set_committed_value(restaurant, "review_count", row.review_count)
+    set_committed_value(restaurant, "catalog_version", row.catalog_version)
+    return int(row.catalog_version)
 
 
 async def list_reviews(

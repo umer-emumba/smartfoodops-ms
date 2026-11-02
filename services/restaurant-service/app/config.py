@@ -1,8 +1,8 @@
 from sfo_common import BaseServiceSettings
-from sfo_common.config import TemporalSettings
+from sfo_common.config import OutboxRelaySettings, TemporalSettings
 
 
-class Settings(BaseServiceSettings, TemporalSettings):
+class Settings(BaseServiceSettings, TemporalSettings, OutboxRelaySettings):
     # Review eligibility checks (app/order_client.py).
     order_service_url: str = "http://order-service:8000"
 

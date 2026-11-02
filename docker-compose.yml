@@ -240,7 +240,7 @@ services:
     command:
       - |
         set -e
-        for topic in order-events delivery-events payment-events; do
+        for topic in order-events delivery-events payment-events restaurant-events; do
           for name in "$$topic" "$$topic.dlq"; do
             kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists \
               --topic "$$name" --partitions 3 --replication-factor 1 \
@@ -248,7 +248,8 @@ services:
           done
         done
         kafka-topics --bootstrap-server kafka:9092 --describe \
-          --topic 'order-events|delivery-events|payment-events' --exclude-internal
+          --topic 'order-events|delivery-events|payment-events|restaurant-events' \
+          --exclude-internal
 
   schema-registry:
     logging: *default-logging
@@ -470,6 +471,22 @@ services:
     depends_on:
       order-service: { condition: service_healthy }
       order-db: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      schema-registry: { condition: service_healthy }
+      kafka-init: { condition: service_completed_successfully }
+
+  # Relays restaurant-service's outbox to restaurant-events (catalog changes
+  # for ai-service's search index, docs/week4-plan.md step 2).
+  restaurant-worker:
+    <<: *celery-worker
+    environment:
+      <<: *broker-env
+      OTEL_SERVICE_NAME: restaurant-worker
+    build: { context: ., dockerfile: services/restaurant-service/Dockerfile }
+    env_file: [services/restaurant-service/.env]
+    depends_on:
+      restaurant-service: { condition: service_healthy }
+      restaurant-db: { condition: service_healthy }
       rabbitmq: { condition: service_healthy }
       schema-registry: { condition: service_healthy }
       kafka-init: { condition: service_completed_successfully }

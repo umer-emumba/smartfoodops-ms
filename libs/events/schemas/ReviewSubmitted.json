@@ -1,0 +1,113 @@
+{
+  "$defs": {
+    "ReviewSubmittedPayload": {
+      "additionalProperties": false,
+      "description": "A review and the restaurant's rating after it. No customer_id: the\nreview is published, its author isn't.",
+      "properties": {
+        "avg_rating": {
+          "title": "Avg Rating",
+          "type": "number"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "item_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Item Ids",
+          "type": "array"
+        },
+        "order_id": {
+          "title": "Order Id",
+          "type": "string"
+        },
+        "rating": {
+          "title": "Rating",
+          "type": "integer"
+        },
+        "restaurant_id": {
+          "title": "Restaurant Id",
+          "type": "string"
+        },
+        "restaurant_name": {
+          "title": "Restaurant Name",
+          "type": "string"
+        },
+        "review_count": {
+          "title": "Review Count",
+          "type": "integer"
+        },
+        "source_version": {
+          "title": "Source Version",
+          "type": "integer"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "order_id",
+        "restaurant_id",
+        "restaurant_name",
+        "rating",
+        "text",
+        "item_ids",
+        "created_at",
+        "avg_rating",
+        "review_count",
+        "source_version"
+      ],
+      "title": "ReviewSubmittedPayload",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "aggregate_id": {
+      "title": "Aggregate Id",
+      "type": "string"
+    },
+    "correlation_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Correlation Id"
+    },
+    "event_id": {
+      "title": "Event Id",
+      "type": "string"
+    },
+    "event_type": {
+      "const": "ReviewSubmitted",
+      "title": "Event Type",
+      "type": "string"
+    },
+    "occurred_at": {
+      "format": "date-time",
+      "title": "Occurred At",
+      "type": "string"
+    },
+    "payload": {
+      "$ref": "#/$defs/ReviewSubmittedPayload"
+    }
+  },
+  "required": [
+    "event_id",
+    "aggregate_id",
+    "occurred_at",
+    "event_type",
+    "payload"
+  ],
+  "title": "ReviewSubmitted",
+  "type": "object"
+}

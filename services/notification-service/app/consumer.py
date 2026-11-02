@@ -65,7 +65,8 @@ async def handle(session: AsyncSession, event: DomainEvent) -> AfterCommit | Non
 def build_consumer_loop() -> tuple[ConsumerLoop, Callable[[], None]]:
     """The loop and a `close` for shutdown."""
     consumer = make_consumer(settings.kafka_bootstrap_servers, GROUP)
-    consumer.subscribe([topic.value for topic in Topic])
+    # Not restaurant-events: catalog changes notify nobody.
+    consumer.subscribe([Topic.ORDER.value, Topic.DELIVERY.value, Topic.PAYMENT.value])
     dlq_producer = make_producer(settings.kafka_bootstrap_servers)
     loop = ConsumerLoop(
         consumer=consumer,

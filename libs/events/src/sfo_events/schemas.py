@@ -15,6 +15,7 @@ class Topic(StrEnum):
     ORDER = "order-events"
     DELIVERY = "delivery-events"
     PAYMENT = "payment-events"
+    RESTAURANT = "restaurant-events"
 
 
 def dlq_topic(topic: str) -> str:
@@ -37,11 +38,18 @@ class EventType(StrEnum):
     DELIVERY_ETA_UPDATED = "DeliveryEtaUpdated"
     DELIVERY_FOOD_READY = "DeliveryFoodReady"
     RIDER_SHIFT_CHANGED = "RiderShiftChanged"
+    RESTAURANT_UPSERTED = "RestaurantUpserted"
+    RESTAURANT_STATUS_CHANGED = "RestaurantStatusChanged"
+    MENU_ITEM_UPSERTED = "MenuItemUpserted"
+    MENU_ITEM_DELETED = "MenuItemDeleted"
+    REVIEW_SUBMITTED = "ReviewSubmitted"
 
 
 # The topic each event is published to. RiderShiftChanged rides on
 # delivery-events: delivery-service owns riders, and keying by rider_id keeps
-# one rider's shift changes in order.
+# one rider's shift changes in order. Every restaurant-events message is keyed
+# by restaurant_id (menu items and reviews included), so one restaurant's
+# catalog changes stay in order (week4-plan step 2).
 EVENT_TOPICS: dict[EventType, Topic] = {
     EventType.ORDER_PLACED: Topic.ORDER,
     EventType.ORDER_AWAITING_RESTAURANT: Topic.ORDER,
@@ -57,12 +65,18 @@ EVENT_TOPICS: dict[EventType, Topic] = {
     EventType.DELIVERY_ETA_UPDATED: Topic.DELIVERY,
     EventType.DELIVERY_FOOD_READY: Topic.DELIVERY,
     EventType.RIDER_SHIFT_CHANGED: Topic.DELIVERY,
+    EventType.RESTAURANT_UPSERTED: Topic.RESTAURANT,
+    EventType.RESTAURANT_STATUS_CHANGED: Topic.RESTAURANT,
+    EventType.MENU_ITEM_UPSERTED: Topic.RESTAURANT,
+    EventType.MENU_ITEM_DELETED: Topic.RESTAURANT,
+    EventType.REVIEW_SUBMITTED: Topic.RESTAURANT,
 }
 
 
 class DomainEvent(BaseModel):
     """Envelope every outbox row/Kafka message carries. `aggregate_id` is the
-    Kafka partition key (order_id/delivery_id/payment_id/rider_id) so
+    Kafka partition key (order_id/delivery_id/payment_id/rider_id/
+    restaurant_id) so
     per-entity ordering is preserved. `occurred_at` is the outbox row's
     `created_at` — payloads don't repeat it."""
 

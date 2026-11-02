@@ -8,7 +8,7 @@ from sfo_common.pagination import Page
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import cache, order_client, owners, repository
+from app import cache, events, order_client, owners, repository
 from app.auth_deps import get_current_user_optional, require_roles
 from app.db import get_session
 from app.models import (
@@ -111,19 +111,24 @@ async def _public_restaurant_view(
     return cache.json_response(body, public=True)
 
 
-def _record_status_change(
+async def _record_status_change(
     session: AsyncSession,
     restaurant: Restaurant,
     to_status: str,
     current: CurrentUser,
     reason: str | None = None,
 ) -> None:
-    """Changes the status and appends the audit row in the same transaction.
-    A no-op transition (e.g. approving an already-active restaurant) records
+    """Changes the status and appends the audit row and the
+    RestaurantStatusChanged event in the same transaction. A no-op
+    transition (e.g. approving an already-active restaurant) records
     nothing, so the trail only ever shows real changes."""
     from_status = restaurant.status
     if from_status == to_status:
         return
+    version = await events.next_version(session, restaurant)
+    events.restaurant_status_changed(
+        session, restaurant.id, from_status, to_status, reason, version
+    )
     restaurant.status = to_status
     session.add(
         RestaurantStatusHistory(
@@ -156,6 +161,7 @@ async def create_restaurant(
             actor_role=current.role.value,
         )
     )
+    events.restaurant_upserted(session, restaurant, await events.next_version(session, restaurant))
     await session.commit()
     await owners.record(restaurant.id, restaurant.admin_user_id)
     return restaurant
@@ -221,8 +227,18 @@ async def update_restaurant(
     session: AsyncSession = Depends(get_session),
 ) -> Restaurant:
     restaurant = await _get_owned_restaurant(session, restaurant_id, current)
-    for field, value in body.model_dump(exclude_unset=True).items():
+    version = await events.next_version(session, restaurant)
+    changes = {
+        field: value
+        for field, value in body.model_dump(exclude_unset=True).items()
+        if getattr(restaurant, field) != value
+    }
+    for field, value in changes.items():
         setattr(restaurant, field, value)
+    events.restaurant_upserted(session, restaurant, version)
+    if changes.keys() & events.ITEM_FIELDS_FROM_RESTAURANT:
+        items = await repository.list_menu(session, restaurant_id)
+        await events.menu_items_upserted(session, restaurant, items, version)
     await session.commit()
     await cache.invalidate(restaurant_id)
     return restaurant
@@ -238,7 +254,9 @@ async def approve_restaurant(
     restaurant = await repository.get_restaurant(session, restaurant_id)
     if restaurant is None:
         raise NotFoundError("Restaurant not found")
-    _record_status_change(session, restaurant, "active", current, body.reason if body else None)
+    await _record_status_change(
+        session, restaurant, "active", current, body.reason if body else None
+    )
     await session.commit()
     await cache.invalidate(restaurant_id)
     return restaurant
@@ -257,7 +275,9 @@ async def suspend_restaurant(
     restaurant = await repository.get_restaurant(session, restaurant_id)
     if restaurant is None:
         raise NotFoundError("Restaurant not found")
-    _record_status_change(session, restaurant, "suspended", current, body.reason if body else None)
+    await _record_status_change(
+        session, restaurant, "suspended", current, body.reason if body else None
+    )
     await session.commit()
     await cache.invalidate(restaurant_id)
     return restaurant
@@ -323,10 +343,17 @@ async def update_category(
     current: CurrentUser = Depends(require_roles(Role.RESTAURANT_ADMIN, Role.SYSTEM_ADMIN)),
     session: AsyncSession = Depends(get_session),
 ) -> MenuCategory:
-    await _get_owned_restaurant(session, restaurant_id, current)
+    restaurant = await _get_owned_restaurant(session, restaurant_id, current)
     category = await _get_owned_category(session, restaurant_id, category_id)
-    for field, value in body.model_dump(exclude_unset=True).items():
-        setattr(category, field, value)
+    changes = body.model_dump(exclude_unset=True)
+    if changes.get("name", category.name) != category.name:
+        # The category name is part of each of its items' search text.
+        version = await events.next_version(session, restaurant)
+        category.name = changes["name"]
+        items = await repository.list_menu(session, restaurant_id)
+        await events.menu_items_upserted(
+            session, restaurant, [i for i in items if i.category_id == category_id], version
+        )
     await session.commit()
     await cache.invalidate(restaurant_id)
     return category
@@ -360,10 +387,12 @@ async def create_item(
     current: CurrentUser = Depends(require_roles(Role.RESTAURANT_ADMIN, Role.SYSTEM_ADMIN)),
     session: AsyncSession = Depends(get_session),
 ) -> MenuItem:
-    await _get_owned_restaurant(session, restaurant_id, current)
+    restaurant = await _get_owned_restaurant(session, restaurant_id, current)
     await _get_owned_category(session, restaurant_id, body.category_id)
+    version = await events.next_version(session, restaurant)
     item = MenuItem(restaurant_id=restaurant_id, **body.model_dump())
     item = await repository.create_item(session, item)
+    await events.menu_items_upserted(session, restaurant, [item], version)
     await session.commit()
     await cache.invalidate(restaurant_id)
     return item
@@ -377,12 +406,16 @@ async def update_item(
     current: CurrentUser = Depends(require_roles(Role.RESTAURANT_ADMIN, Role.SYSTEM_ADMIN)),
     session: AsyncSession = Depends(get_session),
 ) -> MenuItem:
-    await _get_owned_restaurant(session, restaurant_id, current)
+    restaurant = await _get_owned_restaurant(session, restaurant_id, current)
+    # Before reading the item: the restaurant row lock queues concurrent
+    # edits, so each one reads the item as the previous one left it.
+    version = await events.next_version(session, restaurant)
     item = await repository.get_item(session, item_id)
     if item is None or item.restaurant_id != restaurant_id:
         raise NotFoundError("Menu item not found")
     for field, value in body.model_dump(exclude_unset=True).items():
         setattr(item, field, value)
+    await events.menu_items_upserted(session, restaurant, [item], version)
     await session.commit()
     await cache.invalidate(restaurant_id)
     return item
@@ -397,10 +430,12 @@ async def delete_item(
     current: CurrentUser = Depends(require_roles(Role.RESTAURANT_ADMIN, Role.SYSTEM_ADMIN)),
     session: AsyncSession = Depends(get_session),
 ) -> None:
-    await _get_owned_restaurant(session, restaurant_id, current)
+    restaurant = await _get_owned_restaurant(session, restaurant_id, current)
+    version = await events.next_version(session, restaurant)
     item = await repository.get_item(session, item_id)
     if item is None or item.restaurant_id != restaurant_id:
         raise NotFoundError("Menu item not found")
+    events.menu_item_deleted(session, item, version)
     await repository.delete_item(session, item)
     await session.commit()
     await cache.invalidate(restaurant_id)
@@ -547,7 +582,8 @@ async def create_review(
         item_ids=order.menu_item_ids,
     )
     try:
-        await repository.add_review(session, review)
+        version = await repository.add_review(session, restaurant, review)
+        events.review_submitted(session, restaurant, review, version)
         await session.commit()
     except IntegrityError as exc:
         await session.rollback()

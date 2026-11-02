@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
-from app import cache, repository
+from app import cache, events, repository
 from app.config import settings
 from app.db import get_session
 from app.main import app
@@ -99,6 +99,12 @@ def env(monkeypatch):
 
     monkeypatch.setattr(repository, "get_restaurant", get_restaurant)
     monkeypatch.setattr(repository, "list_menu", list_menu)
+
+    # Event writing is covered against a real database (test_events_db.py).
+    async def next_version(_session, _restaurant):
+        return 1
+
+    monkeypatch.setattr(events, "next_version", next_version)
     app.dependency_overrides[get_session] = lambda: _FakeSession()
     yield {"redis": fake_redis, "restaurant": restaurant, "calls": calls}
     app.dependency_overrides.clear()

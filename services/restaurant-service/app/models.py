@@ -5,6 +5,7 @@ from sfo_common import new_id
 from sfo_events import OutboxEventMixin
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -61,6 +62,11 @@ class Restaurant(Base):
     # lose each other's update. The average is derived (avg_rating below).
     rating_sum: Mapped[int] = mapped_column(Integer, default=0)
     review_count: Mapped[int] = mapped_column(Integer, default=0)
+    # Goes up by one in every transaction that writes a restaurant-events
+    # event for this restaurant (app/events.py); events carry it as
+    # `source_version`. The UPDATE that bumps it locks this row, so it rises
+    # in commit order.
+    catalog_version: Mapped[int] = mapped_column(BigInteger, default=0)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
