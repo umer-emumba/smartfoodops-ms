@@ -6,10 +6,13 @@ from decimal import Decimal
 
 import pytest
 from app import import_history as import_module
+from app import repository
 from app.import_history import ImportedItem, ImportedOrder, import_history
 from app.main import app
-from app.models import Order
+from app.models import Order, OrderStatus, OutboxEvent
+from app.repository import apply_transition
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 pytestmark = pytest.mark.db
@@ -75,3 +78,37 @@ async def test_summary_for_review_checks(
     assert body["status"] == "delivered"
     assert body["menu_item_ids"] == ["m-1", "m-2"]  # each item once, in order
     assert missing.status_code == 404
+
+
+async def test_delivered_export_and_event_carry_the_items(
+    session_factory: async_sessionmaker[AsyncSession], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(import_module, "SessionFactory", session_factory)
+    await import_history([_order("h-1")])
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        page = (await c.get("/internal/orders/delivered", params={"limit": 10})).json()
+    assert page["next_cursor"] is None
+    [exported] = page["items"]
+    assert exported["customer_id"] == "u-customer"
+    assert [(i["name"], i["quantity"]) for i in exported["items"]] == [
+        ("Biryani", 2),
+        ("Raita", 1),
+        ("Biryani", 1),
+    ]
+
+    # The live path: OrderDelivered written by a transition carries the same lines.
+    async with session_factory() as session:
+        order = await repository.get_order(session, "h-1")
+        assert order is not None
+        order.status = OrderStatus.PICKED_UP
+        apply_transition(
+            session, order, OrderStatus.DELIVERED, actor_id=None, actor_role=None, reason=None
+        )
+        await session.commit()
+        row = (
+            await session.execute(
+                select(OutboxEvent).where(OutboxEvent.event_type == "OrderDelivered")
+            )
+        ).scalar_one()
+    assert [line["name"] for line in row.payload["items"]] == ["Biryani", "Raita", "Biryani"]
+    assert row.payload["items"][0]["unit_price"] == "650.00"

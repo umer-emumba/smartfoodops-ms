@@ -109,6 +109,31 @@ async def get_restaurant_owner(session: AsyncSession, restaurant_id: str) -> str
     return result.scalar_one_or_none()
 
 
+def order_lines(order: Order) -> list[dict]:
+    """The order's items as OrderDelivered and the history export carry
+    them. `order.items` must be loaded (get_order does)."""
+    return [
+        {
+            "menu_item_id": item.menu_item_id,
+            "name": item.item_name_snapshot,
+            "quantity": item.quantity,
+            "unit_price": item.unit_price,
+        }
+        for item in order.items
+    ]
+
+
+async def list_delivered(session: AsyncSession, *, cursor: str | None, limit: int) -> dict:
+    """Every delivered order, newest first — ai-service's history backfill."""
+    stmt = (
+        select(Order)
+        .where(Order.status == OrderStatus.DELIVERED)
+        .options(selectinload(Order.items))
+    )
+    result = await session.execute(paginate_newest_first(stmt, Order, cursor=cursor, limit=limit))
+    return build_page(list(result.scalars().all()), limit)
+
+
 def apply_transition(
     session: AsyncSession,
     order: Order,
@@ -161,6 +186,9 @@ def apply_transition(
                     "from_status": from_status,
                     "to_status": to_status.value,
                     "reason": reason,
+                    # What was ordered, for ai-service's order history
+                    # (week4-plan step 3); only once it's delivered.
+                    "items": order_lines(order) if to_status == OrderStatus.DELIVERED else None,
                 },
             )
         )

@@ -12,6 +12,7 @@ Payloads are full snapshots (sfo_events.payloads), so the indexer never
 calls back here."""
 
 from decimal import Decimal
+from typing import Any
 
 from sfo_common.middleware import get_correlation_id
 from sfo_events import EventType, new_outbox_row
@@ -61,27 +62,87 @@ def _add(session: AsyncSession, restaurant_id: str, event_type: EventType, paylo
     )
 
 
+def restaurant_payload(restaurant: Restaurant, version: int) -> dict[str, Any]:
+    """RestaurantUpserted's payload — also what the catalog export returns
+    (app/api/internal.py), so a backfill builds the same documents."""
+    return {
+        "restaurant_id": restaurant.id,
+        "name": restaurant.name,
+        "description": restaurant.description,
+        "city": restaurant.city,
+        "address": restaurant.address,
+        "lat": restaurant.lat,
+        "lng": restaurant.lng,
+        "cuisine_type": restaurant.cuisine_type,
+        "status": restaurant.status,
+        "is_accepting_orders": restaurant.is_accepting_orders,
+        "avg_prep_time_minutes": restaurant.avg_prep_time_minutes,
+        "avg_rating": restaurant.avg_rating,
+        "review_count": restaurant.review_count,
+        "source_version": version,
+    }
+
+
+def menu_item_payload(
+    restaurant: Restaurant, item: MenuItem, category_name: str, version: int
+) -> dict[str, Any]:
+    """MenuItemUpserted's payload (and the export's)."""
+    return {
+        "menu_item_id": item.id,
+        "restaurant_id": restaurant.id,
+        "restaurant_name": restaurant.name,
+        "restaurant_status": restaurant.status,
+        "cuisine_type": restaurant.cuisine_type,
+        "city": restaurant.city,
+        "lat": restaurant.lat,
+        "lng": restaurant.lng,
+        "category_id": item.category_id,
+        "category_name": category_name,
+        "name": item.name,
+        "description": item.description,
+        # Fresh from a request it's e.g. Decimal("720"); stored, "720.00".
+        "price": item.price.quantize(_CENTS),
+        "dietary_tags": list(item.dietary_tags),
+        "spice_level": item.spice_level,
+        "calories": item.calories,
+        "is_available": item.is_available,
+        "in_stock": item.stock_count is None or item.stock_count > 0,
+        "source_version": version,
+    }
+
+
+def review_payload(restaurant: Restaurant, review: Review, version: int) -> dict[str, Any]:
+    """ReviewSubmitted's payload (and the export's). The rating is the
+    restaurant's current one."""
+    return {
+        "order_id": review.order_id,
+        "restaurant_id": restaurant.id,
+        "restaurant_name": restaurant.name,
+        "rating": review.rating,
+        "text": review.text,
+        "item_ids": list(review.item_ids),
+        "created_at": review.created_at,
+        "avg_rating": restaurant.avg_rating,
+        "review_count": restaurant.review_count,
+        "source_version": version,
+    }
+
+
+async def category_names(session: AsyncSession, items: list[MenuItem]) -> dict[str, str]:
+    rows = await session.execute(
+        select(MenuCategory.id, MenuCategory.name).where(
+            MenuCategory.id.in_({item.category_id for item in items})
+        )
+    )
+    return {row.id: row.name for row in rows}
+
+
 def restaurant_upserted(session: AsyncSession, restaurant: Restaurant, version: int) -> None:
     _add(
         session,
         restaurant.id,
         EventType.RESTAURANT_UPSERTED,
-        {
-            "restaurant_id": restaurant.id,
-            "name": restaurant.name,
-            "description": restaurant.description,
-            "city": restaurant.city,
-            "address": restaurant.address,
-            "lat": restaurant.lat,
-            "lng": restaurant.lng,
-            "cuisine_type": restaurant.cuisine_type,
-            "status": restaurant.status,
-            "is_accepting_orders": restaurant.is_accepting_orders,
-            "avg_prep_time_minutes": restaurant.avg_prep_time_minutes,
-            "avg_rating": restaurant.avg_rating,
-            "review_count": restaurant.review_count,
-            "source_version": version,
-        },
+        restaurant_payload(restaurant, version),
     )
 
 
@@ -111,38 +172,13 @@ async def menu_items_upserted(
     session: AsyncSession, restaurant: Restaurant, items: list[MenuItem], version: int
 ) -> None:
     """One MenuItemUpserted per item, with its category's name."""
-    category_ids = {item.category_id for item in items}
-    rows = await session.execute(
-        select(MenuCategory.id, MenuCategory.name).where(MenuCategory.id.in_(category_ids))
-    )
-    names: dict[str, str] = {row.id: row.name for row in rows}
+    names = await category_names(session, items)
     for item in items:
         _add(
             session,
             restaurant.id,
             EventType.MENU_ITEM_UPSERTED,
-            {
-                "menu_item_id": item.id,
-                "restaurant_id": restaurant.id,
-                "restaurant_name": restaurant.name,
-                "restaurant_status": restaurant.status,
-                "cuisine_type": restaurant.cuisine_type,
-                "city": restaurant.city,
-                "lat": restaurant.lat,
-                "lng": restaurant.lng,
-                "category_id": item.category_id,
-                "category_name": names.get(item.category_id, ""),
-                "name": item.name,
-                "description": item.description,
-                # Fresh from a request it's e.g. Decimal("720"); stored, "720.00".
-                "price": item.price.quantize(_CENTS),
-                "dietary_tags": list(item.dietary_tags),
-                "spice_level": item.spice_level,
-                "calories": item.calories,
-                "is_available": item.is_available,
-                "in_stock": item.stock_count is None or item.stock_count > 0,
-                "source_version": version,
-            },
+            menu_item_payload(restaurant, item, names.get(item.category_id, ""), version),
         )
 
 
@@ -164,16 +200,5 @@ def review_submitted(
         session,
         restaurant.id,
         EventType.REVIEW_SUBMITTED,
-        {
-            "order_id": review.order_id,
-            "restaurant_id": restaurant.id,
-            "restaurant_name": restaurant.name,
-            "rating": review.rating,
-            "text": review.text,
-            "item_ids": list(review.item_ids),
-            "created_at": review.created_at,
-            "avg_rating": restaurant.avg_rating,
-            "review_count": restaurant.review_count,
-            "source_version": version,
-        },
+        review_payload(restaurant, review, version),
     )

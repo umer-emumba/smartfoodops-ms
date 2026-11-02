@@ -28,7 +28,17 @@ SAMPLE_PAYLOADS: dict[EventType, dict[str, Any]] = {
     EventType.ORDER_CANCELLED: _transition("confirmed", "cancelled", "customer_cancelled"),
     EventType.RIDER_ASSIGNED: _transition("confirmed", "assigned"),
     EventType.ORDER_PICKED_UP: _transition("assigned", "picked_up"),
-    EventType.ORDER_DELIVERED: _transition("picked_up", "delivered"),
+    EventType.ORDER_DELIVERED: {
+        **_transition("picked_up", "delivered"),
+        "items": [
+            {
+                "menu_item_id": "item-1",
+                "name": "Chicken Biryani",
+                "quantity": 2,
+                "unit_price": Decimal("690.00"),
+            }
+        ],
+    },
     EventType.PAYMENT_SUCCESSFUL: {
         "payment_id": "pay-1",
         "order_id": "ord-1",

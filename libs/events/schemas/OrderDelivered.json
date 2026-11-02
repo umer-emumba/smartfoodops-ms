@@ -1,8 +1,38 @@
 {
   "$defs": {
+    "OrderLine": {
+      "additionalProperties": false,
+      "properties": {
+        "menu_item_id": {
+          "title": "Menu Item Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "quantity": {
+          "title": "Quantity",
+          "type": "integer"
+        },
+        "unit_price": {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "title": "Unit Price",
+          "type": "string"
+        }
+      },
+      "required": [
+        "menu_item_id",
+        "name",
+        "quantity",
+        "unit_price"
+      ],
+      "title": "OrderLine",
+      "type": "object"
+    },
     "OrderTransitionPayload": {
       "additionalProperties": false,
-      "description": "Every order status event after OrderPlaced. `reason` is set on\nrejections and cancellations (e.g. `restaurant_rejected`).",
+      "description": "Every order status event after OrderPlaced. `reason` is set on\nrejections and cancellations (e.g. `restaurant_rejected`). `items` only\non OrderDelivered (week4-plan step 3): what was ordered, by name, for\nai-service's order history \u2014 None on older events.",
       "properties": {
         "customer_id": {
           "title": "Customer Id",
@@ -11,6 +41,21 @@
         "from_status": {
           "title": "From Status",
           "type": "string"
+        },
+        "items": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/OrderLine"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Items"
         },
         "order_id": {
           "title": "Order Id",

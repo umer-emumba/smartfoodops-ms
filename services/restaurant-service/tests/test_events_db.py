@@ -18,6 +18,7 @@ from httpx import ASGITransport, AsyncClient
 from sfo_auth import Role
 from sfo_auth.testing import make_test_token
 from sfo_contracts.activities import OrderRef, ReservedItem, ReserveOrderInput
+from sfo_events import EventType, validate_payload
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -221,3 +222,26 @@ async def test_versions_rise_under_concurrent_writes(client, session_factory) ->
     )
     versions = [p["source_version"] for _, p in await _events(session_factory)]
     assert len(versions) == len(set(versions))
+
+
+async def test_catalog_export_matches_the_events(client: AsyncClient, session_factory) -> None:
+    await _menu(client, dietary_tags=["halal"])
+    await client.post(
+        f"/v1/restaurants/{RID}/reviews",
+        json={"order_id": "o-1", "rating": 5, "text": "Proper dum"},
+        headers=CUSTOMER,
+    )
+    resp = await client.get("/internal/catalog/export", params={"limit": 10})
+    assert resp.status_code == 200
+    [entry] = resp.json()["items"]
+    events = await _events(session_factory)
+    latest = events[-1][1]["source_version"]
+    assert entry["restaurant"]["source_version"] == latest
+    validate_payload(EventType.RESTAURANT_UPSERTED, entry["restaurant"])
+    [item] = entry["menu_items"]
+    validate_payload(EventType.MENU_ITEM_UPSERTED, item)
+    upserted = next(p for t, p in events if t == "MenuItemUpserted")
+    assert {**item, "source_version": 0} == {**upserted, "source_version": 0}
+    [review] = entry["reviews"]
+    validate_payload(EventType.REVIEW_SUBMITTED, review)
+    assert review["review_count"] == 1

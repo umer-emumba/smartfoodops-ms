@@ -580,9 +580,13 @@ services:
     build: { context: ., dockerfile: services/ai-service/Dockerfile }
     env_file: [services/ai-service/.env]
     environment: *observability-env
+    # The search indexer's Kafka consumer runs in this process
+    # (KAFKA_CONSUMER_MODE=embedded, app/consumer.py).
     depends_on:
       ai-db: { condition: service_healthy }
       qdrant: { condition: service_healthy }
+      schema-registry: { condition: service_healthy }
+      kafka-init: { condition: service_completed_successfully }
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 5s

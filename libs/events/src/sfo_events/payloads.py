@@ -45,9 +45,18 @@ class OrderPlacedPayload(EventPayload):
     items: list[OrderItemRef]
 
 
+class OrderLine(EventPayload):
+    menu_item_id: str
+    name: str
+    quantity: int
+    unit_price: Decimal
+
+
 class OrderTransitionPayload(EventPayload):
     """Every order status event after OrderPlaced. `reason` is set on
-    rejections and cancellations (e.g. `restaurant_rejected`)."""
+    rejections and cancellations (e.g. `restaurant_rejected`). `items` only
+    on OrderDelivered (week4-plan step 3): what was ordered, by name, for
+    ai-service's order history — None on older events."""
 
     order_id: str
     order_number: int
@@ -58,6 +67,7 @@ class OrderTransitionPayload(EventPayload):
     from_status: str
     to_status: str
     reason: str | None = None
+    items: list[OrderLine] | None = None
 
 
 class PaymentSuccessfulPayload(EventPayload):

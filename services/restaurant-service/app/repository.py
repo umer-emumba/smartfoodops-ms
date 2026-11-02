@@ -217,6 +217,13 @@ async def list_reviews(
     return build_page(list(result.scalars().all()), limit)
 
 
+async def list_all_reviews(session: AsyncSession, restaurant_id: str) -> list[Review]:
+    result = await session.execute(
+        select(Review).where(Review.restaurant_id == restaurant_id).order_by(Review.created_at)
+    )
+    return list(result.scalars().all())
+
+
 async def recompute_rating(session: AsyncSession, restaurant_id: str) -> None:
     """Rebuilds the aggregate from the reviews table — for bulk imports
     (app/import_reviews.py), which insert without add_review's increments."""

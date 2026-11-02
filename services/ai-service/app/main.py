@@ -16,7 +16,17 @@ configure_logging(settings.service_name, settings.log_level)
 
 @asynccontextmanager
 async def _lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
-    yield
+    """Embedded mode (week3-plan W3-D6): the indexer's Kafka consumer runs in
+    this process. Standalone: `python -m app.consumer` runs it instead."""
+    if settings.kafka_consumer_mode != "embedded":
+        yield
+    else:
+        from sfo_events.consumer import running_in_background
+
+        from app.consumer import build_consumer_loop
+
+        async with running_in_background(*build_consumer_loop()):
+            yield
     await qdrant.client.close()
 
 
