@@ -27,6 +27,7 @@ def test_public_routes_classified_correctly() -> None:
     assert is_public_route(
         "GET", "restaurants", "0198abc1-2345-7def-8901-abcdef123456/menu/categories"
     )
+    assert is_public_route("GET", "restaurants", "0198abc1-2345-7def-8901-abcdef123456/reviews")
 
 
 def test_private_routes_not_misclassified_as_public() -> None:
@@ -41,6 +42,9 @@ def test_private_routes_not_misclassified_as_public() -> None:
     assert not is_public_route("GET", "riders", "admin")
     assert not is_public_route("GET", "users", "me")
     # Writes to the same path stay private.
+    assert not is_public_route(
+        "POST", "restaurants", "0198abc1-2345-7def-8901-abcdef123456/reviews"
+    )
     assert not is_public_route(
         "POST", "restaurants", "0198abc1-2345-7def-8901-abcdef123456/menu/categories"
     )

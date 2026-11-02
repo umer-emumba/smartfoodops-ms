@@ -8,10 +8,17 @@ from sfo_common.pagination import Page
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import cache, owners, repository
+from app import cache, order_client, owners, repository
 from app.auth_deps import get_current_user_optional, require_roles
 from app.db import get_session
-from app.models import MenuCategory, MenuItem, Promotion, Restaurant, RestaurantStatusHistory
+from app.models import (
+    MenuCategory,
+    MenuItem,
+    Promotion,
+    Restaurant,
+    RestaurantStatusHistory,
+    Review,
+)
 from app.schemas import (
     MenuCategoryCreate,
     MenuCategoryResponse,
@@ -25,6 +32,8 @@ from app.schemas import (
     RestaurantCreate,
     RestaurantResponse,
     RestaurantUpdate,
+    ReviewCreate,
+    ReviewResponse,
     StatusChangeRequest,
     StatusHistoryResponse,
     check_promotion_rules,
@@ -504,3 +513,61 @@ async def list_promotions(
     if is_manager:
         return await repository.list_all_promotions(session, restaurant_id)
     return await repository.list_active_promotions(session, restaurant_id)
+
+
+@router.post("/restaurants/{restaurant_id}/reviews", response_model=ReviewResponse, status_code=201)
+async def create_review(
+    restaurant_id: str,
+    body: ReviewCreate,
+    current: CurrentUser = Depends(require_roles(Role.CUSTOMER)),
+    session: AsyncSession = Depends(get_session),
+) -> Review:
+    """One review per delivered order, by the customer who placed it.
+
+    order-service is asked about the order (app/order_client.py). Someone
+    else's order is a 404, the same as a missing one, so order IDs can't be
+    probed. The reviewed items are taken from the order, not from the client.
+    """
+    restaurant = await repository.get_restaurant(session, restaurant_id)
+    if restaurant is None:
+        raise NotFoundError("Restaurant not found")
+    order = await order_client.get_order(body.order_id)
+    if order is None or order.customer_id != current.id:
+        raise NotFoundError("Order not found")
+    if order.restaurant_id != restaurant_id:
+        raise ValidationAppError("The order is not from this restaurant")
+    if order.status != "delivered":
+        raise ConflictError("Only a delivered order can be reviewed")
+    review = Review(
+        order_id=order.id,
+        customer_id=current.id,
+        restaurant_id=restaurant_id,
+        rating=body.rating,
+        text=body.text,
+        item_ids=order.menu_item_ids,
+    )
+    try:
+        await repository.add_review(session, review)
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise ConflictError("This order has already been reviewed") from exc
+    # The detail view carries avg_rating/review_count.
+    await cache.invalidate(restaurant_id)
+    return review
+
+
+@router.get("/restaurants/{restaurant_id}/reviews", response_model=Page[ReviewResponse])
+async def list_reviews(
+    restaurant_id: str,
+    cursor: str | None = Query(default=None),
+    limit: int = Query(default=20, ge=1, le=100),
+    current: CurrentUser | None = Depends(get_current_user_optional),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Newest first. Public for an active restaurant, like its menu."""
+    restaurant = await repository.get_restaurant(session, restaurant_id)
+    if restaurant is None:
+        raise NotFoundError("Restaurant not found")
+    _ensure_restaurant_visible(restaurant, current)
+    return await repository.list_reviews(session, restaurant_id, cursor=cursor, limit=limit)

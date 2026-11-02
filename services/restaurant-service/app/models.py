@@ -6,6 +6,7 @@ from sfo_events import OutboxEventMixin
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     DateTime,
     Float,
     ForeignKey,
@@ -14,7 +15,7 @@ from sqlalchemy import (
     Numeric,
     String,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, synonym
 
 from app.db import Base
 
@@ -54,9 +55,21 @@ class Restaurant(Base):
     # UPDATE that checks it against max_concurrent_orders.
     active_order_count: Mapped[int] = mapped_column(Integer, default=0)
     avg_prep_time_minutes: Mapped[int] = mapped_column(Integer, default=20)
+    description: Mapped[str] = mapped_column(String, default="")
+    # Rating aggregate: a running sum and count, both bumped by one atomic
+    # UPDATE per review (repository.add_review), so concurrent reviews can't
+    # lose each other's update. The average is derived (avg_rating below).
+    rating_sum: Mapped[int] = mapped_column(Integer, default=0)
+    review_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
+
+    @property
+    def avg_rating(self) -> float | None:
+        if not self.review_count:
+            return None
+        return round(self.rating_sum / self.review_count, 2)
 
 
 class MenuCategory(Base):
@@ -78,6 +91,11 @@ class MenuItem(Base):
     price: Mapped[Decimal] = mapped_column(Numeric(10, 2))
     is_available: Mapped[bool] = mapped_column(Boolean, default=True)
     stock_count: Mapped[int | None] = mapped_column(Integer, nullable=True)  # None = unlimited
+    # Search attributes (week4-plan step 1): filters and ranking signals for
+    # ai-service. Tags come from a fixed vocabulary (schemas.DietaryTag).
+    dietary_tags: Mapped[list[str]] = mapped_column(JSON, default=list)
+    spice_level: Mapped[int] = mapped_column(Integer, default=0)  # 0 none … 3 very hot
+    calories: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
@@ -134,6 +152,39 @@ class RestaurantStatusHistory(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
+
+
+class Review(Base):
+    """A customer's review of one delivered order — one per order, so the
+    order is the key. Eligibility (delivered, the reviewer's own order, this
+    restaurant's) is checked against order-service before insert."""
+
+    __tablename__ = "reviews"
+    __table_args__ = (
+        CheckConstraint("rating BETWEEN 1 AND 5", name="ck_reviews_rating"),
+        # Keyset pagination of a restaurant's reviews, newest first.
+        Index(
+            "ix_reviews_restaurant_id_created_at_order_id",
+            "restaurant_id",
+            "created_at",
+            "order_id",
+        ),
+    )
+
+    order_id: Mapped[str] = mapped_column(String, primary_key=True)  # opaque ref to order-service
+    customer_id: Mapped[str] = mapped_column(String)  # opaque ref to user-service
+    restaurant_id: Mapped[str] = mapped_column(ForeignKey("restaurants.id"))
+    rating: Mapped[int] = mapped_column(Integer)
+    text: Mapped[str] = mapped_column(String)
+    # The menu items on the order, copied from order-service — what the
+    # review is about, for search to attach it to dishes.
+    item_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+    # sfo_common.pagination keys pages on `id`; for a review that's the order.
+    id = synonym("order_id")
 
 
 class OutboxEvent(Base, OutboxEventMixin):

@@ -41,6 +41,8 @@ steps go on `week4/retrieval-layer`, cut from `main`. `week5/ai-assistant` is cu
 | B4-D6 | **Collection name includes the embedding model version**; `python -m app.reindex` backfills from a restaurant-service internal export endpoint and order-service history | Swapping models is a clean cut-over, and the first deploy has a full index |
 | B4-D7 | **Search uses `qdrant-client` + `fastembed` directly**, not LangChain's vector-store wrapper | Full control of filters and repeat-safe indexing |
 | B4-D8 | **The gateway routes `/v1/ai/*` to ai-service** (added to `_UPSTREAM_POLICIES`). `ANTHROPIC_API_KEY` goes in `env.example` only; the user adds it to `.env` | Same entry point and auth as every other service; no secret in the repo |
+| B4-D9 | **Rating aggregate stored as `rating_sum` + `review_count`**, bumped by one relative `UPDATE` in the review's transaction; `avg_rating` is derived in the response | Two reviews committing at once both count. Storing the average itself would need a read-modify-write that loses one of them |
+| B4-D10 | **Seed history goes in through dev-only import commands** (`order-service app.import_history`, `restaurant-service app.import_reviews`, run by `seed.py` via `docker compose exec`, like `create_admin`). Orders are written delivered with normal pricing and a backdated status trail; fixed uuid5 IDs make re-runs skip them | Search needs ~200 reviews on delivered orders over past months. The real saga takes minutes per order and stamps everything "now". These orders have no payments, deliveries or events, so analytics doesn't count them; the step-3 backfill indexes them |
 
 New resource use is roughly Qdrant ~200 MB plus ai-service with the ONNX model ~350 MB, on top
 of today's ~4 GiB stack.

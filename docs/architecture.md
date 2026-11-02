@@ -618,8 +618,12 @@ signing](#access-token-signing)) and role claims via the shared `libs/auth` depe
   may be up to a TTL stale; the price charged is always re-read uncached by the order
   quote.
 - **CORS**: handled once, at `api-gateway` only.
-- **Seed/demo data**: `scripts/seed.py` creates a demo restaurant + menu, two approved
-  riders (reassignment needs a second one), a customer and the system admin.
+- **Seed/demo data**: `scripts/seed.py` creates the catalog in `scripts/fixtures/catalog.json`
+  (10 restaurants in Islamabad and Karachi with ~120 menu items), two approved riders
+  (reassignment needs a second one), a customer, two restaurant admins and the system admin.
+  It then imports ~200 reviews and the customer's past orders, as delivered orders backdated
+  over 90 days, through dev-only commands in order- and restaurant-service
+  ([week4-plan](./week4-plan.md) B4-D10).
 
 ## API documentation
 

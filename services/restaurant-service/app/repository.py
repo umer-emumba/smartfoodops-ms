@@ -1,10 +1,17 @@
 from datetime import UTC, datetime
 
 from sfo_common.pagination import build_page, paginate_newest_first
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import MenuCategory, MenuItem, Promotion, Restaurant, RestaurantStatusHistory
+from app.models import (
+    MenuCategory,
+    MenuItem,
+    Promotion,
+    Restaurant,
+    RestaurantStatusHistory,
+    Review,
+)
 
 
 async def create_restaurant(session: AsyncSession, restaurant: Restaurant) -> Restaurant:
@@ -172,3 +179,46 @@ async def list_status_history(
         .order_by(RestaurantStatusHistory.created_at)
     )
     return list(result.scalars().all())
+
+
+async def add_review(session: AsyncSession, review: Review) -> Review:
+    """Inserts the review and bumps the restaurant's rating aggregate in the
+    same transaction. The bump is one UPDATE with relative increments, so two
+    reviews committing at once both count. A second review of the same order
+    fails on the primary key (IntegrityError) at flush."""
+    session.add(review)
+    await session.flush()
+    await session.execute(
+        update(Restaurant)
+        .where(Restaurant.id == review.restaurant_id)
+        .values(
+            rating_sum=Restaurant.rating_sum + review.rating,
+            review_count=Restaurant.review_count + 1,
+        )
+    )
+    return review
+
+
+async def list_reviews(
+    session: AsyncSession, restaurant_id: str, *, cursor: str | None, limit: int
+) -> dict:
+    stmt = select(Review).where(Review.restaurant_id == restaurant_id)
+    result = await session.execute(paginate_newest_first(stmt, Review, cursor=cursor, limit=limit))
+    return build_page(list(result.scalars().all()), limit)
+
+
+async def recompute_rating(session: AsyncSession, restaurant_id: str) -> None:
+    """Rebuilds the aggregate from the reviews table — for bulk imports
+    (app/import_reviews.py), which insert without add_review's increments."""
+    rating_sum, review_count = (
+        await session.execute(
+            select(func.coalesce(func.sum(Review.rating), 0), func.count()).where(
+                Review.restaurant_id == restaurant_id
+            )
+        )
+    ).one()
+    await session.execute(
+        update(Restaurant)
+        .where(Restaurant.id == restaurant_id)
+        .values(rating_sum=rating_sum, review_count=review_count)
+    )

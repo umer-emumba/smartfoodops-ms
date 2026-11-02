@@ -32,6 +32,7 @@ _PUBLIC_ROUTES: list[tuple[str, str, re.Pattern[str]]] = [
     ("GET", "restaurants", re.compile(rf"^{_UUID}/menu$")),
     ("GET", "restaurants", re.compile(rf"^{_UUID}/menu/categories$")),
     ("GET", "restaurants", re.compile(rf"^{_UUID}/promotions$")),
+    ("GET", "restaurants", re.compile(rf"^{_UUID}/reviews$")),
 ]
 
 

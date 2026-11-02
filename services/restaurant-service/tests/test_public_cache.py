@@ -67,6 +67,9 @@ def env(monkeypatch):
         is_accepting_orders=True,
         max_concurrent_orders=20,
         avg_prep_time_minutes=20,
+        description="",
+        rating_sum=0,
+        review_count=0,
         # Column defaults only apply on flush; these objects never touch a DB.
         created_at=datetime(2026, 10, 8, tzinfo=UTC),
     )
@@ -87,6 +90,9 @@ def env(monkeypatch):
                 price=Decimal("8.50"),
                 is_available=True,
                 stock_count=None,
+                dietary_tags=[],
+                spice_level=0,
+                calories=None,
                 version=1,
             )
         ]

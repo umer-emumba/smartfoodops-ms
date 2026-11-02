@@ -18,3 +18,20 @@ async def order_tracking_state(order_id: str, session: AsyncSession = Depends(ge
     if order is None:
         raise NotFoundError("Order not found")
     return await tracking.write_state(order)
+
+
+@router.get("/orders/{order_id}/summary")
+async def order_summary(order_id: str, session: AsyncSession = Depends(get_session)) -> dict:
+    """restaurant-service's review eligibility check: who placed the order,
+    where from, whether it was delivered, and which menu items were on it."""
+    order = await repository.get_order(session, order_id)
+    if order is None:
+        raise NotFoundError("Order not found")
+    return {
+        "id": order.id,
+        "customer_id": order.customer_id,
+        "restaurant_id": order.restaurant_id,
+        "status": order.status,
+        "delivered_at": order.delivered_at,
+        "menu_item_ids": list(dict.fromkeys(item.menu_item_id for item in order.items)),
+    }
