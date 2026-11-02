@@ -1,4 +1,4 @@
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -19,7 +19,7 @@ configure_logging(settings.service_name, settings.log_level)
 
 
 @asynccontextmanager
-async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
+async def _lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
     await mongo.ensure_indexes()
     # Starts this service's Temporal worker inside the API process: it picks up
     # delivery and rider steps from Temporal and runs them here. Also runs

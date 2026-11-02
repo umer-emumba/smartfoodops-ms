@@ -23,7 +23,7 @@ whole stream helps nobody."""
 
 import contextlib
 import os
-from collections.abc import Iterator
+from collections.abc import Generator
 from importlib.util import find_spec
 from typing import Any
 
@@ -116,7 +116,7 @@ def instrument_engine(engine: Any) -> None:
 
 
 @contextlib.contextmanager
-def quiet() -> Iterator[None]:
+def quiet() -> Generator[None, None, None]:
     """No spans from instrumented libraries inside — for background polling
     that would otherwise start a trace every tick."""
     with suppress_instrumentation():

@@ -258,8 +258,7 @@ high write volume; see technical-documentation.md for why.
   every other ID in the system (see
   [technical-documentation.md](./technical-documentation.md#primary-keys-uuidv7-generated-in-python-not-v4-not-db-side)).
 - **`payment_db`**: `payments` (incl. **customer_id** [opaque, added for ownership checks
-  on `GET /v1/payments/by-order/{id}` — see
-  [Authorization audit](#authorization-audit-2026-09-29)], **payment_method,
+  on `GET /v1/payments/by-order/{id}`: only the order's customer or a `system_admin`], **payment_method,
   failure_reason, refunded_amount/refunded_at, authorized_at/captured_at/voided_at**,
   `idempotency_key`), `refunds` (one row per refund workflow ID, so a retried refund
   can't pay out twice), `outbox_events`.
@@ -336,7 +335,11 @@ before they're operationally trusted:
   both mean "not allowed to operate"). `GET /v1/restaurants` (public) only ever returns
   `active` restaurants; `GET /v1/restaurants/mine` (the owning `restaurant_admin`) and
   `GET /v1/restaurants/admin` (`system_admin`, optionally `?status=`) are the only ways to
-  see pending/suspended ones.
+  see pending/suspended ones. By direct ID too (`GET /v1/restaurants/{id}`, `.../menu`,
+  `.../promotions`), a restaurant that isn't `active` is a 404 — not 403, so its
+  existence isn't confirmed — for everyone but its own `restaurant_admin` and a
+  `system_admin` (`_ensure_restaurant_visible`, using `get_current_user_optional` so the
+  routes stay public for browsing). The owner's generic `PATCH` can't change `status`.
 - **Rider**: `POST /v1/riders` creates it with `verification_status = "pending_approval"`,
   deliberately a separate field from `status` (the rider's own available/busy/offline
   toggle) — a rider being approved and a rider being currently available are independent
@@ -529,34 +532,6 @@ Only `api-gateway` verifying JWTs isn't enough — inside Docker Compose, every 
 reachable directly by hostname from any other container. Every service independently
 re-verifies the JWT signature (against the public keys, see [Access-token
 signing](#access-token-signing)) and role claims via the shared `libs/auth` dependency.
-
-## Authorization audit (2026-09-29)
-
-A full pass over every route in all 7 services (the gateway plus six domain services) found and fixed three gaps:
-
-1. **Restaurant self-approval loophole**: `RestaurantUpdate` (behind the generic
-   `PATCH /v1/restaurants/{id}`, open to the restaurant's own `restaurant_admin`) used to
-   include `status`, so an owner could PATCH their own way to `"active"`, bypassing
-   [Restaurant & rider approval](#restaurant--rider-approval) entirely. Fixed by removing
-   `status` from `RestaurantUpdate` — it can now only change via the `system_admin`-only
-   `/approve`/`/suspend` actions.
-2. **Payment records had no ownership check**: `GET /v1/payments/by-order/{order_id}`
-   required only *a* valid JWT, any role, no check that the caller was the customer who
-   placed that order — any authenticated user could read anyone's payment amount/method/
-   failure reason by guessing an `order_id`. Fixed by adding an opaque `customer_id` to
-   `payments` and checking `payment.customer_id == current.id` (or `system_admin`) in the
-   route.
-3. **Pending/suspended restaurants were readable by direct ID**: `GET
-   /v1/restaurants/{id}`, `.../menu`, and `.../promotions` are intentionally public for
-   browsing `active` restaurants, but didn't check `status` at all — a `pending_approval`
-   or `suspended` restaurant's full profile/menu was visible to anyone with its ID, even
-   though it's correctly excluded from the public list. Fixed with a shared
-   `_ensure_restaurant_visible` check (404, not 403, so a suspended restaurant's existence
-   isn't confirmed to an outsider either) — visible to the public only when `active`,
-   otherwise only to its own `restaurant_admin` or a `system_admin`. This needed a new
-   `get_current_user_optional` dependency in `libs/auth` (returns `None` instead of
-   raising when no/invalid bearer token is present), since these routes must stay
-   reachable without auth for the normal public-browsing case.
 
 ## Conventions
 

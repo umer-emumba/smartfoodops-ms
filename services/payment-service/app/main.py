@@ -1,4 +1,4 @@
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -17,7 +17,7 @@ configure_logging(settings.service_name, settings.log_level)
 
 
 @asynccontextmanager
-async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
+async def _lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
     # Starts this service's Temporal worker inside the API process: it picks up
     # payment steps (authorize, capture, void, refund) from Temporal and runs them here.
     async with embedded_workers(WORKERS, settings, service_name=settings.service_name):

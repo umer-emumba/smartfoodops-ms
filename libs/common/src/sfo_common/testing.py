@@ -7,7 +7,7 @@ import asyncio
 import contextlib
 import os
 import subprocess
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from typing import Any
 
 
@@ -37,7 +37,7 @@ def prepare_test_database(url: str) -> str:
 
 
 @contextlib.asynccontextmanager
-async def serve(app: Any) -> AsyncIterator[str]:
+async def serve(app: Any) -> AsyncGenerator[str, None]:
     """Runs an ASGI app on a real local port for the duration of the block
     and yields its base URL — for tests that need real streaming (httpx's
     ASGITransport buffers the whole response)."""

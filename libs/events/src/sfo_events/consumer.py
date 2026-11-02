@@ -42,7 +42,7 @@ import asyncio
 import logging
 import signal
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from enum import StrEnum
 from typing import Any, Protocol
@@ -351,7 +351,7 @@ class ConsumerLoop:
 @asynccontextmanager
 async def running_in_background(
     loop: ConsumerLoop, close: Callable[[], None]
-) -> AsyncIterator[None]:
+) -> AsyncGenerator[None, None]:
     """Embedded mode (W3-D6): runs `loop` as a task of the API's event loop
     (same process and thread as the HTTP handlers) for the duration of the
     lifespan, then stops it and closes the Kafka

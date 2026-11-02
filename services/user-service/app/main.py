@@ -1,6 +1,6 @@
 import asyncio
 import contextlib
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -20,7 +20,7 @@ configure_logging(settings.service_name, settings.log_level)
 
 
 @asynccontextmanager
-async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
+async def _lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
     # Fails the start-up if the signing key is missing or not an Ed25519 key.
     get_signer()
     # Background job in this process: periodically deletes expired refresh

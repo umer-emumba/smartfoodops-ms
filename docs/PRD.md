@@ -20,9 +20,9 @@ lunch- and dinner-time peaks.
 | Role | Can |
 |---|---|
 | `customer` | Register, browse active restaurants and menus, place and track orders, view order history, cancel before pickup |
-| `restaurant_admin` | Onboard restaurants (pending approval), manage menus, categories, availability and promotions, accept or reject orders |
+| `restaurant_admin` | Onboard restaurants (pending approval), manage menus, categories, availability and promotions, accept or reject orders, mark food ready |
 | `rider` | Register (pending approval), set availability, report location, accept deliveries, update pickup and delivery status |
-| `system_admin` | Approve or suspend restaurants and riders, block or unblock users, view audit trails |
+| `system_admin` | Approve or suspend restaurants and riders, block or unblock users, view audit trails, refund delivered orders, mark an overdue order delivered |
 
 The first `system_admin` is created by a one-shot command run inside `user-service`
 (there is no endpoint for it). No one can self-register as an admin.
@@ -37,7 +37,8 @@ The first `system_admin` is created by a one-shot command run inside `user-servi
 - **UC-3 Dispatch.** Once the order is confirmed, the nearest approved, available rider is
   offered it. A decline or timeout moves the offer to the next rider; riders who declined
   are asked again after a short cooldown, and the search widens if nobody nearby is free.
-- **UC-4 Track.** The customer sees live rider location and status until delivery.
+- **UC-4 Track.** The customer sees live rider location and status until delivery,
+  including when the restaurant marks the food ready.
 - **UC-5 Complete.** Delivery triggers payment capture (final settlement) and frees the rider.
 - **UC-6 Cancel and refund.** The customer cancels before pickup. Compensation depends on
   how far the order had progressed.
@@ -113,8 +114,8 @@ Status: ✅ built · 🟡 partial · ⏳ planned (week).
 | FR-12 | restaurant new-order live feed (SSE, `tracking-service`) and a notification (in-app + SMS, from `OrderAwaitingRestaurant`); `POST orders/{id}/restaurant-response` → Temporal signal, 5-min timeout | 2 / 3 | ✅ |
 | FR-13 | saga creates the delivery and starts offering riders on `confirmed` | 2 | ✅ |
 | FR-14 | Redis GEO nearest + atomic Postgres claim, approved + available riders only; reassignment on decline, 60s expiry and drop-out (explicit or 3 min without a ping) | 2 | ✅ |
-| FR-15 | pickup and dropoff ETA from distance, vehicle speed and restaurant prep time | 2 | ✅ |
-| FR-16 | rider pickup/delivered endpoints; `delivery_status_history` + `DeliveryStatusUpdated`; live SSE feed via `tracking-service` (Redis Pub/Sub) | 2 | ✅ |
+| FR-15 | pickup and dropoff ETA from distance, vehicle speed and restaurant prep time; recomputed when the restaurant marks the food ready (`POST orders/{id}/food-ready`) | 2 | ✅ |
+| FR-16 | rider pickup/delivered endpoints; `delivery_status_history` + `DeliveryStatusUpdated`, `DeliveryFoodReady`; live SSE feed via `tracking-service` (Redis Pub/Sub); pickup and delivery deadlines (late rider replaced, kitchen timeout cancels, overdue delivery flagged; admin `mark-delivered`) | 2 | ✅ |
 | FR-17 | payment captured on `delivered` | 2 | ✅ |
 | FR-18 | cancel until pickup + saga compensation (void, release stock/promotion, free the rider); rider reassignment; post-delivery refund workflow | 2 | ✅ |
 | FR-19 | every event written as an outbox row in the same transaction as its change; published by Celery relay workers (`order-`, `payment-`, `delivery-worker`) to Kafka, typed JSON Schemas in Schema Registry (`libs/events`); plus `OrderAwaitingRestaurant` and `RiderShiftChanged` | 1–3 | ✅ |
@@ -125,6 +126,6 @@ Status: ✅ built · 🟡 partial · ⏳ planned (week).
 | NFR-3 | async I/O; stateless services; per-service gateway pools, timeouts, body-size limit; explicit DB pools; Redis cache for public reads; keyset pagination (W1). Atomic reservations and rider claims, Redis GEO assignment, SSE in a separate service (W2). Kafka partitioning by aggregate ID, workers scaled apart from APIs, notification sends off the request path (W3) | 1–3 | ✅ |
 | NFR-4 | outbox relay and consumers off the request path; traceable (one trace per order, `trace_id` in every log line); recoverable (outbox retries, consumer retries and DLQ, outages waited out, Celery late acks + sweep) — verified by the failure drills | 1–3 | ✅ |
 | NFR-5 | database-per-service, one owner per fact, snapshots on orders, optimistic `version` locks, `Decimal` money end to end; Mongo analytics non-authoritative | 1–3 | ✅ |
-| NFR-6 | JSON logs with `request_id` + `trace_id` in Loki; OpenTelemetry traces in Jaeger; Prometheus metrics for every flow, 4 Grafana dashboards, 7 alerts | 1 / 3 | ✅ |
+| NFR-6 | JSON logs with `request_id` + `trace_id` in Loki; OpenTelemetry traces in Jaeger; Prometheus metrics for every flow, 4 Grafana dashboards, 8 alerts | 1 / 3 | ✅ |
 | NFR-7 | see FR-5; first admin created by a one-shot command, not an endpoint; strict request schemas (unknown fields rejected, size limits), 1 MB body limit, argon2 off the event loop; metrics and observability UIs not exposed beyond localhost | 1 / 3 | ✅ |
 | NFR-8 | `docker-compose.yml` (30 containers, health-gated), `entrypoint.sh` migrations, `scripts/seed.py`, `scripts/smoke_test.py --deep --lifecycle --events`, `scripts/check.sh --with-db` | 1–3 | ✅ |
