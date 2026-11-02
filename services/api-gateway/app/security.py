@@ -33,6 +33,9 @@ _PUBLIC_ROUTES: list[tuple[str, str, re.Pattern[str]]] = [
     ("GET", "restaurants", re.compile(rf"^{_UUID}/menu/categories$")),
     ("GET", "restaurants", re.compile(rf"^{_UUID}/promotions$")),
     ("GET", "restaurants", re.compile(rf"^{_UUID}/reviews$")),
+    # Catalog search sees only what the public menus show; searching one's
+    # own order history (search/history) stays private.
+    ("GET", "ai", re.compile(r"^search$")),
 ]
 
 

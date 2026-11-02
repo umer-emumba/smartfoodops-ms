@@ -1,3 +1,5 @@
+import asyncio
+import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
@@ -8,16 +10,22 @@ from sfo_common.health import add_health_routes
 from sfo_observability import configure_logging, instrument_fastapi, instrument_metrics
 
 from app import qdrant
+from app.api.routes import router
 from app.config import settings
 from app.db import engine
+from app.embedding import embedder
+
+logger = logging.getLogger(__name__)
 
 configure_logging(settings.service_name, settings.log_level)
 
 
 @asynccontextmanager
 async def _lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
-    """Embedded mode (week3-plan W3-D6): the indexer's Kafka consumer runs in
-    this process. Standalone: `python -m app.consumer` runs it instead."""
+    """Loads the embedding models in the background, so the first search
+    doesn't pay for it. Embedded mode (week3-plan W3-D6): the indexer's Kafka
+    consumer runs in this process. Standalone: `python -m app.consumer`."""
+    warm_up = asyncio.create_task(_warm_up())
     if settings.kafka_consumer_mode != "embedded":
         yield
     else:
@@ -27,7 +35,15 @@ async def _lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
 
         async with running_in_background(*build_consumer_loop()):
             yield
+    warm_up.cancel()
     await qdrant.client.close()
+
+
+async def _warm_up() -> None:
+    try:
+        await embedder.query("warm up")
+    except Exception:
+        logger.warning("Embedding model warm-up failed", exc_info=True)
 
 
 app = create_app(
@@ -49,6 +65,7 @@ instrument_fastapi(app)
 # Prometheus reads them from this process's port 9100 every 15s; they feed the
 # Grafana "Service overview" dashboard and the HighErrorRate alert.
 instrument_metrics(app)
+app.include_router(router)
 
 
 async def _readiness() -> bool:
