@@ -1,7 +1,8 @@
-# SmartFoodOps — Architecture (Part A)
+# SmartFoodOps — Architecture
 
 QuickServe/SmartFoodOps is a microservices-based food ordering and delivery platform.
-This document describes the Part A system as built (Weeks 1–3). For the reasoning behind each decision, see
+This document describes the system as built: Part A (Weeks 1–3) and Part B Week 4, the
+search layer ([AI layer: search](#ai-layer-search-part-b-week-4)). For the reasoning behind each decision, see
 [technical-documentation.md](./technical-documentation.md). For diagrams (microservices
 architecture, order-lifecycle sequences, one ER diagram per service database), see
 [diagrams.md](./diagrams.md). For
@@ -17,13 +18,14 @@ database directly. Cross-service contact only happens through the mechanisms in
 |---|---|---|
 | `api-gateway` | Routing, JWT verification for private routes (see [Gateway-side auth enforcement](#gateway-side-auth-enforcement)), blocked-user deny-list check, rate limiting, `X-Request-ID` correlation IDs, CORS, Swagger index; streaming proxy for the SSE tracking routes | Redis (rate-limit counters, deny-list reads) only |
 | `user-service` | Customers, restaurant-admin & system-admin accounts, auth/JWT issuance, roles | Postgres (`user_db`) |
-| `restaurant-service` | Restaurant onboarding + approval audit trail, menus, categories, availability/inventory, promotions; saga activities: atomic stock + capacity reservation, promotion redemption | Postgres (`restaurant_db`) |
+| `restaurant-service` | Restaurant onboarding + approval audit trail, menus (with dietary tags, spice level, calories), categories, availability/inventory, promotions, customer reviews and ratings; saga activities: atomic stock + capacity reservation, promotion redemption; publishes catalog changes (`restaurant-events`) | Postgres (`restaurant_db`) |
 | `order-service` | Order creation (server-side pricing from `restaurant-service`, idempotency keys), order history + status audit trail, order state machine, restaurant accept/reject, cancel, refunds; the Temporal **order saga** and refund workflow, plus a reconciler that starts sagas a crash left unstarted | Postgres (`order_db`) |
 | `delivery-service` | Rider registration/availability + vetting audit trail, rider location ingestion; deliveries, nearest-rider offers, reassignment, ETA, stale-rider detection | Postgres (`delivery_db`) + Redis (GEO rider pool, live positions) + MongoDB (high-frequency rider location pings, TTL-indexed) |
 | `payment-service` | Simulated card payments: authorize, capture, void, full/partial refund — idempotent per order and per refund | Postgres (`payment_db`) |
 | `tracking-service` | Live SSE feeds: a customer's order, a restaurant's incoming orders, a rider's offers. Stateless; ownership checked from Redis state keys. Its Kafka consumer turns order and delivery events into live-feed updates | Redis (Pub/Sub + state keys); consumer group `tracking-service` on `order-events` and `delivery-events` |
 | `notification-service` | Turns order, payment and delivery events into notifications for the customer, restaurant admin and rider (in-app, simulated email and SMS); the in-app inbox. Kafka consumer group `notification-service` | Postgres (`notification_db`) |
 | `analytics-service` | The nine Part A metrics, computed from events; read API for system admins and restaurant admins. Kafka consumer group `analytics-service` (also reads the `.dlq` topics) | MongoDB (`analytics`: `order_facts`, `rider_shift_facts`, `failed_events`) |
+| `ai-service` | Part B. Week 4: semantic search over menus, restaurants, reviews and order history (`/v1/ai/search`, `/v1/ai/search/history`); the indexer that embeds catalog and order events into Qdrant (consumer group `ai-indexer` on `restaurant-events` and `order-events`); the reindex command. Week 5 adds the assistant | Qdrant (vectors) + Postgres (`ai_db`, for Week 5's conversations and drafts) |
 
 Each service is its own FastAPI app, own DB, own Dockerfile, own OpenAPI contract. The
 four services with saga steps (order, restaurant, payment, delivery) each also run a
@@ -35,16 +37,52 @@ own beat schedule:
 
 | Container | Runs | Schedule |
 |---|---|---|
-| `order-worker`, `payment-worker`, `delivery-worker` | the outbox relay: publishes the service's outbox to Kafka (`sfo_events.relay`); purges rows dispatched over 7 days ago | relay every 1s, purge hourly |
+| `order-worker`, `payment-worker`, `delivery-worker`, `restaurant-worker` | the outbox relay: publishes the service's outbox to Kafka (`sfo_events.relay`); purges rows dispatched over 7 days ago | relay every 1s, purge hourly |
 | `notification-worker` | `send_notification(id)`: one send attempt, retried with backoff; the sweep that re-enqueues stuck `pending` rows | sweep every 30s |
 
-restaurant-service has an outbox table but writes no events, so it has no relay.
-
 **Platform containers** (`docker-compose.yml`): Postgres per service, MongoDB, Redis,
+Qdrant (search vectors),
 RabbitMQ, Kafka (KRaft, single broker) + Schema Registry, `kafka-init` (creates the
 topics, then exits), Temporal dev server, and for observability Jaeger, Prometheus,
 Loki, Grafana Alloy and Grafana — see
 [technical-documentation.md#observability](./technical-documentation.md#observability).
+
+## AI layer: search (Part B, Week 4)
+
+Design record and decisions B4-D1…D15: [week4-plan.md](./week4-plan.md). Reasoning and
+measured results: [technical-documentation.md#search-retrieval-layer](./technical-documentation.md#search-retrieval-layer).
+
+```
+restaurant-service ── outbox ── restaurant-worker ──► restaurant-events ─┐
+order-service ─────── outbox ── order-worker ───────► order-events ──────┤ (OrderDelivered)
+                                                                         ▼
+                      ai-service indexer (consumer group ai-indexer)
+                      documents.py → embedding.py (bge-small + BM25) → store.py
+                                                                         ▼
+                                                                      Qdrant
+                                                                         ▲
+clients ── api-gateway ── /v1/ai/search, /v1/ai/search/history ── retrieval.py
+                                    (hybrid query, filters, RRF)
+```
+
+- **Collections** (each with a dense `dense` vector — bge-small-en-v1.5, 384-d, cosine — and
+  a sparse `bm25` vector with Qdrant-side IDF): `menu_items`, `restaurants`, `reviews`
+  (one point per ~220-word chunk), `order_history` (one point per delivered order plus one
+  rolling summary per customer). Names carry the model and document revision
+  (`menu_items__bge_small_en_v1_5_r1`), so a model change builds a new index beside the
+  live one.
+- **Indexing** is event-driven: every catalog write publishes a full snapshot with a
+  per-restaurant `source_version`; the indexer writes a point only if it's newer (one
+  conditional upsert), keeps deleted items as tombstones, and never changes order points
+  once written. A Qdrant outage is retried, never dead-lettered.
+- **Backfill**: `python -m app.reindex` reads `GET /internal/catalog/export`
+  (restaurant-service) and `GET /internal/orders/delivered` (order-service) — the same
+  payloads as the events — through the same indexer.
+- **Retrieval** (`app/retrieval.py`, `retrieve(query, filters)`, also Week 5's entry
+  point): one Qdrant query with a dense and a BM25 prefetch, each filtered, fused by
+  weighted Reciprocal Rank Fusion. Only active restaurants and orderable items are ever
+  returned. `kind=cuisine` groups dishes by cuisine. Search is public; order-history
+  search is customer-only and filtered to the caller.
 
 ## Gateway resilience
 
@@ -94,13 +132,18 @@ local Traefik-based version of it was removed rather than kept as a demo.
 |---|---|---|---|---|
 | `order-events` | `OrderPlaced` | order-service (`POST /v1/orders`) | customer, restaurant, restaurant admin, items, `total_amount` (still the subtotal: the saga adds tax and fee later) | notification, analytics |
 | | `OrderAwaitingRestaurant` | saga transition | `restaurant_admin_id`, total | notification (restaurant), analytics |
-| | `OrderConfirmed`, `OrderRejected`, `OrderCancelled`, `RiderAssigned`, `OrderPickedUp`, `OrderDelivered` | saga transitions (`transition_order`) | from/to status, reason, customer, restaurant admin, total | notification, analytics |
+| | `OrderConfirmed`, `OrderRejected`, `OrderCancelled`, `RiderAssigned`, `OrderPickedUp`, `OrderDelivered` | saga transitions (`transition_order`) | from/to status, reason, customer, restaurant admin, total; `OrderDelivered` also its `items` (name, quantity, price) | notification, analytics; `OrderDelivered` also ai-service (order history) |
 | `payment-events` | `PaymentSuccessful` | payment-service (authorize) | payment, customer, amount, status | — (published for future consumers; an authorization isn't worth a message, and analytics doesn't need it) |
 | | `RefundProcessed` | payment-service (refund) | amount, customer | notification, analytics |
 | `delivery-events` | `DeliveryStatusUpdated` | delivery-service (every delivery status, creation included) | from/to status, `rider_user_id`, `released_rider_user_id` (who just lost it), customer, reason, ETAs | notification (rider), analytics, tracking |
 | | `DeliveryEtaUpdated` | delivery-service (new ETAs, no status change) | status, rider, pickup/drop-off ETA | tracking |
 | | `DeliveryFoodReady` | delivery-service (`mark_food_ready`: the restaurant marked the food ready) | status, `food_ready_at`, assigned rider's `rider_user_id`, recomputed ETAs | notification (customer, rider), tracking |
 | | `RiderShiftChanged` | delivery-service (offline ↔ on shift: status endpoint, suspension, drop-out) | on/off shift, reason | analytics |
+| `restaurant-events` (key = restaurant ID) | `RestaurantUpserted` | restaurant-service (create, profile change) | full restaurant snapshot incl. rating; `source_version` | ai-service |
+| | `RestaurantStatusChanged` | restaurant-service (approve, suspend) | from/to status, reason, `source_version` | ai-service |
+| | `MenuItemUpserted` | restaurant-service (item create/update; every item again when the restaurant's name, cuisine or location changes, or its category is renamed; the saga when an item sells out or comes back) | full item snapshot with its restaurant's name, status, city, location and category; `in_stock`; `source_version` | ai-service |
+| | `MenuItemDeleted` | restaurant-service | item, `source_version` | ai-service |
+| | `ReviewSubmitted` | restaurant-service (`POST …/reviews`) | rating, text, reviewed items, restaurant's new rating (no customer ID), `source_version` | ai-service |
 
 Every topic has a `<topic>.dlq` twin for messages a consumer gave up on; messages keep
 their key and headers, plus `dlq.*` headers (error, error type, consumer group, original
@@ -227,7 +270,11 @@ high write volume; see technical-documentation.md for why.
   so reserve and release are idempotent),
   `promotions` (discount codes — backs "pricing and discounts must be applied"; full CRUD;
   `code` unique **per restaurant**, not globally, so two restaurants can each run their own
-  `"WELCOME10"`), `outbox_events`.
+  `"WELCOME10"`), `outbox_events`. Week 4 added `menu_items.dietary_tags/spice_level/
+  calories`, `restaurants.description`, the rating aggregate `restaurants.rating_sum/
+  review_count` (average derived), `restaurants.catalog_version` (the `source_version` on
+  catalog events), and `reviews` (`order_id` PK — one per delivered order — customer,
+  restaurant, rating 1–5, text, `item_ids` taken from the order).
 - **`order_db`**: `orders` (**order_number** — human-facing sequential ID separate from the
   UUID; **delivery_address_text/lat/lng** — snapshotted at order time, not a live
   reference; **subtotal/tax_amount/delivery_fee/discount_amount/promo_code/total_amount**
@@ -661,16 +708,21 @@ smartfoodops/
     tracking-service/     # SSE feeds, Redis only
     notification-service/
     analytics-service/    # Kafka consumer → Mongo read model; metrics API
+    ai-service/           # search: documents, embedding, Qdrant store, indexer,
+                          # retrieval, reindex
   docs/
     PRD.md
     architecture.md
     technical-documentation.md
     diagrams.md
     PROGRESS.md
+    week2-plan.md, week3-plan.md, week4-plan.md   # design records (decision IDs)
   scripts/
-    seed.py
-    smoke_test.py   # end-to-end through the gateway (--deep, --lifecycle, --events)
-    check.sh        # lint, types, tests (--with-db: real Postgres/Redis)
+    seed.py         # + fixtures/catalog.json (demo catalog, reviews, history)
+    smoke_test.py   # end-to-end through the gateway (--deep, --lifecycle, --events, --ai)
+    eval_retrieval.py  # + fixtures/retrieval_golden.json (recall@5, MRR)
+    check.sh        # lint, types, tests (--with-db: real Postgres/Redis/Mongo/Qdrant;
+                    # --with-ai: retrieval eval)
   README.md
 ```
 

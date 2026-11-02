@@ -21,7 +21,7 @@ from typing import Any
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.http import models as m
 
-from app import qdrant
+from app import metrics, qdrant
 from app.config import settings
 from app.documents import Doc
 from app.embedding import Embedder
@@ -154,6 +154,7 @@ class Store:
             return 0
         stored = await self._stored_versions(kind, [d.id for d in docs])
         fresh = [d for d in docs if stored.get(d.id, -1) < version]
+        metrics.INDEX_WRITES.labels(kind, "stale").inc(len(docs) - len(fresh))
         if not fresh:
             return 0
         await self._client.upsert(
@@ -163,6 +164,7 @@ class Store:
                 must=[m.FieldCondition(key="source_version", range=m.Range(lt=version))]
             ),
         )
+        metrics.INDEX_WRITES.labels(kind, "written").inc(len(fresh))
         return len(fresh)
 
     async def set_restaurant_fields(
@@ -194,6 +196,8 @@ class Store:
         )
         have = {str(p.id) for p in existing}
         new = [d for d in docs if d.id not in have]
+        metrics.INDEX_WRITES.labels(kind, "stale").inc(len(docs) - len(new))
+        metrics.INDEX_WRITES.labels(kind, "written").inc(len(new))
         if new:
             await self._client.upsert(
                 name(kind), points=await self._points(new), update_mode=m.UpdateMode.INSERT_ONLY

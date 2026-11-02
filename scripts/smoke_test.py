@@ -29,6 +29,13 @@ order, then checks what their events caused: the customer's, restaurant's
 and rider's notifications (each once, all sent), the analytics counts, one
 Jaeger trace across >= 8 services, and the outbox backlog back to 0. Local
 stack only (reads order-db, Jaeger on :16686, Prometheus on :9090).
+
+--ai (docs/week4-plan.md step 5) checks the search index follows the
+catalog: a menu item edited through the API is found by search within
+AI_INDEX_SECONDS, drops out when marked unavailable, and comes back; search
+is public and history private; the AI metrics are scraped. Needs the index
+built (`docker compose exec ai-service python -m app.reindex`). The edit is
+reverted.
 """
 
 import argparse
@@ -914,6 +921,82 @@ def events(base_url: str) -> None:
             ev.clean_up()
 
 
+AI_INDEX_SECONDS = 10
+
+
+def ai(base_url: str) -> None:
+    with httpx.Client(base_url=base_url, timeout=15, transport=_WaitOutRateLimit()) as c:
+        section("AI search follows the catalog")
+        owner = bearer(login(c, RESTAURANT_ADMIN)["access_token"])
+        customer = bearer(login(c, CUSTOMER)["access_token"])
+        rest = next(r for r in c.get("/v1/restaurants/mine", headers=owner).json())
+        item = next(
+            i for i in c.get(f"/v1/restaurants/{rest['id']}/menu").json() if i["is_available"]
+        )
+        url = f"/v1/restaurants/{rest['id']}/menu/items/{item['id']}"
+        # A word no other document has, so keyword search finds only this item.
+        marker = f"smokemarker{uuid.uuid4().hex[:8]}"
+
+        def found() -> bool:
+            r = c.get("/v1/ai/search", params={"q": marker, "limit": 5})
+            return r.status_code == 200 and any(h["id"] == item["id"] for h in r.json()["hits"])
+
+        def wait_for(want: bool) -> float | None:
+            start = time.monotonic()
+            while time.monotonic() - start < AI_INDEX_SECONDS:
+                if found() == want:
+                    return time.monotonic() - start
+                time.sleep(0.25)
+            return None
+
+        try:
+            c.patch(url, headers=owner, json={"description": f"{item['description']} {marker}"})
+            took = wait_for(True)
+            check(f"edited item searchable within {AI_INDEX_SECONDS}s", took is not None, took)
+            if took is not None:
+                print(f"        (took {took:.1f}s)")
+            c.patch(url, headers=owner, json={"is_available": False})
+            took = wait_for(False)
+            check("unavailable item drops out of search", took is not None, took)
+            c.patch(url, headers=owner, json={"is_available": True})
+            check("available again: back in search", wait_for(True) is not None)
+        finally:
+            c.patch(
+                url, headers=owner, json={"description": item["description"], "is_available": True}
+            )
+
+        section("AI search: access")
+        check(
+            "search is public", c.get("/v1/ai/search", params={"q": "biryani"}).status_code == 200
+        )
+        check(
+            "history needs a login",
+            c.get("/v1/ai/search/history", params={"q": "biryani"}).status_code == 401,
+        )
+        me = c.get("/v1/users/me", headers=customer).json()["id"]
+        hist = c.get("/v1/ai/search/history", params={"q": "biryani"}, headers=customer)
+        owners = {h["data"]["customer_id"] for h in hist.json()["hits"]}
+        check("history is only the caller's orders", hist.status_code == 200 and owners <= {me})
+
+        section("AI metrics")
+
+        def scraped(query: str) -> str:
+            # Prometheus scrapes every 15s, and the series appear with the
+            # edits above: wait for one or two scrapes.
+            value = "none"
+            for _ in range(30):
+                value = _Events.prometheus(query)
+                if value not in ("none", "0"):
+                    break
+                time.sleep(1)
+            return value
+
+        lag = scraped("sum(ai_index_lag_seconds_count)")
+        check("index lag is measured (Prometheus)", lag not in ("none", "0"), lag)
+        searches = scraped("sum(ai_searches_total)")
+        check("searches are counted (Prometheus)", searches not in ("none", "0"), searches)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--base-url", default="http://localhost:8080")
@@ -930,6 +1013,11 @@ def main() -> None:
         action="store_true",
         help="also check notifications, analytics, tracing and metrics (local stack only)",
     )
+    parser.add_argument(
+        "--ai",
+        action="store_true",
+        help="also check the search index follows catalog edits (local stack only)",
+    )
     args = parser.parse_args()
     try:
         run(args.base_url, args.deep)
@@ -937,6 +1025,8 @@ def main() -> None:
             lifecycle(args.base_url, args.deep)
         if args.events:
             events(args.base_url)
+        if args.ai:
+            ai(args.base_url)
     except httpx.ConnectError:
         sys.exit(f"Can't reach {args.base_url} — is `docker compose up` running?")
     failed = [name for name, ok in _results if not ok]

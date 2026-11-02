@@ -16,6 +16,7 @@ from typing import Protocol
 
 from fastembed import SparseTextEmbedding, TextEmbedding
 
+from app import metrics
 from app.config import settings
 
 
@@ -77,11 +78,17 @@ class FastEmbedder:
         if not texts:
             return []
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(_executor, _embed_documents, list(texts))
+        with metrics.EMBED_SECONDS.labels("documents").time():
+            vectors = await loop.run_in_executor(_executor, _embed_documents, list(texts))
+        metrics.EMBEDDED_TEXTS.labels("documents").inc(len(texts))
+        return vectors
 
     async def query(self, text: str) -> Vectors:
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(_executor, _embed_query, text)
+        with metrics.EMBED_SECONDS.labels("query").time():
+            vectors = await loop.run_in_executor(_executor, _embed_query, text)
+        metrics.EMBEDDED_TEXTS.labels("query").inc()
+        return vectors
 
 
 def download() -> None:

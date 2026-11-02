@@ -20,6 +20,13 @@ class Settings(BaseServiceSettings, KafkaConsumerSettings):
     # documents). Empty turns it off — step 5's retrieval eval compares both.
     dense_query_prefix: str = "Represent this sentence for searching relevant passages: "
     sparse_model: str = "Qdrant/bm25"
+    # Weighted RRF (app/retrieval.py): how much each list counts in the
+    # fused ranking. Equal weights make "1st by one, 2nd by the other" an
+    # exact tie, ordered arbitrarily between runs. On the golden set
+    # (scripts/eval_retrieval.py) weights and the query prefix moved scores by
+    # at most one query; dense 1.2 ties for best and makes the order stable.
+    fusion_dense_weight: float = 1.2
+    fusion_sparse_weight: float = 1.0
     embedding_cache_dir: str = ""
     # ONNX threads per model. Embedding runs off the event loop
     # (app/embedding.py), one batch at a time.

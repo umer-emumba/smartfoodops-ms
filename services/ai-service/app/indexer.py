@@ -14,6 +14,7 @@ exist (deleted dev data)."""
 
 import logging
 from collections.abc import Iterable, Sequence
+from datetime import UTC, datetime
 
 from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedResponse
 from sfo_events import DomainEvent, EventType
@@ -26,7 +27,7 @@ from sfo_events.payloads import (
     ReviewSubmittedPayload,
 )
 
-from app import documents
+from app import documents, metrics
 from app.documents import DeliveredOrder
 from app.store import CATALOG, MENU_ITEMS, ORDER_HISTORY, RESTAURANTS, REVIEWS, Store
 
@@ -46,7 +47,10 @@ class Indexer:
     async def apply(self, event: DomainEvent) -> None:
         try:
             await self.store.ensure_collections()
-            await self._apply(event)
+            if await self._apply(event):
+                metrics.INDEX_LAG_SECONDS.labels(event.event_type.value).observe(
+                    (datetime.now(UTC) - event.occurred_at).total_seconds()
+                )
         except ResponseHandlingException as exc:
             raise QdrantUnavailable(str(exc)) from exc
         except UnexpectedResponse as exc:
@@ -54,7 +58,8 @@ class Indexer:
                 raise QdrantUnavailable(str(exc)) from exc
             raise
 
-    async def _apply(self, event: DomainEvent) -> None:
+    async def _apply(self, event: DomainEvent) -> bool:
+        """False for events that don't concern the index."""
         p = event.typed_payload()
         match p:
             case RestaurantUpsertedPayload():
@@ -85,7 +90,7 @@ class Indexer:
                 )
             case OrderTransitionPayload() if event.event_type == EventType.ORDER_DELIVERED:
                 if p.items is None:
-                    return  # delivered before OrderDelivered carried its items
+                    return False  # delivered before OrderDelivered carried its items
                 await self.orders(
                     [
                         DeliveredOrder(
@@ -99,7 +104,8 @@ class Indexer:
                     ]
                 )
             case _:
-                return  # other order events don't change the index
+                return False  # other order events don't change the index
+        return True
 
     async def restaurant(self, p: RestaurantUpsertedPayload) -> None:
         await self.store.upsert_newer(RESTAURANTS, [documents.restaurant(p)], p.source_version)
@@ -131,6 +137,7 @@ class Indexer:
                 )
             where = restaurants[o.restaurant_id]
             if where is None:
+                metrics.ORDERS_SKIPPED.inc()
                 logger.info(
                     "Order %s skipped: restaurant %s not indexed", o.order_id, o.restaurant_id
                 )

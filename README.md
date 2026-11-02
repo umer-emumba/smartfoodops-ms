@@ -1,8 +1,9 @@
 # SmartFoodOps
 
-A microservices-based food ordering and delivery platform (Part A of the SmartFoodOps
-assignment — core platform + distributed systems; the GenAI layer is Part B, built later
-on top of this).
+A microservices-based food ordering and delivery platform. Part A of the SmartFoodOps
+assignment is the core platform and distributed systems (Weeks 1–3). Part B adds a GenAI
+layer on top: Week 4, built, is semantic search over menus, restaurants, reviews and order
+history; Week 5 is the AI assistant.
 
 | To find | Read |
 |---|---|
@@ -11,6 +12,7 @@ on top of this).
 | Why it's built this way: lifecycles, failure handling, consistency, tradeoffs | [docs/technical-documentation.md](docs/technical-documentation.md) |
 | Requirements and where each is built | [docs/PRD.md](docs/PRD.md) |
 | Build status and open gaps — **read first** when picking the project back up | [docs/PROGRESS.md](docs/PROGRESS.md) |
+| Week 4 (search) plan and design decisions B4-D1…D15 | [docs/week4-plan.md](docs/week4-plan.md) |
 
 ## Architecture at a glance
 
@@ -34,7 +36,7 @@ on top of this).
                                 │payment-service│        statuses, ETAs, offers: Kafka → tracking;
                                 └───────────────┘        rider location: delivery-service
 
-   The gateway also routes to payment-, notification- and analytics-service (not drawn).
+   The gateway also routes to payment-, notification-, analytics- and ai-service (not drawn).
    Each service has its own database and runs its own Temporal worker on its own task
    queue: the saga in order-service schedules activities next to the data they change.
    Domain events leave each service through its outbox (below).
@@ -43,16 +45,20 @@ on top of this).
 Events, notifications and analytics:
 
 ```
-  order- / payment- / delivery-service
+  order- / payment- / delivery- / restaurant-service
   business write + outbox row (one transaction)
             │
             ▼
-  order-, payment-, delivery-worker ──► Kafka ──┬──► notification-service ──► RabbitMQ ──► notification-worker
-  (Celery beat relay, every 1s)                 │    (consumer)                            (in-app / email / SMS,
-                                                │                                           retries, then failed)
-                                                ├──► analytics-service ──► MongoDB (metrics read model)
-                                                │
-                                                └──► tracking-service ──► Redis (live-feed state + Pub/Sub → SSE)
+  order-, payment-, delivery-,  ──► Kafka ──┬──► notification-service ──► RabbitMQ ──► notification-worker
+  restaurant-worker                         │    (consumer)                            (in-app / email / SMS,
+  (Celery beat relay, every 1s)             │                                           retries, then failed)
+                                            ├──► analytics-service ──► MongoDB (metrics read model)
+                                            │
+                                            ├──► tracking-service ──► Redis (live-feed state + Pub/Sub → SSE)
+                                            │
+                                            └──► ai-service indexer ──► Qdrant (search index: embeddings
+                                                 (restaurant-events,        of menus, restaurants, reviews,
+                                                  OrderDelivered)            order history)
 
   Every process: traces → Jaeger, metrics → Prometheus, logs → Loki; all three in Grafana.
 ```
@@ -193,26 +199,33 @@ well as the tests and the seed script.
    This starts per-service Postgres containers, Mongo, Redis, RabbitMQ, Kafka + Schema
    Registry (`kafka-init` creates the topics and exits), Temporal (the Temporal CLI dev
    server), all app services (`api-gateway` on `:8080`), the Celery workers
-   (`order-worker`, `payment-worker`, `delivery-worker` relay the outbox to Kafka;
-   `notification-worker` sends notifications), and the observability stack (Jaeger,
-   Prometheus, Loki, Alloy, Grafana) — 30 containers, about 4.2 GB of memory.
+   (`order-worker`, `payment-worker`, `delivery-worker`, `restaurant-worker` relay the
+   outbox to Kafka; `notification-worker` sends notifications), the search stack (`qdrant`,
+   `ai-db`, `ai-service`), and the observability stack (Jaeger, Prometheus, Loki, Alloy,
+   Grafana) — 35 containers, about 4.4 GB of memory. The first build of `ai-service` also
+   downloads its two embedding models (~80 MB) into the image.
    Each service runs its own Alembic migrations on startup. Wait for `docker compose ps`
    to show everything healthy.
 
-3. Seed demo data (a restaurant, menu, two riders, a customer and an admin) through the
-   gateway:
+3. Seed demo data through the gateway: 10 restaurants in Islamabad and Karachi with ~120
+   menu items (`scripts/fixtures/catalog.json`), two riders, a customer, two restaurant
+   admins and an admin, plus ~200 reviews and the customer's past orders over the last
+   90 days. Then build the search index:
 
    ```bash
-   uv run --group dev python scripts/seed.py
+   uv run --group dev python scripts/seed.py                 # ~2 min (waits out rate limits)
+   docker compose exec ai-service python -m app.reindex      # ~30 s the first time
    ```
 
    Safe to re-run: nothing is duplicated, and the menu's stock is topped back up to 50,
-   so re-running it also resets the demo after many smoke-test orders. The admin is the
-   one thing not created through the API (there is no endpoint for it): the seed runs
-   `user-service`'s `app/create_admin` command via `docker compose exec`, so run it on the
-   machine where the stack is running. See
-   [architecture.md](docs/architecture.md#restaurant--rider-approval) to create a real
-   first admin.
+   so re-running it also resets the demo after many smoke-test orders. Three things are
+   not created through the API, because there is no endpoint for them: the admin
+   (`user-service`'s `app/create_admin`) and the review and order history (dev-only
+   import commands in order- and restaurant-service, [week4-plan B4-D10](docs/week4-plan.md)).
+   The seed runs them via `docker compose exec`, so run it on the machine where the stack
+   is running. See [architecture.md](docs/architecture.md#restaurant--rider-approval) to
+   create a real first admin. After that, the index follows every change on its own
+   (Kafka); `app.reindex` is only needed for a fresh index or the imported history.
 
 4. Everything is reachable through the gateway at `http://localhost:8080`. Try:
 
@@ -266,7 +279,8 @@ package.)
 
 ```bash
 ./scripts/check.sh            # ruff lint + format check, mypy per service, every service's tests
-./scripts/check.sh --with-db  # + tests against real Postgres/Redis (needs `docker compose up`)
+./scripts/check.sh --with-db  # + tests against real Postgres/Redis/Mongo/Qdrant (needs `docker compose up`)
+./scripts/check.sh --with-ai  # + the retrieval eval against the seeded, indexed stack
 uvx pre-commit install      # once: ruff + mypy run on every commit
 ```
 
@@ -279,11 +293,12 @@ All bound to localhost:
 
 | UI | URL | What's there |
 |---|---|---|
-| Grafana | http://localhost:3001 | 4 dashboards in the *SmartFoodOps* folder: Service overview, Orders & deliveries, Event pipeline, Logs. View without logging in; `admin`/`admin` to edit |
+| Grafana | http://localhost:3001 | 5 dashboards in the *SmartFoodOps* folder: Service overview, Orders & deliveries, Event pipeline, Logs, AI / Retrieval. View without logging in; `admin`/`admin` to edit |
 | Jaeger | http://localhost:16686 | traces — pick a service (e.g. `api-gateway`) and find an order's trace |
 | Prometheus | http://localhost:9090 | raw metrics, scrape targets (*Status → Targets*), alerts (*Alerts*) |
 | RabbitMQ | http://localhost:15672 | the Celery workers' queues (`sfo`/`sfo`, dev only) |
 | Temporal | http://localhost:8088 | order sagas and refund workflows |
+| Qdrant | http://localhost:6333/dashboard | the search index: collections, points, payloads |
 
 Grafana is on 3001, not 3000, so it doesn't clash with the test UI below. The dashboards
 are generated: edit `infra/grafana/build_dashboards.py`, then run
@@ -329,6 +344,7 @@ uv run --group dev python scripts/smoke_test.py          # API only, through the
 uv run --group dev python scripts/smoke_test.py --deep   # + checks inside local Docker
 uv run --group dev python scripts/smoke_test.py --deep --lifecycle  # + whole orders (~2 min)
 uv run --group dev python scripts/smoke_test.py --deep --lifecycle --events  # + events (~3 min)
+uv run --group dev python scripts/smoke_test.py --deep --ai   # + the search index follows edits
 ```
 
 One end-to-end test for the platform, not one per service: it drives the system through
@@ -343,14 +359,37 @@ orders racing for the last unit of stock, and a partial refund. `--events` runs 
 delivered and one cancelled order and checks what their events caused: each person's
 notifications (the right channels, each once, all sent), the analytics counts, one
 Jaeger trace across at least 8 services, the outbox backlog back to 0 in Prometheus, and
-nothing dead-lettered (local stack only). `--base-url` points it at another deployment.
-Safe to re-run; exits non-zero on any failure.
+nothing dead-lettered (local stack only). `--ai` edits a menu item and checks search
+finds it within 10 s, drops it when it's marked unavailable and brings it back; that
+search is public and history private; and that the AI metrics are scraped. `--base-url`
+points it at another deployment. Safe to re-run; exits non-zero on any failure.
+
+### Search (Part B, Week 4)
+
+```bash
+curl -G localhost:8080/v1/ai/search --data-urlencode "q=light vegetarian lunch" -d dietary=vegetarian
+curl -G localhost:8080/v1/ai/search --data-urlencode "q=biryani" -d lat=33.7215 -d lng=73.0545 -d radius_km=3
+curl -G localhost:8080/v1/ai/search --data-urlencode "q=delivery was very late" -d kind=review
+curl -G localhost:8080/v1/ai/search/history -H "Authorization: Bearer $CUSTOMER_TOKEN" \
+  --data-urlencode "q=that spicy chicken"
+```
+
+`kind` is `item` (default), `restaurant`, `review` or `cuisine`; filters `lat`/`lng`/`radius_km`,
+`max_price`, `dietary` (repeatable, all must apply) and `restaurant_id`. Search is public
+like the menus; `/search/history` is the logged-in customer's own orders.
+
+Retrieval quality is measured, not eyeballed: `scripts/eval_retrieval.py` runs 32 golden
+queries (`scripts/fixtures/retrieval_golden.json`) and reports recall@5 and MRR per query
+and per kind (`-v` shows every top 5). `scripts/check.sh --with-ai` runs it with a minimum
+bar. Results and how the settings were chosen:
+[technical-documentation.md](docs/technical-documentation.md#search-retrieval-quality).
 
 ### Failure drills
 
 How the event pipeline behaves when parts of it fail. Results are in
-[docs/technical-documentation.md](docs/technical-documentation.md#failure-drills-verified-2026-10-15).
-Watch the *Event pipeline* dashboard while running them.
+[docs/technical-documentation.md](docs/technical-documentation.md#failure-drills-verified-2026-10-15)
+(drills 6–7: [search drills](docs/technical-documentation.md#search-failure-drills-verified-2026-11-02)).
+Watch the *Event pipeline* dashboard (drills 6–7: *AI / Retrieval*) while running them.
 
 1. **Kafka down.** `docker compose stop kafka`, place an order (test UI or smoke test),
    and watch *Outbox backlog* grow; `OutboxLagging` fires after about 2 minutes.
@@ -398,6 +437,15 @@ Watch the *Event pipeline* dashboard while running them.
    place orders, and watch *Notification sends / min*: retries at 0.5; at 1.0, `failed`
    after 5 attempts and `NotificationsFailing` fires. `docker compose up -d
    notification-worker` puts it back.
+6. **Qdrant down.** `docker compose stop qdrant`, edit a few menu items: search answers
+   503, the indexer retries (*Indexer outage retries*) and dead-letters nothing.
+   `docker compose start qdrant`: the edits become searchable within the indexer's retry
+   backoff (≤ 30 s), and its consumer lag returns to 0.
+7. **Reindex while serving.** Keep searching (the test UI, or a loop of `curl`s) while
+   `docker compose exec ai-service python -m app.reindex` runs — in place, or into a new
+   index beside the live one with `-e INDEX_REVISION=2` (how an embedding-model change is
+   rolled out; drop the `_r2` collections afterwards in the Qdrant dashboard). No search
+   fails or comes back empty.
 
 ## API overview
 

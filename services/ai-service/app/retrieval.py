@@ -19,6 +19,8 @@ from typing import Any, Literal
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.http import models as m
 
+from app import metrics
+from app.config import settings
 from app.embedding import Embedder, Vectors
 from app.store import MENU_ITEMS, ORDER_HISTORY, RESTAURANTS, REVIEWS, name
 
@@ -106,6 +108,13 @@ def _prefetch(v: Vectors, query_filter: m.Filter, limit: int) -> list[m.Prefetch
     ]
 
 
+def _fusion() -> m.RrfQuery:
+    """Dense first, sparse second — the order `_prefetch` lists them."""
+    return m.RrfQuery(
+        rrf=m.Rrf(weights=[settings.fusion_dense_weight, settings.fusion_sparse_weight])
+    )
+
+
 def _entity_id(kind: str, payload: dict[str, Any]) -> str:
     key = {
         "item": "menu_item_id",
@@ -135,26 +144,33 @@ class Retriever:
     async def retrieve(self, query: str, filters: Filters) -> list[Hit]:
         vectors = await self._embedder.query(query)
         if filters.customer_id is not None:
-            return await self._search(
-                "order", ORDER_HISTORY, vectors, history_filter(filters.customer_id), filters.limit
+            kind = "order"
+            hits = await self._search(
+                kind, ORDER_HISTORY, vectors, history_filter(filters.customer_id), filters.limit
             )
-        query_filter = catalog_filter(filters)
-        if filters.kind == "cuisine":
-            return await self._cuisines(vectors, query_filter, filters.limit)
-        return await self._search(
-            filters.kind, _COLLECTION[filters.kind], vectors, query_filter, filters.limit
-        )
+        elif filters.kind == "cuisine":
+            kind = filters.kind
+            with metrics.QUERY_SECONDS.labels(kind).time():
+                hits = await self._cuisines(vectors, catalog_filter(filters), filters.limit)
+        else:
+            kind = filters.kind
+            hits = await self._search(
+                kind, _COLLECTION[kind], vectors, catalog_filter(filters), filters.limit
+            )
+        metrics.SEARCHES.labels(kind, "hits" if hits else "empty").inc()
+        return hits
 
     async def _search(
         self, kind: str, collection: str, v: Vectors, query_filter: m.Filter, limit: int
     ) -> list[Hit]:
-        result = await self._client.query_points(
-            name(collection),
-            prefetch=_prefetch(v, query_filter, limit * _CANDIDATES_PER_RESULT),
-            query=m.FusionQuery(fusion=m.Fusion.RRF),
-            limit=limit,
-            with_payload=True,
-        )
+        with metrics.QUERY_SECONDS.labels(kind).time():
+            result = await self._client.query_points(
+                name(collection),
+                prefetch=_prefetch(v, query_filter, limit * _CANDIDATES_PER_RESULT),
+                query=_fusion(),
+                limit=limit,
+                with_payload=True,
+            )
         return [_hit(kind, p) for p in result.points]
 
     async def _cuisines(self, v: Vectors, query_filter: m.Filter, limit: int) -> list[Hit]:
@@ -164,7 +180,7 @@ class Retriever:
             name(MENU_ITEMS),
             group_by="cuisine",
             prefetch=_prefetch(v, query_filter, limit * _ITEMS_PER_CUISINE * 4),
-            query=m.FusionQuery(fusion=m.Fusion.RRF),
+            query=_fusion(),
             limit=limit,
             group_size=_ITEMS_PER_CUISINE,
             with_payload=True,
