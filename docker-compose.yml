@@ -116,6 +116,16 @@ services:
     # Host access for the real-DB tests (scripts/check.sh --with-db), localhost only.
     ports: ["127.0.0.1:15437:5432"]
 
+  ai-db:
+    <<: *postgres-common
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ai_db
+    volumes: ["ai-db-data:/var/lib/postgresql/data"]
+    # Host access for the real-DB tests (scripts/check.sh --with-db), localhost only.
+    ports: ["127.0.0.1:15438:5432"]
+
   # ---------- Infra: shared stores/brokers ----------
   mongo:
     logging: *default-logging
@@ -142,6 +152,25 @@ services:
     ports: ["127.0.0.1:16379:6379"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Vector store for semantic search (docs/week4-plan.md B4-D2). The
+  # unprivileged image runs as a non-root user. Its dashboard and REST API
+  # are on localhost only, for inspecting collections in dev.
+  qdrant:
+    logging: *default-logging
+    image: qdrant/qdrant:v1.20.0-unprivileged
+    volumes: ["qdrant-data:/qdrant/storage"]
+    ports: ["127.0.0.1:6333:6333"]
+    healthcheck:
+      # The image has bash but no curl/wget.
+      test:
+        - CMD
+        - bash
+        - -c
+        - "exec 3<>/dev/tcp/localhost/6333 && printf 'GET /readyz HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q ' 200 ' <&3"
       interval: 5s
       timeout: 5s
       retries: 10
@@ -527,6 +556,22 @@ services:
       timeout: 5s
       retries: 10
 
+  # The GenAI layer (docs/week4-plan.md B4-D1): semantic search now, the
+  # assistant in Week 5. Its own Postgres, plus Qdrant for vectors.
+  ai-service:
+    logging: *default-logging
+    build: { context: ., dockerfile: services/ai-service/Dockerfile }
+    env_file: [services/ai-service/.env]
+    environment: *observability-env
+    depends_on:
+      ai-db: { condition: service_healthy }
+      qdrant: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   notification-worker:
     <<: *celery-worker
     environment:
@@ -554,6 +599,8 @@ volumes:
   delivery-db-data:
   payment-db-data:
   notification-db-data:
+  ai-db-data:
+  qdrant-data:
   temporal-data:
   redis-data:
   mongo-data:

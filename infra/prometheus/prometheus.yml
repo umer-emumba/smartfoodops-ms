@@ -27,6 +27,7 @@ scrape_configs:
           - notification-service:9100
           - tracking-service:9100
           - analytics-service:9100
+          - ai-service:9100
           - order-worker:9100
           - payment-worker:9100
           - delivery-worker:9100

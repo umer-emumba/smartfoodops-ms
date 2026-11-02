@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     notification_service_url: str = "http://notification-service:8000"
     tracking_service_url: str = "http://tracking-service:8000"
     analytics_service_url: str = "http://analytics-service:8000"
+    ai_service_url: str = "http://ai-service:8000"
 
     rate_limit_default_per_minute: int = 120
     rate_limit_auth_per_minute: int = 10
@@ -59,6 +60,7 @@ class Settings(BaseSettings):
             "notification-service": self.notification_service_url,
             "tracking-service": self.tracking_service_url,
             "analytics-service": self.analytics_service_url,
+            "ai-service": self.ai_service_url,
         }
 
     @property
@@ -78,6 +80,7 @@ class Settings(BaseSettings):
             "notifications": "notification-service",
             "tracking": "tracking-service",
             "analytics": "analytics-service",
+            "ai": "ai-service",
         }
 
 

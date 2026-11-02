@@ -423,6 +423,7 @@ Resource → owning service:
 | `/v1/payments` | payment-service |
 | `/v1/notifications` | notification-service |
 | `/v1/analytics` | analytics-service |
+| `/v1/ai` | ai-service |
 | `/v1/tracking` (SSE) | tracking-service |
 
 The gateway also serves its own `/livez`, `/readyz` (and `/health`, same as `/readyz`), `/docs`,

@@ -49,7 +49,7 @@ CUSTOMER = "customer@demo.smartfoodops.example"
 ADMIN = "admin@demo.smartfoodops.example"
 RESTAURANT_ADMIN = "restaurant-admin@demo.smartfoodops.example"
 RIDER = "rider@demo.smartfoodops.example"
-SERVICES = ["user", "restaurant", "order", "delivery", "payment", "notification", "analytics"]
+SERVICES = ["user", "restaurant", "order", "delivery", "payment", "notification", "analytics", "ai"]
 
 _results: list[tuple[str, bool]] = []
 
