@@ -293,6 +293,43 @@ def _wrapped_in_serialization(cause: BaseException) -> Exception:
             return outer
 
 
+# Stand-ins with the same names and hierarchy as pymongo's and redis-py's
+# errors (this lib doesn't depend on either client).
+class PyMongoError(Exception): ...
+
+
+class ConnectionFailure(PyMongoError): ...
+
+
+class AutoReconnect(ConnectionFailure): ...
+
+
+class ServerSelectionTimeoutError(AutoReconnect): ...
+
+
+class OperationFailure(PyMongoError): ...
+
+
+class DuplicateKeyError(OperationFailure): ...
+
+
+class RedisError(Exception): ...
+
+
+class RedisConnectionError(RedisError): ...
+
+
+class RedisTimeoutError(RedisError): ...
+
+
+class RedisResponseError(RedisError): ...
+
+
+RedisConnectionError.__name__ = "ConnectionError"
+RedisTimeoutError.__name__ = "TimeoutError"
+RedisResponseError.__name__ = "ResponseError"
+
+
 @pytest.mark.parametrize(
     ("exc", "transient"),
     [
@@ -310,6 +347,17 @@ def _wrapped_in_serialization(cause: BaseException) -> Exception:
         # ...unless an outage is behind it.
         (_wrapped_in_serialization(ConnectionRefusedError()), True),
         (RuntimeError("handler bug"), False),
+        # MongoDB down or restarting...
+        (ServerSelectionTimeoutError("No servers found"), True),
+        (AutoReconnect("connection reset"), True),
+        # ...but a rejected write is the event's fault.
+        (DuplicateKeyError("E11000"), False),
+        (OperationFailure("bad update"), False),
+        # Redis down or restarting...
+        (RedisConnectionError("Connection refused"), True),
+        (RedisTimeoutError("Timeout reading"), True),
+        # ...but a command error isn't an outage.
+        (RedisResponseError("WRONGTYPE"), False),
     ],
 )
 def test_is_transient(exc: BaseException, transient: bool) -> None:

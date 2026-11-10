@@ -217,7 +217,7 @@ commit re-publishes those rows), so consumers dedupe:
 | The handler raised | retried 3 times in-process (0.5s doubling), then the message goes to `<topic>.dlq` with error headers, the offset is committed, and the partition moves on |
 | The bytes don't deserialize or validate | straight to the DLQ (retrying can't fix it) |
 | An event type this consumer doesn't know (a newer producer) | skipped and committed |
-| An outage — Postgres, Schema Registry or the network unreachable | **not** dead-lettered: nothing is committed, the consumer rewinds to the message and retries with backoff (capped at 30s) until the dependency is back |
+| An outage — Postgres, MongoDB, Redis, Schema Registry or the network unreachable | **not** dead-lettered: nothing is committed, the consumer rewinds to the message and retries with backoff (capped at 30s) until the dependency is back |
 | The DLQ publish or the offset commit failed | the same rewind — the message is redelivered, never lost |
 
 The outage rule matters: without it, every event during a database restart would land
