@@ -224,6 +224,25 @@ The outage rule matters: without it, every event during a database restart would
 in the DLQ. analytics-service also reads the `.dlq` topics (as raw bytes) and records
 each dead letter, which is the "failed events" metric.
 
+**Replaying dead letters** once the cause is fixed: `python -m sfo_events.redrive`
+(`libs/events/src/sfo_events/redrive.py`), run in any service container, since Kafka is
+only on the compose network:
+
+```sh
+# List what would be replayed: one group's dead letters since a time.
+docker compose exec analytics-service python -m sfo_events.redrive \
+    --topic order-events.dlq --group notification-service --since 2026-11-10T09:00 --dry-run
+# Then without --dry-run to republish them.
+```
+
+Each dead letter goes back to its original topic with its key, value and headers (the
+`dlq.*` ones replaced by `dlq.redriven`). Every group of that topic sees it again, which
+the idempotency above makes harmless; only the group that failed acts on it. The range
+is per run (`--since`, `--partition` + `--from-offset`, default: the whole DLQ, 7-day
+retention) and ends where the DLQ ended when the run began, so a message that fails
+again goes back to the DLQ rather than looping. Nothing is committed; the summary
+prints the offsets to continue from.
+
 Consumers run inside their service's API process by default (`KAFKA_CONSUMER_MODE=
 embedded`, started from the lifespan; the blocking poll runs in a thread) or as their
 own process (`standalone`: `python -m app.consumer`) — the same switch Week 2 uses for
