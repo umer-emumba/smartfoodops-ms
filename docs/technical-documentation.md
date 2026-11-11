@@ -776,8 +776,53 @@ skipped: in dev, 52 smoke-test orders of deleted restaurants.
 
 ### Search: retrieval quality
 
-Measured with `scripts/eval_retrieval.py` on 32 golden queries
-(`scripts/fixtures/retrieval_golden.json`, written against the catalog fixture; 2026-11-02):
+Measured with `scripts/eval_retrieval.py` on the golden queries in
+`scripts/fixtures/retrieval_golden.json`, written against the catalog fixture.
+
+**Grown set (B4-D17, 2026-11-11): 106 queries.** The first 32 (below) are the `dev`
+split — the fusion weights were tuned on them. 74 new queries are the held-out `test`
+split, for comparing models and settings fairly. Every query is tagged, so a weakness
+doesn't average out. Identical across repeated runs:
+
+| Split / tag | Queries | recall@5 | MRR |
+|---|---|---|---|
+| dev | 32 | 0.902 | 0.953 |
+| test | 74 | 0.681 | 0.796 |
+| exact (dish or restaurant names) | 26 | 0.987 | 1.000 |
+| multi (several filters) | 11 | 0.827 | 0.955 |
+| typo | 6 | 0.750 | 0.708 |
+| attribute (light, cheap, protein, calories) | 19 | 0.716 | 0.795 |
+| vague (moods, occasions) | 30 | 0.697 | 0.882 |
+| roman_urdu | 14 | 0.635 | 0.699 |
+| negation ("not spicy", "without nuts") | 4 | 0.050 | 0.319 |
+| **overall** | 106 | **0.748** | **0.843** |
+
+What fails, and why:
+- **Negation** — embeddings place "chicken that is not spicy" next to spicy chicken;
+  "vegetarian but not a salad" returns only salads. Needs query understanding (Week 5
+  turns it into a spice or category filter), not a better embedding.
+- **Roman Urdu** — "mirchi wala khana", "sabzi" and "kuch meetha" score 0–0.2: bge-small
+  is English-only and these words aren't in the menu text. Words that *are* in the menu
+  ("daal chawal", "nashta", "karahi") work through BM25.
+- **Typos of rare words** — "tirmisu" finds nothing (BM25 needs the exact word, and the
+  dense model splits it into unrelated pieces); "biryni" still finds two biryanis.
+- **Attributes the text only implies** — "high protein chicken meal" (0.0), "dairy free
+  dessert" (0.0), "low calorie" (0.4): calories are a number in the text, protein isn't
+  there at all.
+- **Moods** — "I'm really hungry, something filling" returns desserts and spring rolls;
+  "iftar items" finds nothing (the menu text never says iftar).
+
+**Corrections after the first run** (recorded because changing a test after seeing
+results needs a reason): five expected-answer lists were stricter than a person would be —
+Sweet Lassi added to "something sweet after dinner"; Double Shami Bun Kebab to "quick
+snack" (Anda Shami was already in); Chicken Pulao and Chicken Satay (spice 1) to "food for
+kids who don't like spice"; "sasta khana" counts dishes up to PKR 450 instead of 300 (the
+range "cheap street snack" already used); Batata Harra and Chicken Chatni Roll to
+"chatpata". Test recall@5 moved 0.659 → 0.681.
+
+`check.sh --with-ai` now fails under recall@5 0.70 / MRR 0.79 over all 106.
+
+**Original 32 queries** (now the dev split; 2026-11-02):
 
 | Kind | Queries | recall@5 | MRR |
 |---|---|---|---|
@@ -793,7 +838,8 @@ instead of 1st. No code or catalog change explains it and the earlier index stat
 kept, so the cause isn't known; both are well above the bar.
 
 recall@5 counts relevant answers in the top 5 out of at most 5; MRR is 1/rank of the
-first relevant one. `check.sh --with-ai` fails under recall@5 0.85 / MRR 0.88.
+first relevant one. Until B4-D17, `check.sh --with-ai` failed under recall@5 0.85 / MRR 0.88
+on these 32.
 
 **Settings tried** (all six within one query of each other: recall@5 0.896–0.902, MRR
 0.922–0.938): BGE's query instruction on/off × fusion weights 1:1, 1.2:1, 1:1.2. That is

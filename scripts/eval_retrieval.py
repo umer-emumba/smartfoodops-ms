@@ -1,9 +1,16 @@
-"""Retrieval eval (docs/week4-plan.md step 5): runs the golden queries in
-scripts/fixtures/retrieval_golden.json against the search API and reports
-recall@5 and MRR, per query and overall.
+"""Retrieval eval (docs/week4-plan.md step 5, B4-D17): runs the golden queries
+in scripts/fixtures/retrieval_golden.json against the search API and reports
+recall@5 and MRR, per query, per kind, per tag, per split and overall.
 
     uv run --group dev python scripts/eval_retrieval.py              # report
     uv run --group dev python scripts/eval_retrieval.py --check      # + fail under the bar
+    uv run --group dev python scripts/eval_retrieval.py --split test --json out.json
+
+Each query has a split — dev (the original 32, which the fusion weights were
+tuned on) or test (held out, for comparing models and settings fairly) — and
+tags for what it exercises (exact, vague, attribute, roman_urdu, typo,
+negation, multi), so a change that helps one kind of query and hurts another
+shows up instead of averaging out.
 
 Needs the seeded stack with the index built (`docker compose up`,
 scripts/seed.py, `docker compose exec ai-service python -m app.reindex`).
@@ -30,16 +37,18 @@ import httpx
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 TOP_K = 5
 MRR_DEPTH = 10
-# The bar `--check` (scripts/check.sh --with-ai) holds the index to: the
-# measured baseline (recall@5 0.902, MRR 0.938–0.953 on 2026-11-02) less ~0.05, so
-# a regression of a couple of queries fails but noise doesn't.
-MIN_RECALL = 0.85
-MIN_MRR = 0.88
+# The bar `--check` (scripts/check.sh --with-ai) holds the index to, over all
+# 106 queries: the measured baseline (recall@5 0.748, MRR 0.843 on 2026-11-11,
+# identical across runs) less ~0.05, so a regression of a few queries fails
+# but noise doesn't. The test split is deliberately hard (Roman Urdu,
+# negation, typos), so the bar is lower than the old 32-query one.
+MIN_RECALL = 0.70
+MIN_MRR = 0.79
 
 
 class _WaitOutRateLimit(httpx.HTTPTransport):
-    """The gateway allows 120 requests/min per IP; one eval is 32, so runs
-    back to back (or after the smoke test) can hit it — wait, don't fail."""
+    """The gateway allows 120 requests/min per IP; one eval is ~100, so runs
+    back to back (or after the smoke test) hit it — wait, don't fail."""
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
         while True:
@@ -117,17 +126,41 @@ def evaluate(client: httpx.Client, q: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _score(rs: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "recall": round(sum(r["recall"] for r in rs) / len(rs), 3),
+        "mrr": round(sum(r["rr"] for r in rs) / len(rs), 3),
+        "queries": len(rs),
+    }
+
+
+def _grouped(results: list[dict[str, Any]], key: Any) -> dict[str, dict[str, Any]]:
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for r in results:
+        for k in key(r["q"]):
+            groups.setdefault(k, []).append(r)
+    return {k: _score(rs) for k, rs in sorted(groups.items())}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--base-url", default="http://localhost:8080")
     parser.add_argument("--check", action="store_true", help="exit 1 under the bar")
+    parser.add_argument("--split", choices=["dev", "test", "all"], default="all")
+    parser.add_argument("--json", type=Path, help="also write the scores to this file")
     parser.add_argument("-v", "--verbose", action="store_true", help="show every top 5")
     args = parser.parse_args()
+    if args.check and args.split != "all":
+        parser.error("--check holds all queries to the bar; drop --split")
 
     queries = json.loads((FIXTURES / "retrieval_golden.json").read_text())["queries"]
     _check_golden(queries)
+    if args.split != "all":
+        queries = [q for q in queries if q["split"] == args.split]
     with httpx.Client(base_url=args.base_url, timeout=30, transport=_WaitOutRateLimit()) as client:
+        started = time.perf_counter()
         results = [evaluate(client, q) for q in queries]
+        seconds = time.perf_counter() - started
 
     print(f"{'recall@5':>8} {'RR':>5}  query")
     for r in results:
@@ -139,18 +172,32 @@ def main() -> None:
             for label, ok in r["top"]:
                 print(f"{'':16}{'✓' if ok else '·'} {label}")
 
-    by_kind: dict[str, list[dict[str, Any]]] = {}
-    for r in results:
-        by_kind.setdefault(r["q"]["kind"], []).append(r)
-    print()
-    for kind, rs in by_kind.items():
-        recall = sum(r["recall"] for r in rs) / len(rs)
-        mrr = sum(r["rr"] for r in rs) / len(rs)
-        print(f"{kind:>10}: recall@5 {recall:.3f}  MRR {mrr:.3f}  ({len(rs)} queries)")
-    recall = sum(r["recall"] for r in results) / len(results)
-    mrr = sum(r["rr"] for r in results) / len(results)
-    print(f"{'overall':>10}: recall@5 {recall:.3f}  MRR {mrr:.3f}  ({len(results)} queries)")
+    report = {
+        "kind": _grouped(results, lambda q: [q["kind"]]),
+        "tag": _grouped(results, lambda q: q["tags"]),
+        "split": _grouped(results, lambda q: [q["split"]]),
+        "overall": _score(results),
+    }
+    for section in ("kind", "tag", "split"):
+        print()
+        for name, s in report[section].items():
+            print(
+                f"{name:>12}: recall@5 {s['recall']:.3f}  MRR {s['mrr']:.3f}"
+                f"  ({s['queries']} queries)"
+            )
+    overall = report["overall"]
+    print(
+        f"\n{'overall':>12}: recall@5 {overall['recall']:.3f}  MRR {overall['mrr']:.3f}"
+        f"  ({overall['queries']} queries, {seconds:.1f}s)"
+    )
+    if args.json:
+        report["queries"] = [
+            {"q": r["q"]["q"], "kind": r["q"]["kind"], "recall": r["recall"], "rr": r["rr"]}
+            for r in results
+        ]
+        args.json.write_text(json.dumps(report, indent=1) + "\n")
 
+    recall, mrr = overall["recall"], overall["mrr"]
     if args.check and (recall < MIN_RECALL or mrr < MIN_MRR):
         sys.exit(f"Retrieval below the bar (recall@5 ≥ {MIN_RECALL}, MRR ≥ {MIN_MRR})")
 

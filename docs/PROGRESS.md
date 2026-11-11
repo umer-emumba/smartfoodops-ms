@@ -128,11 +128,13 @@ eval and drills 6–7.
 | 2 | `restaurant-events` (full snapshots, `catalog_version` as `source_version`), `restaurant-worker` relay | `bc60dbb` |
 | 3 | Documents and chunking, fastembed dense + BM25, Qdrant store, Kafka indexer, `app.reindex` backfill | `8a7448a` |
 | 4 | `retrieve()`, `GET /v1/ai/search`, `GET /v1/ai/search/history` | `89704ec` |
-| 5 | Metrics + *AI / Retrieval* dashboard + `IndexLagging` alert; retrieval eval (recall@5 0.902, MRR 0.953) and `check.sh --with-ai`; `smoke_test.py --ai`; drills; docs | (this commit) |
+| 5 | Metrics + *AI / Retrieval* dashboard + `IndexLagging` alert; retrieval eval (recall@5 0.902, MRR 0.953) and `check.sh --with-ai`; `smoke_test.py --ai`; drills; docs | `53b97fd` |
+| 6 | Golden set grown to 106 tagged queries with a held-out test split (B4-D17): recall@5 0.748, MRR 0.843 overall; dev unchanged at 0.902 / 0.953 | (this commit) |
 
 **Week 4 known limits** (documented in technical-documentation.md): ranking has weak spots
 a query parser would fix (a spicy-sounding query isn't a spice filter; no protein data);
-the golden set is 32 queries, so small setting changes can't be told apart; seeded
+negation, Roman Urdu and typos of rare dish names score low on the grown eval (0.05, 0.64,
+0.75 recall@5); seeded
 history only reaches the index through `app.reindex`; embedding shares the API process's
 CPU in dev; the ai-service image is ~814 MB.
 

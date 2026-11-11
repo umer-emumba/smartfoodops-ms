@@ -378,9 +378,10 @@ curl -G localhost:8080/v1/ai/search/history -H "Authorization: Bearer $CUSTOMER_
 `max_price`, `dietary` (repeatable, all must apply) and `restaurant_id`. Search is public
 like the menus; `/search/history` is the logged-in customer's own orders.
 
-Retrieval quality is measured, not eyeballed: `scripts/eval_retrieval.py` runs 32 golden
-queries (`scripts/fixtures/retrieval_golden.json`) and reports recall@5 and MRR per query
-and per kind (`-v` shows every top 5). `scripts/check.sh --with-ai` runs it with a minimum
+Retrieval quality is measured, not eyeballed: `scripts/eval_retrieval.py` runs 106 golden
+queries (`scripts/fixtures/retrieval_golden.json`) and reports recall@5 and MRR per query,
+kind, tag (exact, vague, Roman Urdu, typo, negation…) and split (`-v` shows every top 5;
+`--split test` runs only the held-out queries; `--json FILE` saves the scores). `scripts/check.sh --with-ai` runs it with a minimum
 bar. Results and how the settings were chosen:
 [technical-documentation.md](docs/technical-documentation.md#search-retrieval-quality).
 
