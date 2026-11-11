@@ -69,6 +69,26 @@ async def test_failing_email_backs_off_then_fails_for_good(
     assert row.retry_count == settings.notify_max_attempts
 
 
+async def test_unexpected_send_error_counts_as_an_attempt(
+    session_factory: Factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def broken_provider(_: Notification) -> None:
+        raise ConnectionError("provider unreachable")
+
+    monkeypatch.setattr(tasks.senders, "send", broken_provider)
+    notification_id = await _add(session_factory, "email")
+
+    assert await tasks.deliver(notification_id) is not None
+    row = await _get(session_factory, notification_id)
+    assert (row.status, row.retry_count) == ("pending", 1)
+    assert row.last_error == "provider unreachable" and row.last_attempt_at is not None
+
+    for _ in range(settings.notify_max_attempts - 1):
+        await tasks.deliver(notification_id)
+    row = await _get(session_factory, notification_id)
+    assert (row.status, row.retry_count) == ("failed", settings.notify_max_attempts)
+
+
 async def test_email_recovers_after_a_failure(
     session_factory: Factory, monkeypatch: pytest.MonkeyPatch
 ) -> None:

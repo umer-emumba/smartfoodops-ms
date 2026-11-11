@@ -18,6 +18,9 @@ class Settings(KafkaConsumerSettings):
     # service can verify a token but never issue one.
     jwt_jwks_url: str = "http://user-service:8000/.well-known/jwks.json"
 
+    # Asked who owns a restaurant when its order facts can't tell (app/owners.py).
+    restaurant_service_url: str = "http://restaurant-service:8000"
+
     mongo_url: str = "mongodb://mongo:27017"
     mongo_db: str = "analytics"
     # Hours of the day (peak-hour load) are counted in this timezone.

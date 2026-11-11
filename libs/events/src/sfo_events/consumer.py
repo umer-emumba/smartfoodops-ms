@@ -11,8 +11,9 @@ poll → deserialize → process(event) → commit offset
 - A message that can't be deserialized or validated goes to the DLQ at once
   (retrying won't fix it). An event type the consumer doesn't know (a newer
   producer) is skipped.
-- An *outage* is not poison: when Postgres, Schema Registry or the network
-  is unreachable (`is_transient`), nothing is dead-lettered or committed.
+- An *outage* is not poison: when Postgres, MongoDB, Redis, Schema Registry
+  or the network is unreachable (`is_transient`), nothing is dead-lettered or
+  committed.
   The consumer rewinds to the message and tries again with backoff (capped)
   until the dependency is back. Otherwise every event during a database
   restart would land in the DLQ.
@@ -96,8 +97,20 @@ class DeadLetterError(RuntimeError):
 
 # Exception classes (by name, anywhere in the MRO) that mean "couldn't reach
 # a dependency". By name because the registry client raises errors of a
-# vendored httpx fork, not importable as `httpx`.
-_TRANSIENT_NAMES = {"TransportError", "KafkaException"}
+# vendored httpx fork, not importable as `httpx`, and so this lib doesn't
+# depend on every client a service uses:
+# - ConnectionFailure: pymongo's base for AutoReconnect,
+#   ServerSelectionTimeoutError, NetworkTimeout, WaitQueueTimeoutError (not
+#   OSError subclasses)
+# - ConnectionError, TimeoutError: redis-py's own (subclasses of RedisError,
+#   not of the builtins with those names, which are OSError already)
+_TRANSIENT_NAMES = {
+    "TransportError",
+    "KafkaException",
+    "ConnectionFailure",
+    "ConnectionError",
+    "TimeoutError",
+}
 # ...except these, which subclass KafkaException but mean a bad message
 # (bytes not in the Schema Registry wire format, say). An outage behind one
 # is still found, further down the `__cause__`/`__context__` chain.
