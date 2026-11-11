@@ -822,6 +822,34 @@ range "cheap street snack" already used); Batata Harra and Chicken Chatni Roll t
 
 `check.sh --with-ai` now fails under recall@5 0.70 / MRR 0.79 over all 106.
 
+**Embedding models compared (B4-D18, 2026-11-11).** `scripts/compare_models.sh` builds a
+fresh index per model (revision 900, beside the live one, deleted afterwards) from the
+same source data and runs the eval on it. Prefixes are the ones each model was trained
+with (`DENSE_QUERY_PREFIX`, `DENSE_DOCUMENT_PREFIX`). recall@5 / MRR:
+
+| Model | Test (74) | Overall (106) | Roman Urdu | Typo | Negation | Query embed | ai-service memory | Index build |
+|---|---|---|---|---|---|---|---|---|
+| bge-small-en-v1.5 (384) | 0.681 / 0.794 | 0.744 / 0.837 | 0.635 | 0.750 | 0.050 | 9 ms | 261 MiB | 30 s |
+| **bge-base-en-v1.5** (768) | **0.741 / 0.854** | **0.792 / 0.893** | 0.649 | 0.944 | 0.225 | 29 ms | 444 MiB | 236 s |
+| snowflake-arctic-embed-s (384) | 0.695 / 0.838 | 0.751 / 0.882 | 0.582 | 0.903 | 0.100 | 8 ms | 367 MiB | 116 s |
+| paraphrase-multilingual-MiniLM-L12-v2 (384) | 0.633 / 0.726 | 0.704 / 0.774 | 0.574 | 0.597 | 0.050 | 12 ms | 676 MiB | 175 s |
+| embeddinggemma-300m (768) | 0.752 / 0.877 | 0.793 / 0.910 | 0.658 | 0.958 | 0.200 | 52 ms | 1.26 GiB | 546 s |
+
+Index build is ~660 documents on the laptop's CPU, including a download of a few seconds.
+A fresh bge-small index scores slightly under the live one (0.744 vs 0.748 overall): the
+live index also holds a week of smoke-test edits, so only fresh builds are compared.
+
+- **bge-base is the pick**: most of the gain (test +0.06 / +0.06; typos 0.75 → 0.94) for
+  ~20 ms more per query and ~180 MiB more memory.
+- **embeddinggemma** is about one query better on recall and two on MRR — within noise on
+  74 queries — for 3× the memory, 2× the query time and Gemma's own licence terms.
+- **Roman Urdu isn't a model problem we can buy out of**: every model, the multilingual
+  ones included, scores 0.57–0.66. Roman Urdu is Urdu in Latin letters, which these
+  models weren't trained on. Week 5's query rewriting (Roman Urdu → English before
+  retrieval) is the fix.
+- **Negation** stays at or under 0.23 for every model: it needs the query turned into a
+  filter, not a better embedding.
+
 **Original 32 queries** (now the dev split; 2026-11-02):
 
 | Kind | Queries | recall@5 | MRR |

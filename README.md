@@ -382,7 +382,8 @@ Retrieval quality is measured, not eyeballed: `scripts/eval_retrieval.py` runs 1
 queries (`scripts/fixtures/retrieval_golden.json`) and reports recall@5 and MRR per query,
 kind, tag (exact, vague, Roman Urdu, typo, negation…) and split (`-v` shows every top 5;
 `--split test` runs only the held-out queries; `--json FILE` saves the scores). `scripts/check.sh --with-ai` runs it with a minimum
-bar. Results and how the settings were chosen:
+bar. `scripts/compare_models.sh [model…]` rebuilds a throwaway index per embedding model and
+runs the eval on each (how the model was chosen). Results and how the settings were chosen:
 [technical-documentation.md](docs/technical-documentation.md#search-retrieval-quality).
 
 ### Failure drills

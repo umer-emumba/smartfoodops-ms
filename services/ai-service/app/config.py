@@ -19,6 +19,10 @@ class Settings(BaseServiceSettings, KafkaConsumerSettings):
     # BGE's recommended instruction for short search queries (not for the
     # documents). Empty turns it off — step 5's retrieval eval compares both.
     dense_query_prefix: str = "Represent this sentence for searching relevant passages: "
+    # Some models also want one in front of each document (embeddinggemma's
+    # "title: none | text: "); BGE doesn't. Dense only — BM25 and the stored
+    # text never see either prefix. Set by scripts/compare_models.sh (B4-D18).
+    dense_document_prefix: str = ""
     sparse_model: str = "Qdrant/bm25"
     # Weighted RRF (app/retrieval.py): how much each list counts in the
     # fused ranking. Equal weights make "1st by one, 2nd by the other" an

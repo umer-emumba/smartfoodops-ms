@@ -129,7 +129,8 @@ eval and drills 6–7.
 | 3 | Documents and chunking, fastembed dense + BM25, Qdrant store, Kafka indexer, `app.reindex` backfill | `8a7448a` |
 | 4 | `retrieve()`, `GET /v1/ai/search`, `GET /v1/ai/search/history` | `89704ec` |
 | 5 | Metrics + *AI / Retrieval* dashboard + `IndexLagging` alert; retrieval eval (recall@5 0.902, MRR 0.953) and `check.sh --with-ai`; `smoke_test.py --ai`; drills; docs | `53b97fd` |
-| 6 | Golden set grown to 106 tagged queries with a held-out test split (B4-D17): recall@5 0.748, MRR 0.843 overall; dev unchanged at 0.902 / 0.953 | (this commit) |
+| 6 | Golden set grown to 106 tagged queries with a held-out test split (B4-D17): recall@5 0.748, MRR 0.843 overall; dev unchanged at 0.902 / 0.953 | `1a88789` |
+| 7 | Embedding models compared on the eval (B4-D18): `scripts/compare_models.sh`, dev-only `docker-compose.models.yml`, `DENSE_DOCUMENT_PREFIX`; bge-base-en-v1.5 wins (test 0.741 / 0.854 vs bge-small 0.681 / 0.794) | (this commit) |
 
 **Week 4 known limits** (documented in technical-documentation.md): ranking has weak spots
 a query parser would fix (a spicy-sounding query isn't a spice filter; no protein data);

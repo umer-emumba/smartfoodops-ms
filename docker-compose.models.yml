@@ -1,0 +1,24 @@
+# Dev-only override for scripts/compare_models.sh (docs/week4-plan.md B4-D18):
+# runs ai-service with another dense model, downloaded at start-up into a
+# cache volume instead of baked into the image. The index suffix follows the
+# model name and a throwaway revision (900), so every model — bge-small too —
+# builds fresh collections beside the live `_r1` ones.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.models.yml up -d ai-service
+services:
+  ai-service:
+    environment:
+      DENSE_MODEL: ${COMPARE_DENSE_MODEL:?set by scripts/compare_models.sh}
+      DENSE_DIM: ${COMPARE_DENSE_DIM:?}
+      DENSE_QUERY_PREFIX: "${COMPARE_QUERY_PREFIX:-}"
+      DENSE_DOCUMENT_PREFIX: "${COMPARE_DOCUMENT_PREFIX:-}"
+      INDEX_REVISION: "900"
+      EMBEDDING_CACHE_DIR: /opt/models
+      HF_HUB_OFFLINE: "0"
+      # The downloader's own cache and logs: the service user has no home dir.
+      HF_HOME: /opt/models/hf
+    volumes:
+      - ai-model-cache:/opt/models
+
+volumes:
+  ai-model-cache:

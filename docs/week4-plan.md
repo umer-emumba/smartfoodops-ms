@@ -50,6 +50,7 @@ steps go on `week4/retrieval-layer`, cut from `main`. `week5/ai-assistant` is cu
 | B4-D15 | **One Qdrant query per search**: dense and BM25 prefetches, each with the full filter, fused by RRF; `kind=cuisine` groups menu items by cuisine (best dish scores the group). Visibility (active restaurant, available, in stock, not deleted) is applied inside `retrieve()`, not by callers. `GET /v1/ai/search` is public like the menus; `/search/history` is customer-only and always filtered to the caller | RRF needs no score calibration between the two vector types; filtering inside the prefetch never returns short pages. Week 5 calls the same `retrieve()`, so it can't see anything a customer couldn't |
 | B4-D16 | **Retrieval settings from the eval, not by eye**: 32 golden queries (`scripts/fixtures/retrieval_golden.json`), recall@5 + MRR. Six settings (BGE query instruction on/off × RRF weights 1:1, 1.2:1, 1:1.2) were all within one query (recall@5 0.896–0.902, MRR 0.922–0.938) — noise, so: instruction on (BGE's recommended use), dense weight 1.2 only to break RRF ties that made results flip between runs. Bar for `check.sh --with-ai`: recall@5 ≥ 0.85, MRR ≥ 0.88 (baseline 0.902 / 0.938, 0.902 / 0.953 after a Docker restart — see technical-documentation.md) | Tuning to a 32-query set would overfit it. Two review golden entries were corrected (they named one restaurant; the queries don't) — recorded in technical-documentation.md |
 | B4-D17 | **Golden set grown to 106 queries** (follow-up, 2026-11-11): the original 32 become the `dev` split (the fusion weights were tuned on them); 74 new `test` queries are held out for comparing models and settings. Every query is tagged — exact, vague, attribute, roman_urdu, typo, negation, multi — and the eval reports each tag and split. Answers are judged from the catalog text, never copied from search output. New bar over all 106: recall@5 ≥ 0.70, MRR ≥ 0.79 (baseline 0.748 / 0.843) | 32 queries couldn't tell settings apart (B4-D16) and only covered tidy English. The new tags surface where search actually fails (negation 0.05, Roman Urdu 0.64), which is what a model comparison and later improvements need to measure against |
+| B4-D18 | **Embedding model chosen by measurement** (follow-up, 2026-11-11): `scripts/compare_models.sh` rebuilds a fresh index per model (revision 900, beside the live one) and runs the eval. On the test split: bge-small 0.681 / 0.794, **bge-base-en-v1.5 0.741 / 0.854**, arctic-embed-s 0.695 / 0.838, multilingual MiniLM 0.633 / 0.726, embeddinggemma-300m 0.752 / 0.877. Switch to bge-base | bge-base takes most of the gain (typos 0.75 → 0.94) for +20 ms per query and +180 MB. Gemma's extra ~1 query is within noise on 74 queries and costs 3× the memory under Gemma's own licence. No model fixes Roman Urdu (0.57–0.66, the multilingual ones included) or negation (≤ 0.23): both are left to Week 5's query rewriting |
 
 New resource use is roughly Qdrant ~200 MB plus ai-service with the ONNX model ~350 MB, on top
 of today's ~4 GiB stack.
@@ -127,9 +128,10 @@ of today's ~4 GiB stack.
 
 ### Follow-up — retrieval quality (after step 5)
 - **Grow the eval** (B4-D17): 106 tagged queries, dev/test split, `--split` and `--json`.
-- **Compare embedding models** on the test split (next; B4-D18): bge-small (current),
-  bge-base-en-v1.5, snowflake-arctic-embed-s, paraphrase-multilingual-MiniLM-L12-v2,
-  embeddinggemma-300m. Switch only if one clearly wins.
+- **Compare embedding models** (B4-D18): `scripts/compare_models.sh` with the dev-only
+  `docker-compose.models.yml` override; `DENSE_DOCUMENT_PREFIX` for models that want one.
+  bge-small, bge-base-en-v1.5, snowflake-arctic-embed-s, paraphrase-multilingual-MiniLM-L12-v2,
+  embeddinggemma-300m. bge-base won; the switch is its own commit.
 
 ## 3. Week 4 deliverables (Part B PDF)
 

@@ -55,7 +55,7 @@ def _models() -> tuple[TextEmbedding, SparseTextEmbedding]:
 
 def _embed_documents(texts: list[str]) -> list[Vectors]:
     dense_model, sparse_model = _models()
-    dense = dense_model.embed(texts)
+    dense = dense_model.embed([settings.dense_document_prefix + t for t in texts])
     sparse = sparse_model.embed(texts)
     return [
         Vectors(d.tolist(), Sparse(s.indices.tolist(), s.values.tolist()))
