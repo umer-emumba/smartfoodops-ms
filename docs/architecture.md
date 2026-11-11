@@ -57,7 +57,7 @@ restaurant-service ── outbox ── restaurant-worker ──► restaurant-e
 order-service ─────── outbox ── order-worker ───────► order-events ──────┤ (OrderDelivered)
                                                                          ▼
                       ai-service indexer (consumer group ai-indexer)
-                      documents.py → embedding.py (bge-small + BM25) → store.py
+                      documents.py → embedding.py (bge-base + BM25) → store.py
                                                                          ▼
                                                                       Qdrant
                                                                          ▲
@@ -65,11 +65,11 @@ clients ── api-gateway ── /v1/ai/search, /v1/ai/search/history ── re
                                     (hybrid query, filters, RRF)
 ```
 
-- **Collections** (each with a dense `dense` vector — bge-small-en-v1.5, 384-d, cosine — and
+- **Collections** (each with a dense `dense` vector — bge-base-en-v1.5, 768-d, cosine (chosen by eval, B4-D18) — and
   a sparse `bm25` vector with Qdrant-side IDF): `menu_items`, `restaurants`, `reviews`
   (one point per ~220-word chunk), `order_history` (one point per delivered order plus one
   rolling summary per customer). Names carry the model and document revision
-  (`menu_items__bge_small_en_v1_5_r1`), so a model change builds a new index beside the
+  (`menu_items__bge_base_en_v1_5_r1`), so a model change builds a new index beside the
   live one.
 - **Indexing** is event-driven: every catalog write publishes a full snapshot with a
   per-restaurant `source_version`; the indexer writes a point only if it's newer (one

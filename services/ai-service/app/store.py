@@ -84,7 +84,7 @@ _INDEXES: dict[str, dict[str, m.PayloadSchemaType]] = {
 
 
 def name(kind: str) -> str:
-    """`menu_items__bge_small_en_v1_5_r1`."""
+    """`menu_items__bge_base_en_v1_5_r1`."""
     return f"{kind}__{settings.index_suffix}"
 
 

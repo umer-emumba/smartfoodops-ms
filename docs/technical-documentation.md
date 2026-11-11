@@ -702,7 +702,7 @@ city, address and description; an order embeds the restaurant, date, lines and t
 
 Only reviews are chunked: ~220 words (≈300 tokens) with a 40-word overlap, so a sentence
 cut at a boundary is whole in one chunk; each chunk is prefixed *"Review of X, 4/5:"*.
-Counting words, not tokens, keeps the chunker free of the tokenizer — bge-small's window
+Counting words, not tokens, keeps the chunker free of the tokenizer — bge-base's window
 is 512 tokens, so the approximation has room. 7 of the 205 demo reviews are long enough
 to split (212 review points).
 
@@ -711,18 +711,18 @@ month"* finds the order) plus one rolling summary per customer — favourite cui
 most-ordered dishes by quantity, usual restaurants, average spend — rebuilt from their
 order points on each new order; it's the profile Week 5's recommendations start from.
 
-### Embeddings: local bge-small + BM25, hybrid
+### Embeddings: local bge-base + BM25, hybrid
 
 | Option | Why not (here) |
 |---|---|
 | Hosted embeddings (OpenAI, Voyage) | a key, a per-call cost and a network hop on every search and every catalog edit; the catalog would leave the system |
-| Larger local model (bge-base/large, e5) | 3–10× slower on CPU for a catalog of ~350 short documents; bge-small-en-v1.5 is 67 MB quantized ONNX and embeds a query in ~10 ms (median) |
+| Smaller or larger local model | measured, not assumed (B4-D18, [model comparison](#search-retrieval-quality)): bge-small was 0.06 lower on the held-out queries; embeddinggemma-300m was within noise of bge-base at 3× the memory. bge-base embeds a query in ~29 ms on the laptop CPU |
 | Dense only | misses exact names: "haleem", "nihari", "bun kebab" are rare words a small model blurs; BM25 finds them |
 | BM25 only | misses meaning: "light vegetarian lunch" matches salads and daal that never say "light lunch" |
 
 Both run in-process through fastembed (ONNX, CPU), off the event loop in one worker
 thread, and the models are baked into the image at build time — a container never
-downloads at start-up. Cost: the ai-service image is ~814 MB (ONNX Runtime and numpy),
+downloads at start-up. Cost: the ai-service image is 1.1 GB with bge-base (~814 MB with bge-small; ONNX Runtime and numpy),
 and embedding shares the API's CPU (search p95 rose to ~320 ms while a reindex ran in
 the same container).
 
@@ -797,12 +797,16 @@ doesn't average out. Identical across repeated runs:
 | negation ("not spicy", "without nuts") | 4 | 0.050 | 0.319 |
 | **overall** | 106 | **0.748** | **0.843** |
 
+Those are bge-small, the model at the time. After the switch to bge-base (B4-D18, below)
+the live index scores **0.792 / 0.889** overall (dev 0.912 / 0.984, test 0.741 / 0.847),
+identical across runs — 0.004 MRR under the comparison run (one query a rank lower).
+
 What fails, and why:
 - **Negation** — embeddings place "chicken that is not spicy" next to spicy chicken;
   "vegetarian but not a salad" returns only salads. Needs query understanding (Week 5
   turns it into a spice or category filter), not a better embedding.
-- **Roman Urdu** — "mirchi wala khana", "sabzi" and "kuch meetha" score 0–0.2: bge-small
-  is English-only and these words aren't in the menu text. Words that *are* in the menu
+- **Roman Urdu** — "mirchi wala khana", "sabzi" and "kuch meetha" score 0–0.2: the BGE
+  models are English-only and these words aren't in the menu text. Words that *are* in the menu
   ("daal chawal", "nashta", "karahi") work through BM25.
 - **Typos of rare words** — "tirmisu" finds nothing (BM25 needs the exact word, and the
   dense model splits it into unrelated pieces); "biryni" still finds two biryanis.
@@ -820,7 +824,7 @@ kids who don't like spice"; "sasta khana" counts dishes up to PKR 450 instead of
 range "cheap street snack" already used); Batata Harra and Chicken Chatni Roll to
 "chatpata". Test recall@5 moved 0.659 → 0.681.
 
-`check.sh --with-ai` now fails under recall@5 0.70 / MRR 0.79 over all 106.
+`check.sh --with-ai` fails under recall@5 0.74 / MRR 0.84 over all 106 (raised from 0.70 / 0.79 with the switch to bge-base).
 
 **Embedding models compared (B4-D18, 2026-11-11).** `scripts/compare_models.sh` builds a
 fresh index per model (revision 900, beside the live one, deleted afterwards) from the

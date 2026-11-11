@@ -28,7 +28,7 @@ SPICE = {0: "not spicy", 1: "mildly spicy", 2: "spicy", 3: "very spicy"}
 # Review chunking: about 300 tokens a chunk with ~50 tokens shared between
 # neighbours, so a sentence cut at a boundary is still whole in one of them.
 # Counted in words (≈0.75 words a token for English) — exact token counts
-# aren't needed to stay well inside bge-small's 512-token window.
+# aren't needed to stay well inside bge-base's 512-token window.
 CHUNK_WORDS = 220
 OVERLAP_WORDS = 40
 

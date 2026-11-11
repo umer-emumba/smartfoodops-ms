@@ -1,4 +1,4 @@
-"""Text → vectors (docs/week4-plan.md B4-D3): a dense bge-small vector for
+"""Text → vectors (docs/week4-plan.md B4-D3, B4-D18): a dense bge-base vector for
 meaning and a sparse BM25 vector for exact words (dish names), both from
 fastembed's local ONNX models — no API key, no per-call cost.
 

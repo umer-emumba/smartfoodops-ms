@@ -38,12 +38,12 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures"
 TOP_K = 5
 MRR_DEPTH = 10
 # The bar `--check` (scripts/check.sh --with-ai) holds the index to, over all
-# 106 queries: the measured baseline (recall@5 0.748, MRR 0.843 on 2026-11-11,
-# identical across runs) less ~0.05, so a regression of a few queries fails
-# but noise doesn't. The test split is deliberately hard (Roman Urdu,
-# negation, typos), so the bar is lower than the old 32-query one.
-MIN_RECALL = 0.70
-MIN_MRR = 0.79
+# 106 queries: the measured baseline with bge-base (recall@5 0.792, MRR 0.889
+# on 2026-11-11, identical across runs; B4-D18) less ~0.05, so a regression of
+# a few queries fails but noise doesn't. The test split is deliberately hard
+# (Roman Urdu, negation, typos), so the bar is lower than the old 32-query one.
+MIN_RECALL = 0.74
+MIN_MRR = 0.84
 
 
 class _WaitOutRateLimit(httpx.HTTPTransport):

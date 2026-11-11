@@ -13,9 +13,10 @@ class Settings(BaseServiceSettings, KafkaConsumerSettings):
 
     # Embeddings (B4-D3): fastembed, local ONNX models. The image downloads
     # them at build time into this directory (Dockerfile); empty means
-    # fastembed's default cache, for running outside Docker.
-    dense_model: str = "BAAI/bge-small-en-v1.5"
-    dense_dim: int = 384
+    # fastembed's default cache, for running outside Docker. bge-base won the
+    # model comparison (B4-D18, scripts/compare_models.sh) over bge-small.
+    dense_model: str = "BAAI/bge-base-en-v1.5"
+    dense_dim: int = 768
     # BGE's recommended instruction for short search queries (not for the
     # documents). Empty turns it off — step 5's retrieval eval compares both.
     dense_query_prefix: str = "Represent this sentence for searching relevant passages: "
@@ -50,7 +51,7 @@ class Settings(BaseServiceSettings, KafkaConsumerSettings):
 
     @property
     def index_suffix(self) -> str:
-        """`bge_small_en_v1_5_r1`: the dense model and document revision."""
+        """`bge_base_en_v1_5_r1`: the dense model and document revision."""
         model = re.sub(r"[^a-z0-9]+", "_", self.dense_model.rsplit("/", 1)[-1].lower())
         return f"{model}_r{self.index_revision}"
 

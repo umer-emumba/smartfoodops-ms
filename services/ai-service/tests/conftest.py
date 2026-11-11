@@ -10,6 +10,7 @@ from collections.abc import AsyncIterator, Sequence
 
 import pytest
 import pytest_asyncio
+from app.config import settings
 from app.embedding import Sparse, Vectors
 
 QDRANT_URL = os.environ.get("AI_TEST_QDRANT_URL", "http://localhost:6333")
@@ -24,7 +25,7 @@ class FakeEmbedder:
     @staticmethod
     def _vectors(text: str) -> Vectors:
         digest = hashlib.sha256(text.encode()).digest()
-        dense = [((digest[i % 32] + i) % 17) / 17 + 0.01 for i in range(384)]
+        dense = [((digest[i % 32] + i) % 17) / 17 + 0.01 for i in range(settings.dense_dim)]
         words = sorted({hash(w) % 10_000 for w in text.lower().split()})
         return Vectors(dense, Sparse(words, [1.0] * len(words)))
 

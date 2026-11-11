@@ -168,10 +168,10 @@ reviews and order history searchable by meaning; Week 5's assistant answers on t
 | Req | Where it lives | Status |
 |---|---|---|
 | FR-B1 | `restaurant-service` migration 0006, `POST/GET restaurants/{id}/reviews` (delivered order only, checked with order-service; one per order; atomic rating aggregate); `scripts/fixtures/catalog.json` (10 restaurants, 124 items, 200 reviews) | ✅ |
-| FR-B2 | `ai-service` `documents.py` (context-prefixed documents, review chunking), `embedding.py` (bge-small + BM25, baked into the image), `indexer.py` on `restaurant-events` + `OrderDelivered` | ✅ |
+| FR-B2 | `ai-service` `documents.py` (context-prefixed documents, review chunking), `embedding.py` (bge-base + BM25, baked into the image; model chosen by `scripts/compare_models.sh`), `indexer.py` on `restaurant-events` + `OrderDelivered` | ✅ |
 | FR-B3 | `python -m app.reindex` from `/internal/catalog/export` and `/internal/orders/delivered`; 124 items, 10 restaurants, 212 review chunks, 258 orders + 41 customer summaries | ✅ |
 | FR-B4 | `GET /v1/ai/search?kind=item\|restaurant\|review\|cuisine`, `GET /v1/ai/search/history` | ✅ |
 | FR-B5 | `retrieve(query, filters)` (`app/retrieval.py`): hybrid dense + BM25, RRF, geo/price/dietary/restaurant filters | ✅ |
 | NFR-B1 | outbox → `restaurant-events` with per-restaurant `source_version`; conditional upserts, tombstones, outage retry (no DLQ); edit → searchable in 0.4–1.7 s; drills: Qdrant down, reindex while serving | ✅ |
-| NFR-B2 | `scripts/eval_retrieval.py`, 106 golden queries (32 dev + 74 held-out test, tagged): recall@5 0.748, MRR 0.843 (dev 0.902 / 0.953); `check.sh --with-ai`; `smoke_test.py --ai` | ✅ |
+| NFR-B2 | `scripts/eval_retrieval.py`, 106 golden queries (32 dev + 74 held-out test, tagged): recall@5 0.792, MRR 0.889 with bge-base (test 0.741 / 0.847; bge-small was 0.748 / 0.843); `check.sh --with-ai`; `smoke_test.py --ai` | ✅ |
 | NFR-B3 | visibility filters inside `retrieve()`; history filtered by the caller's ID, customer-only; review events carry no customer ID | ✅ |

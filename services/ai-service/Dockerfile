@@ -7,7 +7,7 @@ WORKDIR /workspace
 COPY pyproject.toml uv.lock /workspace/
 COPY libs /workspace/libs
 # Dependencies and the embedding models first, the service's code after:
-# a code change then rebuilds only the last layers, not the ~70 MB download.
+# a code change then rebuilds only the last layers, not the ~210 MB download.
 COPY services/ai-service/pyproject.toml /workspace/services/ai-service/pyproject.toml
 
 WORKDIR /workspace/services/ai-service
@@ -18,7 +18,7 @@ RUN uv sync --frozen --no-dev --no-cache --no-install-project
 # Readable by all: the download runs as root, the service as `app`.
 # DENSE_MODEL/SPARSE_MODEL are also what app.config reads at runtime, so the
 # models in the image and the ones the service loads can't drift apart.
-ARG DENSE_MODEL=BAAI/bge-small-en-v1.5
+ARG DENSE_MODEL=BAAI/bge-base-en-v1.5
 ARG SPARSE_MODEL=Qdrant/bm25
 ENV DENSE_MODEL=${DENSE_MODEL} \
     SPARSE_MODEL=${SPARSE_MODEL} \
