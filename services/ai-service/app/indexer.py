@@ -28,6 +28,7 @@ from sfo_events.payloads import (
 )
 
 from app import documents, metrics
+from app.config import settings
 from app.documents import DeliveredOrder
 from app.store import CATALOG, MENU_ITEMS, ORDER_HISTORY, RESTAURANTS, REVIEWS, Store
 
@@ -149,8 +150,8 @@ class Indexer:
                 await self.customer_summary(customer_id)
 
     async def customer_summary(self, customer_id: str) -> None:
-        orders = await self.store.customer_orders(customer_id)
+        orders, total = await self.store.customer_orders(customer_id, settings.summary_max_orders)
         if orders:
             await self.store.upsert(
-                ORDER_HISTORY, [documents.customer_summary(customer_id, orders)]
+                ORDER_HISTORY, [documents.customer_summary(customer_id, orders, total)]
             )

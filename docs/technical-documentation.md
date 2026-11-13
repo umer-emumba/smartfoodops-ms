@@ -751,7 +751,10 @@ events and rebuilt by a backfill. What makes that safe:
   (`update_filter: source_version < v`), atomically in Qdrant, so a redelivered or older
   event can't overwrite a newer document — and no `processed_events` table is needed.
   Status and rating changes set fields on every point of the restaurant older than the
-  event, without re-embedding.
+  event, without re-embedding. A newer document whose text is unchanged (a stock flip,
+  an availability toggle) only has its payload overwritten, guarded on the version and
+  the same stored text; if another write changed the text in between, the guard misses
+  and the document is embedded after all (B4-D19).
 - **Full snapshots.** Events carry the whole entity, including what the document needs
   from its restaurant and category (name, cuisine, city, location), so the indexer never
   calls back (W3-D8). A rename of a restaurant or category re-sends its items.
@@ -765,7 +768,16 @@ events and rebuilt by a backfill. What makes that safe:
 - **Outages wait.** A Qdrant failure (unreachable or 5xx) is a `ConnectionError` to the
   consumer: rewind and retry with backoff up to 30 s, never the DLQ.
 - **Stock without noise.** Stock changes on every order; the saga writes an event only
-  when an item's `in_stock` flips, not on every sale.
+  when an item's `in_stock` flips, not on every sale — and that event costs a payload
+  write, not an embedding.
+- **Bounded summary.** The customer summary is rebuilt on each delivered order from the
+  latest 50 orders (`SUMMARY_MAX_ORDERS`; the total count comes from Qdrant), so its
+  cost doesn't grow with the history.
+
+Scaling path (not built, B4-D19): events are applied one at a time, so a rename that
+re-sends 500 items makes 500 single-text embed calls — micro-batching in the consumer is
+the next step; then the indexer as its own worker (embedding shares the API's CPU today);
+at real scale, GPU or hosted embeddings and more `restaurant-events` partitions.
 
 Freshness: an edit through the API is searchable in **0.4–1.7 s** (relay tick + consume +
 embed); the `IndexLagging` alert fires above 30 s.

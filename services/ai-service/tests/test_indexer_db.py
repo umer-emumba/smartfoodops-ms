@@ -1,6 +1,7 @@
 """The indexer against a real Qdrant (fake embeddings): versions decide what
-lands, deletes are tombstones, status and rating changes reach every point,
-orders need their restaurant, and outages are retried, not dead-lettered."""
+lands, unchanged text isn't re-embedded, deletes are tombstones, status and
+rating changes reach every point, orders need their restaurant, the customer
+summary is capped, and outages are retried, not dead-lettered."""
 
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -8,6 +9,7 @@ from typing import Any
 
 import pytest
 from app import documents
+from app.config import settings
 from app.documents import point_id
 from app.indexer import Indexer, QdrantUnavailable
 from app.store import MENU_ITEMS, ORDER_HISTORY, RESTAURANTS, REVIEWS, Store
@@ -85,8 +87,8 @@ def item(version: int, **over: Any) -> DomainEvent:
     )
 
 
-def delivered(order_id: str, restaurant_id: str = RID) -> DomainEvent:
-    return _event(
+def delivered(order_id: str, restaurant_id: str = RID, at: datetime = AT) -> DomainEvent:
+    event = _event(
         EventType.ORDER_DELIVERED,
         {
             "order_id": order_id,
@@ -107,6 +109,7 @@ def delivered(order_id: str, restaurant_id: str = RID) -> DomainEvent:
             ],
         },
     )
+    return event.model_copy(update={"occurred_at": at})
 
 
 async def _payload(store: Store, kind: str, key: str, entity: str) -> dict | None:
@@ -126,6 +129,39 @@ async def test_only_newer_versions_land(store: Store, embedder: FakeEmbedder) ->
     await indexer.apply(item(6, price=Decimal("720")))
     stored = await _payload(store, MENU_ITEMS, "m-1", "menu_item")
     assert stored is not None and stored["price"] == 720.0
+
+
+async def test_same_text_keeps_its_vectors(store: Store, embedder: FakeEmbedder) -> None:
+    indexer = Indexer(store)
+    await indexer.apply(item(1))
+    await indexer.apply(item(2, in_stock=False))  # sold out: not in the text
+    await indexer.apply(item(3, in_stock=False, is_available=False))
+    stored = await _payload(store, MENU_ITEMS, "m-1", "menu_item")
+    assert stored is not None
+    assert (stored["in_stock"], stored["is_available"], stored["source_version"]) == (
+        False,
+        False,
+        3,
+    )
+    assert len(embedder.embedded) == 1  # payload replaced, vectors kept
+
+    await indexer.apply(item(4, description="Dum-cooked, extra raita."))  # text changed
+    assert len(embedder.embedded) == 2
+    stored = await _payload(store, MENU_ITEMS, "m-1", "menu_item")
+    assert stored is not None and "extra raita" in stored["text"]
+
+
+async def test_a_tombstone_comes_back_embedded(store: Store, embedder: FakeEmbedder) -> None:
+    """Re-created after a delete: the tombstone has no text (and no vectors),
+    so the same text as before must be embedded again, not payload-patched."""
+    indexer = Indexer(store)
+    await indexer.apply(item(1))
+    deleted = {"menu_item_id": "m-1", "restaurant_id": RID, "source_version": 2}
+    await indexer.apply(_event(EventType.MENU_ITEM_DELETED, deleted))
+    await indexer.apply(item(3))
+    assert len(embedder.embedded) == 2
+    stored = await _payload(store, MENU_ITEMS, "m-1", "menu_item")
+    assert stored is not None and stored["deleted"] is False
 
 
 async def test_delete_is_a_tombstone(store: Store) -> None:
@@ -194,6 +230,22 @@ async def test_orders_need_their_restaurant_and_build_a_summary(store: Store) ->
     assert summary["order_count"] == 2
     assert summary["top_dishes"] == ["Chicken Biryani"]
     assert "Chicken Biryani (4)" in summary["text"]
+
+
+async def test_summary_uses_only_the_latest_orders(
+    store: Store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "summary_max_orders", 2)
+    indexer = Indexer(store)
+    await indexer.apply(restaurant(1))
+    for day in (1, 2, 3):
+        await indexer.apply(delivered(f"o-{day}", at=AT.replace(day=day)))
+    summary = await _payload(store, ORDER_HISTORY, "u-1", "customer_summary")
+    assert summary is not None
+    assert (summary["order_count"], summary["profile_orders"]) == (3, 2)
+    assert summary["last_order_at"].startswith("2026-10-03")
+    assert "3 delivered orders" in summary["text"]
+    assert "Chicken Biryani (4)" in summary["text"]  # 2 orders × 2, not 3 × 2
 
 
 async def test_qdrant_outage_is_transient(embedder: FakeEmbedder) -> None:

@@ -213,10 +213,12 @@ def order(o: DeliveredOrder, restaurant_payload: dict[str, Any]) -> Doc:
     )
 
 
-def customer_summary(customer_id: str, orders: list[dict[str, Any]]) -> Doc:
-    """The rolling summary of a customer's history (their order points'
-    payloads): what they order, from where, and how much they spend — the
-    profile Week 5's recommendations start from."""
+def customer_summary(customer_id: str, orders: list[dict[str, Any]], total: int) -> Doc:
+    """The rolling summary of a customer's history: what they order, from
+    where, and how much they spend — the profile Week 5's recommendations
+    start from. Built from their latest orders' payloads (`orders`, capped by
+    settings.summary_max_orders: recent taste, bounded cost); `total` is how
+    many they have in all."""
     orders = sorted(orders, key=lambda o: o["delivered_at"], reverse=True)
     dishes: Counter[str] = Counter()
     for o in orders:
@@ -230,7 +232,7 @@ def customer_summary(customer_id: str, orders: list[dict[str, Any]]) -> Doc:
         return ", ".join(f"{k} ({v})" for k, v in counter.most_common(n)) or "none"
 
     text = (
-        f"Customer order history: {len(orders)} delivered orders, the latest on "
+        f"Customer order history: {total} delivered orders, the latest on "
         f"{orders[0]['delivered_at'][:10]}. Favourite cuisines: {top(cuisines, 3)}. "
         f"Most ordered dishes: {top(dishes, 5)}. Usual restaurants: {top(places, 3)}. "
         f"Average spend PKR {spend:.0f} an order."
@@ -241,7 +243,8 @@ def customer_summary(customer_id: str, orders: list[dict[str, Any]]) -> Doc:
         {
             "doc_type": "customer_summary",
             "customer_id": customer_id,
-            "order_count": len(orders),
+            "order_count": total,
+            "profile_orders": len(orders),
             "last_order_at": orders[0]["delivered_at"],
             "top_cuisines": [k for k, _ in cuisines.most_common(3)],
             "top_dishes": [k for k, _ in dishes.most_common(5)],

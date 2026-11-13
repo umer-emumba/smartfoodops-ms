@@ -22,7 +22,9 @@ INDEX_LAG_SECONDS = Histogram(
 INDEX_WRITES = Counter(
     "ai_index_writes_total",
     "Documents offered to the index, by collection and what happened",
-    ["collection", "result"],  # written | stale (an equal or newer version is stored)
+    # written (embedded) | payload_only (same text: payload replaced, vectors
+    # kept) | stale (an equal or newer version is stored)
+    ["collection", "result"],
 )
 ORDERS_SKIPPED = Counter(
     "ai_orders_skipped_total", "Delivered orders not indexed: their restaurant isn't indexed"

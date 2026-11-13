@@ -131,7 +131,8 @@ eval and drills 6–7.
 | 5 | Metrics + *AI / Retrieval* dashboard + `IndexLagging` alert; retrieval eval (recall@5 0.902, MRR 0.953) and `check.sh --with-ai`; `smoke_test.py --ai`; drills; docs | `53b97fd` |
 | 6 | Golden set grown to 106 tagged queries with a held-out test split (B4-D17): recall@5 0.748, MRR 0.843 overall; dev unchanged at 0.902 / 0.953 | `1a88789` |
 | 7 | Embedding models compared on the eval (B4-D18): `scripts/compare_models.sh`, dev-only `docker-compose.models.yml`, `DENSE_DOCUMENT_PREFIX`; bge-base-en-v1.5 wins (test 0.741 / 0.854 vs bge-small 0.681 / 0.794) | `73809f3` |
-| 8 | Switched to bge-base-en-v1.5 (768-d): live index `*__bge_base_en_v1_5_r1`, eval 0.792 / 0.889 overall, bar raised to 0.74 / 0.84; image 1.1 GB, ai-service ~430 MiB | (this commit) |
+| 8 | Switched to bge-base-en-v1.5 (768-d): live index `*__bge_base_en_v1_5_r1`, eval 0.792 / 0.889 overall, bar raised to 0.74 / 0.84; image 1.1 GB, ai-service ~430 MiB | `756ad1c` |
+| 9 | Cheaper index updates (B4-D19): unchanged text → payload overwrite, no embedding (`ai_index_writes_total{result="payload_only"}`); customer summary from the latest 50 orders (`SUMMARY_MAX_ORDERS`) | (this commit) |
 
 **Week 4 known limits** (documented in technical-documentation.md): ranking has weak spots
 a query parser would fix (a spicy-sounding query isn't a spice filter; no protein data);

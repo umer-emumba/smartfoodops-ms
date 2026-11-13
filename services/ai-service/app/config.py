@@ -41,6 +41,11 @@ class Settings(BaseServiceSettings, KafkaConsumerSettings):
     # the old one by `python -m app.reindex` instead of mixing two formats.
     index_revision: int = 1
 
+    # The customer summary (app/documents.py) is built from this many of the
+    # latest orders: recent taste, and a rebuild that costs the same however
+    # long the history grows.
+    summary_max_orders: int = 50
+
     # Where the backfill reads from (app/reindex.py) — internal endpoints.
     restaurant_service_url: str = "http://restaurant-service:8000"
     order_service_url: str = "http://order-service:8000"
