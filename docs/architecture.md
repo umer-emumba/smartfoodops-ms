@@ -49,8 +49,10 @@ Loki, Grafana Alloy and Grafana — see
 
 ## AI layer: search (Part B, Week 4)
 
-Design record and decisions B4-D1…D15: [week4-plan.md](./week4-plan.md). Reasoning and
-measured results: [technical-documentation.md#search-retrieval-layer](./technical-documentation.md#search-retrieval-layer).
+Design record and decisions B4-D1…D19: [week4-plan.md](./week4-plan.md). Reasoning and
+measured results: [technical-documentation.md#search-retrieval-layer](./technical-documentation.md#search-retrieval-layer). Diagrams (components,
+indexing and search sequences, reindex, Qdrant collections):
+[diagrams.md#search-and-retrieval-part-b-week-4](./diagrams.md#search-and-retrieval-part-b-week-4).
 
 ```
 restaurant-service ── outbox ── restaurant-worker ──► restaurant-events ─┐
