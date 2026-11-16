@@ -134,7 +134,8 @@ eval and drills 6–7.
 | 8 | Switched to bge-base-en-v1.5 (768-d): live index `*__bge_base_en_v1_5_r1`, eval 0.792 / 0.889 overall, bar raised to 0.74 / 0.84; image 1.1 GB, ai-service ~430 MiB | `756ad1c` |
 | 9 | Cheaper index updates (B4-D19): unchanged text → payload overwrite, no embedding (`ai_index_writes_total{result="payload_only"}`); customer summary from the latest 50 orders (`SUMMARY_MAX_ORDERS`) | `f4a8581` |
 | 10 | Week 4 diagrams in `docs/diagrams.md` (components, indexing, search, reindex, Qdrant collections) | `c5507c4` |
-| 11 | Eval gaps closed (B4-D20): 134 golden queries incl. 12 order-history, 10 filtered, 6 not-on-the-menu; filter-violation check (0); bootstrap ranges + `--compare`; latency p50 ~27 ms; recall@5 0.823, MRR 0.904; bar 0.77 / 0.85 | (this commit) |
+| 11 | Eval gaps closed (B4-D20): 134 golden queries incl. 12 order-history, 10 filtered, 6 not-on-the-menu; filter-violation check (0); bootstrap ranges + `--compare`; latency p50 ~27 ms; recall@5 0.823, MRR 0.904; bar 0.77 / 0.85 | `6dd18cf` |
+| 12 | RRF k made explicit (`FUSION_K`, default 2) and measured at 2–60 (B4-D21): no real difference, kept 2 | (this commit) |
 
 **Week 4 known limits** (documented in technical-documentation.md): ranking has weak spots
 a query parser would fix (a spicy-sounding query isn't a spice filter; no protein data);

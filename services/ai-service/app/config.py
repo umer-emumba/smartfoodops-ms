@@ -32,6 +32,10 @@ class Settings(BaseServiceSettings, KafkaConsumerSettings):
     # at most one query; dense 1.2 ties for best and makes the order stable.
     fusion_dense_weight: float = 1.2
     fusion_sparse_weight: float = 1.0
+    # RRF's k: each list gives a result weight / (k + rank). Small k lets one
+    # list's top places dominate; large k (60 in the RRF paper) rewards being
+    # in both lists. 2 is Qdrant's own default.
+    fusion_k: int = 2
     embedding_cache_dir: str = ""
     # ONNX threads per model. Embedding runs off the event loop
     # (app/embedding.py), one batch at a time.

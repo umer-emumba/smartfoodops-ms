@@ -111,7 +111,10 @@ def _prefetch(v: Vectors, query_filter: m.Filter, limit: int) -> list[m.Prefetch
 def _fusion() -> m.RrfQuery:
     """Dense first, sparse second — the order `_prefetch` lists them."""
     return m.RrfQuery(
-        rrf=m.Rrf(weights=[settings.fusion_dense_weight, settings.fusion_sparse_weight])
+        rrf=m.Rrf(
+            k=settings.fusion_k,
+            weights=[settings.fusion_dense_weight, settings.fusion_sparse_weight],
+        )
     )
 
 

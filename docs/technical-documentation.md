@@ -733,6 +733,22 @@ two score scales never need calibrating against each other. With equal weights,
 eval showed results flipping between runs — so the dense list weighs 1.2: same quality,
 stable order.
 
+**RRF k (B4-D21, 2026-11-16).** Each list gives a result `weight / (k + rank)`; small k
+lets one list's top places dominate, large k rewards appearing in both. k was Qdrant's
+default (2), unstated; it is now `FUSION_K` (default 2). Measured on the 128 scored eval
+queries:
+
+| k | recall@5 | MRR | vs k = 2 (paired bootstrap, 95%) |
+|---|---|---|---|
+| **2** | 0.823 | 0.904 | — |
+| 5 | 0.828 | 0.909 | |
+| 10 | 0.831 | 0.914 | recall +0.008 (−0.003…+0.020), MRR +0.010 (−0.009…+0.032) |
+| 30 | 0.831 | 0.920 | recall +0.008 (−0.005…+0.020), MRR +0.016 (−0.006…+0.041) |
+| 60 | 0.828 | 0.916 | recall +0.005 (−0.008…+0.019), MRR +0.012 (−0.008…+0.036) |
+
+Every range includes zero and wins balance losses (k = 30: 8 queries better, 5 worse on
+recall), so k stays 2. Worth re-testing after a reranker or a larger catalog.
+
 **Filters run inside the query**, in both prefetches (geo radius, price, dietary tags —
 all must apply — restaurant), never after it, so a page is never cut short. Visibility is
 applied in `retrieve()` itself, not by callers: active restaurants, available, in stock,
