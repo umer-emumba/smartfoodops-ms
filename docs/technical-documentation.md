@@ -836,7 +836,38 @@ kids who don't like spice"; "sasta khana" counts dishes up to PKR 450 instead of
 range "cheap street snack" already used); Batata Harra and Chicken Chatni Roll to
 "chatpata". Test recall@5 moved 0.659 → 0.681.
 
-`check.sh --with-ai` fails under recall@5 0.74 / MRR 0.84 over all 106 (raised from 0.70 / 0.79 with the switch to bge-base).
+`check.sh --with-ai` failed under recall@5 0.74 / MRR 0.84 over those 106 (raised from 0.70 / 0.79 with the switch to bge-base), until B4-D20 below.
+
+**Eval gaps closed (B4-D20, 2026-11-16).** 28 more test queries, and three new checks:
+
+| Added | Queries | Result (bge-base) |
+|---|---|---|
+| Order history (`kind: order`): the demo customer's 9 seeded orders through `/v1/ai/search/history`, logged in | 12 | recall@5 0.983, MRR 1.000 |
+| Filtered searches (price, dietary, radius, combined; tag `filter`) | 10 | recall@5 0.980, MRR 0.950 |
+| Not on the menu (`unanswerable`: sushi, beef burger, ramen…) | 6 | printed, not scored |
+
+- **Filter violations.** Every hit of every query is checked against its filters — price,
+  all dietary tags, inside the radius (haversine, 1% slack), available and in stock, active
+  restaurant — and every order-history hit must be the caller's own. 0 found; any one fails
+  `--check`, since it's a correctness bug whatever the ranking.
+- **Ranges.** The overall scores carry a 95% bootstrap interval (2,000 resamples, fixed
+  seed): **recall@5 0.823 (0.769–0.874), MRR 0.904 (0.860–0.944)** over 128 scored queries.
+  `--compare FILE` runs a paired bootstrap of the per-query differences against an earlier
+  `--json` run and says better / worse / no real difference. Two runs back to back were
+  identical (Δ 0.000).
+- **Latency** through the gateway: p50 ~27 ms, p95 ~55–60 ms per search.
+- **No "no match".** For dishes we don't have, search still returns its best guess with a
+  confident-looking score — "sushi" → Sweet Lassi, Cucumber Raita, Pad Thai; "beef burger"
+  → Beef Chilli Dry, Seekh Kebab. RRF scores are rank-based, so the first hit always looks
+  strong. Saying "we don't have that" needs a confidence signal (e.g. a minimum dense
+  similarity) or the Week 5 assistant reading the hits; until then these are watched, not
+  scored.
+- The dev split now reads 0.906 / 0.984 (0.912 on 2026-11-11): one hit of one query, after a
+  stack restart with no index or code change — the run-to-run shift noted under B4-D16, and
+  well inside the range.
+
+`check.sh --with-ai` fails under recall@5 0.77 / MRR 0.85 over the 128 scored queries
+(baseline less ~0.05, about the bootstrap range's half-width) or on any filter violation.
 
 **Embedding models compared (B4-D18, 2026-11-11).** `scripts/compare_models.sh` builds a
 fresh index per model (revision 900, beside the live one, deleted afterwards) from the

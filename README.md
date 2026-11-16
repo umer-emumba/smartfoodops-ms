@@ -378,11 +378,14 @@ curl -G localhost:8080/v1/ai/search/history -H "Authorization: Bearer $CUSTOMER_
 `max_price`, `dietary` (repeatable, all must apply) and `restaurant_id`. Search is public
 like the menus; `/search/history` is the logged-in customer's own orders.
 
-Retrieval quality is measured, not eyeballed: `scripts/eval_retrieval.py` runs 106 golden
-queries (`scripts/fixtures/retrieval_golden.json`) and reports recall@5 and MRR per query,
-kind, tag (exact, vague, Roman Urdu, typo, negation…) and split (`-v` shows every top 5;
-`--split test` runs only the held-out queries; `--json FILE` saves the scores). `scripts/check.sh --with-ai` runs it with a minimum
-bar. `scripts/compare_models.sh [model…]` rebuilds a throwaway index per embedding model and
+Retrieval quality is measured, not eyeballed: `scripts/eval_retrieval.py` runs 134 golden
+queries (`scripts/fixtures/retrieval_golden.json`) — catalog search, the demo customer's
+order history, filtered searches, and dishes we don't have — and reports recall@5 and MRR
+(with a 95% bootstrap range) per query, kind, tag (exact, vague, Roman Urdu, typo,
+negation, filter…) and split, plus p50/p95 latency and any hit that breaks its query's
+filters (`-v` shows every top 5; `--split test` runs only the held-out queries; `--json FILE`
+saves the scores; `--compare FILE` says whether a change is really better or just noise).
+`scripts/check.sh --with-ai` runs it with a minimum bar and zero filter violations. `scripts/compare_models.sh [model…]` rebuilds a throwaway index per embedding model and
 runs the eval on each (how the model was chosen). Results and how the settings were chosen:
 [technical-documentation.md](docs/technical-documentation.md#search-retrieval-quality).
 

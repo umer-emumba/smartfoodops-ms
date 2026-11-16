@@ -173,5 +173,5 @@ reviews and order history searchable by meaning; Week 5's assistant answers on t
 | FR-B4 | `GET /v1/ai/search?kind=item\|restaurant\|review\|cuisine`, `GET /v1/ai/search/history` | ✅ |
 | FR-B5 | `retrieve(query, filters)` (`app/retrieval.py`): hybrid dense + BM25, RRF, geo/price/dietary/restaurant filters | ✅ |
 | NFR-B1 | outbox → `restaurant-events` with per-restaurant `source_version`; conditional upserts, tombstones, outage retry (no DLQ); edit → searchable in 0.4–1.7 s; drills: Qdrant down, reindex while serving | ✅ |
-| NFR-B2 | `scripts/eval_retrieval.py`, 106 golden queries (32 dev + 74 held-out test, tagged): recall@5 0.792, MRR 0.889 with bge-base (test 0.741 / 0.847; bge-small was 0.748 / 0.843); `check.sh --with-ai`; `smoke_test.py --ai` | ✅ |
+| NFR-B2 | `scripts/eval_retrieval.py`, 134 golden queries (32 dev + 102 held-out test, tagged; incl. order history, filtered and not-on-the-menu queries): recall@5 0.823 (0.769–0.874), MRR 0.904 with bge-base over the 128 scored; 0 filter violations; p50 ~27 ms; `check.sh --with-ai`; `smoke_test.py --ai` | ✅ |
 | NFR-B3 | visibility filters inside `retrieve()`; history filtered by the caller's ID, customer-only; review events carry no customer ID | ✅ |
