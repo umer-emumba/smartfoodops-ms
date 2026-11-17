@@ -16,6 +16,9 @@ dependencies = [
     "sfo-auth",
     "sfo-events",
     "sfo-observability",
+    "langchain>=1.0",
+    "langchain-anthropic>=1.0",
+    "langchain-openai>=1.0",
 ]
 
 [dependency-groups]

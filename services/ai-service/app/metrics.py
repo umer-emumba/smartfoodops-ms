@@ -38,3 +38,30 @@ QUERY_SECONDS = Histogram(
 SEARCHES = Counter(
     "ai_searches_total", "Searches served, by kind and whether anything matched", ["kind", "result"]
 )
+
+# --- LLM calls (docs/week5-plan.md B5-D1, B5-D10), recorded for every call
+# by app/llm.py's callback, whichever provider and step made it. ---
+
+LLM_CALLS = Counter(
+    "ai_llm_calls_total",
+    "LLM calls by provider, role, model and outcome",
+    # result: ok | rate_limited | unavailable | auth | bad_request | bad_output
+    ["provider", "role", "model", "result"],
+)
+LLM_SECONDS = Histogram(
+    "ai_llm_call_seconds",
+    "Wall time of one LLM call (whole response, streamed or not)",
+    ["provider", "role", "model"],
+    buckets=(0.25, 0.5, 1, 2, 3, 5, 8, 13, 20, 30, 60),
+)
+LLM_TOKENS = Counter(
+    "ai_llm_tokens_total",
+    "Tokens billed by the provider",
+    # input (uncached) | output | cache_read | cache_write
+    ["provider", "model", "kind"],
+)
+LLM_COST_USD = Counter(
+    "ai_llm_cost_usd_total",
+    "Estimated spend from the price table in app/llm.py (0 for unpriced models)",
+    ["provider", "model"],
+)

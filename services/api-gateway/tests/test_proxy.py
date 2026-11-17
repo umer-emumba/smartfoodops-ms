@@ -94,7 +94,8 @@ async def test_full_backend_pool_is_503_not_504(gateway) -> None:
 
 def test_each_backend_has_its_own_connection_pool() -> None:
     # The bulkhead: one service filling its pool must not starve the others.
-    assert set(proxy.clients) == set(settings.service_urls)
+    # Plus extra pools inside one service (ai-service's streamed answers).
+    assert set(proxy.clients) == set(settings.service_urls) | {"ai-service-stream"}
     assert len({id(c) for c in proxy.clients.values()}) == len(proxy.clients)
 
 

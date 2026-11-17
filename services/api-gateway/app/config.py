@@ -33,6 +33,8 @@ class Settings(BaseSettings):
 
     rate_limit_default_per_minute: int = 120
     rate_limit_auth_per_minute: int = 10
+    # Per user, for the routes that call an LLM (app/proxy.py, B5-D10).
+    rate_limit_ai_per_minute: int = 20
 
     # How long a request may wait for a free connection in a backend's pool
     # before the gateway gives up with 503 — short on purpose, see app/proxy.py.

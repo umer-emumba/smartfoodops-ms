@@ -49,7 +49,16 @@ _UPSTREAM_POLICIES: dict[str, _UpstreamPolicy] = {
     # timeout is 3 missed heartbeats (tracking-service sends one every 15s):
     # a dead upstream ends the stream and the client reconnects.
     "tracking-service": _UpstreamPolicy(max_connections=1000, timeout_seconds=45.0),
+    # AI answers streamed as SSE (docs/week5-plan.md step 0/3): ai-service's
+    # streaming routes, in a pool of their own so a burst of slow LLM answers
+    # can't take connections from search or other ai-service calls. Same
+    # read timeout rule as tracking: ai-service sends a heartbeat every 15s
+    # while the model is thinking.
+    "ai-service-stream": _UpstreamPolicy(max_connections=200, timeout_seconds=45.0),
 }
+
+# Pools that aren't a service of their own: which service they reach.
+_POOL_SERVICE: dict[str, str] = {"ai-service-stream": "ai-service"}
 
 
 def _make_client(policy: _UpstreamPolicy) -> httpx.AsyncClient:
@@ -73,7 +82,7 @@ def _make_client(policy: _UpstreamPolicy) -> httpx.AsyncClient:
 # Keyed by service name (settings.service_urls). Closed on shutdown by
 # app.main's lifespan.
 clients: dict[str, httpx.AsyncClient] = {
-    name: _make_client(_UPSTREAM_POLICIES[name]) for name in settings.service_urls
+    name: _make_client(policy) for name, policy in _UPSTREAM_POLICIES.items()
 }
 
 # Hop-by-hop headers (RFC 9110 §7.6.1) describe one connection, not the
@@ -176,44 +185,47 @@ _default_rate_limit = Depends(
 )
 
 
-# Registered before the generic catch-all below, which would otherwise
-# match /v1/tracking/... and buffer the never-ending response.
-@router.get("/v1/tracking/{rest_of_path:path}", dependencies=[_default_rate_limit])
-async def stream_tracking(rest_of_path: str, request: Request) -> Response:
-    """Streaming proxy for tracking-service's Server-Sent Events
-    (docs/week2-plan.md step 7): bytes are relayed as they arrive, nothing
-    is buffered (every middleware here is pure ASGI). Auth happens once, when
-    the stream opens. Errors from tracking-service (403/404 JSON) pass
-    through as normal responses. When the client disconnects, the upstream
-    stream is closed with it."""
-    if ".." in rest_of_path.split("/"):
-        raise NotFoundError("Not found")
-    await authenticate(request, public=False)
+_ai_rate_limit = Depends(
+    RateLimiter(times=settings.rate_limit_ai_per_minute, seconds=60, bucket="ai")
+)
 
-    service = "tracking-service"
-    client = clients[service]
+
+async def _stream_upstream(request: Request, *, pool: str, path: str, label: str) -> Response:
+    """Streaming proxy for a backend's Server-Sent Events: bytes are relayed
+    as they arrive, nothing is buffered (every middleware here is pure ASGI).
+    Errors from the backend (403/404 JSON) pass through as normal responses.
+    When the client disconnects, the upstream stream is closed with it — for
+    the assistant, that's what cancels the LLM call (week5-plan step 3).
+
+    Used by tracking-service's live feeds (week2-plan step 7) and
+    ai-service's streamed answers; auth is checked by the route, once, when
+    the stream opens."""
+    client = clients[pool]
+    service = _POOL_SERVICE.get(pool, pool)
     forward_headers = _filter_headers(request.headers, _EXCLUDED_REQUEST_HEADERS)
     forward_headers[CORRELATION_ID_HEADER] = get_correlation_id()
+    body = await _read_body_capped(request) if request.method != "GET" else None
     upstream_request = client.build_request(
-        "GET",
-        f"{settings.service_urls[service]}/v1/tracking/{rest_of_path}",
+        request.method,
+        f"{settings.service_urls[service]}{path}",
         params=request.query_params,
         headers=forward_headers,
+        content=body,
     )
     try:
         upstream = await client.send(upstream_request, stream=True)
     except httpx.PoolTimeout as exc:
         raise ServiceUnavailableError("Too many live streams, please retry") from exc
     except httpx.TimeoutException as exc:
-        raise GatewayTimeoutError("'tracking' service timed out") from exc
+        raise GatewayTimeoutError(f"'{label}' service timed out") from exc
     except httpx.RequestError as exc:
-        raise BadGatewayError("'tracking' service is unavailable") from exc
+        raise BadGatewayError(f"'{label}' service is unavailable") from exc
 
     response_headers = _filter_headers(upstream.headers, _EXCLUDED_RESPONSE_HEADERS)
     if not upstream.headers.get("content-type", "").startswith("text/event-stream"):
-        body = await upstream.aread()
+        content = await upstream.aread()
         await upstream.aclose()
-        return Response(content=body, status_code=upstream.status_code, headers=response_headers)
+        return Response(content=content, status_code=upstream.status_code, headers=response_headers)
 
     async def relay() -> AsyncIterator[bytes]:
         try:
@@ -222,12 +234,43 @@ async def stream_tracking(rest_of_path: str, request: Request) -> Response:
                 yield chunk
         except httpx.HTTPError:
             # Upstream died or went silent past the read timeout: end the
-            # stream; EventSource reconnects and gets a fresh snapshot.
+            # stream; the client reconnects (tracking) or retries (AI).
             pass
         finally:
             await upstream.aclose()
 
     return StreamingResponse(relay(), status_code=upstream.status_code, headers=response_headers)
+
+
+# The streaming routes are registered before the generic catch-all below,
+# which would otherwise match them and buffer the response.
+@router.get("/v1/tracking/{rest_of_path:path}", dependencies=[_default_rate_limit])
+async def stream_tracking(rest_of_path: str, request: Request) -> Response:
+    """tracking-service's live feeds (docs/week2-plan.md step 7)."""
+    if ".." in rest_of_path.split("/"):
+        raise NotFoundError("Not found")
+    await authenticate(request, public=False)
+    return await _stream_upstream(
+        request, pool="tracking-service", path=f"/v1/tracking/{rest_of_path}", label="tracking"
+    )
+
+
+# The assistant's streamed answers (docs/week5-plan.md steps 2–4). A bucket
+# of their own (B5-D10): each one costs LLM calls, so they're limited far
+# more tightly than ordinary API calls, and spending it doesn't touch the
+# user's default budget for the rest of the app.
+@router.post("/v1/ai/chat", dependencies=[_ai_rate_limit])
+async def stream_ai_chat(request: Request) -> Response:
+    await authenticate(request, public=False)
+    return await _stream_upstream(request, pool="ai-service-stream", path="/v1/ai/chat", label="ai")
+
+
+@router.get("/v1/ai/orders/{order_id}/explain", dependencies=[_ai_rate_limit])
+async def stream_ai_order_explain(order_id: str, request: Request) -> Response:
+    await authenticate(request, public=False)
+    return await _stream_upstream(
+        request, pool="ai-service-stream", path=f"/v1/ai/orders/{order_id}/explain", label="ai"
+    )
 
 
 # Two routes, one handler: "/v1/{resource}/{rest_of_path:path}" requires at

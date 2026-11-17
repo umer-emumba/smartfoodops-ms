@@ -1,4 +1,5 @@
 import re
+from typing import Literal
 
 from pydantic import SecretStr
 from sfo_common import BaseServiceSettings
@@ -54,9 +55,34 @@ class Settings(BaseServiceSettings, KafkaConsumerSettings):
     restaurant_service_url: str = "http://restaurant-service:8000"
     order_service_url: str = "http://order-service:8000"
 
-    # Claude (Week 5). Empty until the user adds a key to .env; SecretStr keeps
-    # it out of logs and reprs.
-    anthropic_api_key: SecretStr = SecretStr("")
+    # The LLM (docs/week5-plan.md B5-D1). Only app/llm.py reads these. Which
+    # provider, and its key: empty until the user adds one to .env (the
+    # assistant then answers in degraded mode); SecretStr keeps it out of logs.
+    llm_provider: Literal["anthropic", "openai"] = "anthropic"
+    llm_api_key: SecretStr = SecretStr("")
+    # For OpenAI-compatible endpoints (Azure OpenAI, vLLM, Ollama). Empty means
+    # the provider's own API.
+    llm_base_url: str = ""
+    # Models by role: "smart" writes answers, "fast" does the cheap steps
+    # (intent, constraints, rewriting). Empty means the provider's default in
+    # app/llm.py — OpenAI has none there, so it must be set.
+    llm_model_smart: str = ""
+    llm_model_fast: str = ""
+    # Reasoning effort per role (low | medium | high …). Empty means the
+    # default in app/llm.py; "none" means not sent (models without it).
+    llm_effort_smart: str = ""
+    llm_effort_fast: str = ""
+    # Output caps per call (B5-D10). Thinking counts against them, so they
+    # leave room for it; the per-step limits are tightened from measurements.
+    llm_max_tokens_smart: int = 4096
+    llm_max_tokens_fast: int = 2048
+    # Per attempt; the provider SDK retries 429/5xx/connection errors itself
+    # with backoff, so a call can take up to timeout x (retries + 1).
+    llm_timeout_seconds: float = 30.0
+    llm_max_retries: int = 2
+    # A smart-model call that fails for a transient reason (rate limit,
+    # outage, timeout) is retried once on the fast model.
+    llm_fallback_to_fast: bool = True
 
     @property
     def index_suffix(self) -> str:
