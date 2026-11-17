@@ -115,7 +115,7 @@ processes in dev.
 
 ## Week 4 — Data Preparation + Retrieval (Part B)
 
-Plan and design decisions (B4-D1…D15): [week4-plan.md](./week4-plan.md). As built:
+Plan and design decisions (B4-D1…D21): [week4-plan.md](./week4-plan.md). As built:
 [architecture.md#ai-layer-search-part-b-week-4](./architecture.md#ai-layer-search-part-b-week-4)
 and [technical-documentation.md#search-retrieval-layer](./technical-documentation.md#search-retrieval-layer).
 Branch `week4/retrieval-layer`. Verified with `smoke_test.py --deep --ai`, the retrieval

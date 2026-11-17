@@ -690,7 +690,7 @@ to other services.
 
 ## Search (retrieval layer)
 
-Part B Week 4. Design record with decision IDs B4-D1…D15: [week4-plan.md](./week4-plan.md);
+Part B Week 4. Design record with decision IDs B4-D1…D21: [week4-plan.md](./week4-plan.md);
 components: [architecture.md#ai-layer-search-part-b-week-4](./architecture.md#ai-layer-search-part-b-week-4).
 
 ### What gets embedded (chunking)

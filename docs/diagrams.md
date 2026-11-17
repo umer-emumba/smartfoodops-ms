@@ -608,7 +608,7 @@ sequenceDiagram
 ## Search and retrieval (Part B, Week 4)
 
 The search index is a read model of restaurant-service and order-service, kept current
-by their events. Decisions B4-D1…D19: [week4-plan.md](./week4-plan.md); reasoning and
+by their events. Decisions B4-D1…D21: [week4-plan.md](./week4-plan.md); reasoning and
 measured results: [technical-documentation.md](./technical-documentation.md#search-retrieval-layer).
 The collections themselves: [Qdrant collections](#qdrant-collections-ai-service-search-index).
 

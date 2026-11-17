@@ -12,7 +12,7 @@ history; Week 5 is the AI assistant.
 | Why it's built this way: lifecycles, failure handling, consistency, tradeoffs | [docs/technical-documentation.md](docs/technical-documentation.md) |
 | Requirements and where each is built | [docs/PRD.md](docs/PRD.md) |
 | Build status and open gaps — **read first** when picking the project back up | [docs/PROGRESS.md](docs/PROGRESS.md) |
-| Week 4 (search) plan and design decisions B4-D1…D15 | [docs/week4-plan.md](docs/week4-plan.md) |
+| Week 4 (search) plan and design decisions B4-D1…D21 | [docs/week4-plan.md](docs/week4-plan.md) |
 
 ## Architecture at a glance
 
