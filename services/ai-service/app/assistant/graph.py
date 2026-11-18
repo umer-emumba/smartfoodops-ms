@@ -110,6 +110,7 @@ class TurnState(TypedDict, total=False):
     feedback: list[str]
     attempts: int
     made_up: int
+    rejections: list[dict[str, Any]]  # why the check turned picks down: [{attempt, problems}]
     # Out.
     dishes: list[DishCard]
     restaurants: list[RestaurantCard]
@@ -478,6 +479,15 @@ def _fallback_cards(state: TurnState) -> tuple[list[DishCard], list[RestaurantCa
     return [checks.dish_card(k, v) for k, v in list(state["candidates"].items())[:3]], []
 
 
+def _rejected(state: TurnState, problems: list[str]) -> list[dict[str, Any]]:
+    """Record why the check turned this pick down (or trimmed it): logged, and
+    stored with the turn (`ai_interactions.rejections`). Problems name dishes
+    and prices only — no customer text."""
+    attempt = state.get("attempts", 0)
+    logger.info("pick rejected (attempt %d): %s", attempt, "; ".join(problems))
+    return [*state.get("rejections", []), {"attempt": attempt, "problems": problems}]
+
+
 async def check(state: TurnState, runtime: Runtime[Deps]) -> dict[str, Any]:
     _status("checking")
     deps = runtime.context
@@ -494,17 +504,26 @@ async def check(state: TurnState, runtime: Runtime[Deps]) -> dict[str, Any]:
         result = checks.check_restaurants(chosen, state["restaurant_candidates"], {})
         made_up = state.get("made_up", 0) + result.made_up
         _count_made_up(result.made_up)
+        rejections = (
+            _rejected(state, result.problems) if result.problems else state.get("rejections", [])
+        )
         if not result.restaurants and retry:
-            return {"feedback": result.problems, "made_up": made_up}
+            return {"feedback": result.problems, "made_up": made_up, "rejections": rejections}
         if not result.restaurants:
             _, restaurants = _fallback_cards(state)
-            return {"dishes": [], "restaurants": restaurants, "status": "degraded"}
+            return {
+                "dishes": [],
+                "restaurants": restaurants,
+                "status": "degraded",
+                "rejections": rejections,
+            }
         return {
             "dishes": [],
             "restaurants": result.restaurants,
             "status": "answered",
             "made_up": made_up,
             "notes": _with_note(state),
+            "rejections": rejections,
         }
 
     by_restaurant: dict[str, list[str]] = {}
@@ -525,14 +544,23 @@ async def check(state: TurnState, runtime: Runtime[Deps]) -> dict[str, Any]:
     )
     made_up = state.get("made_up", 0) + result.made_up
     _count_made_up(result.made_up)
+    rejections = (
+        _rejected(state, result.problems) if result.problems else state.get("rejections", [])
+    )
     if result.problems and retry:
         metrics.ASSISTANT_OUTCOMES.labels("retried").inc()
-        return {"feedback": result.problems, "made_up": made_up}
+        return {"feedback": result.problems, "made_up": made_up, "rejections": rejections}
     usable = checks.meal_is_valid(result, state.get("budget_pkr")) if meal else bool(result.dishes)
     if not usable:
         metrics.ASSISTANT_OUTCOMES.labels("fallback").inc()
         dishes, _ = _fallback_cards(state)
-        return {"dishes": dishes, "restaurants": [], "status": "degraded", "made_up": made_up}
+        return {
+            "dishes": dishes,
+            "restaurants": [],
+            "status": "degraded",
+            "made_up": made_up,
+            "rejections": rejections,
+        }
     notes = _with_note(state)
     if meal:
         notes = [*notes, f"The meal comes to {_rs(result.total)} before delivery."]
@@ -542,6 +570,7 @@ async def check(state: TurnState, runtime: Runtime[Deps]) -> dict[str, Any]:
         "status": "answered",
         "made_up": made_up,
         "notes": notes,
+        "rejections": rejections,
     }
 
 

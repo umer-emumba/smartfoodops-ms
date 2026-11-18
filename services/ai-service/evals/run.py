@@ -223,6 +223,7 @@ async def run_case(
         "status": final.get("status"),
         "degraded_reason": final.get("degraded_reason"),
         "made_up_caught": final.get("made_up", 0),
+        "rejections": final.get("rejections", []),
         "shown": [
             f"{c.quantity}× {c.restaurant_name} / {c.name} Rs {c.price:.0f}"
             for c in final.get("dishes", [])
@@ -296,6 +297,8 @@ async def main() -> None:
             flags.append("not relevant")
         if r["degraded_reason"]:
             flags.append(f"degraded={r['degraded_reason']}")
+        for rej in r["rejections"]:
+            flags.append(f"check #{rej['attempt']}: " + "; ".join(rej["problems"]))
         mark = "ok " if not flags else "-- "
         print(f"{mark}{r['seconds']:5.1f}s {r['q'][:60]!r}")
         for s in r["shown"][:4]:
@@ -317,6 +320,7 @@ async def main() -> None:
         "relevant": round(_share(relevant, "relevant"), 3),
         "violations": violations,
         "made_up_caught": sum(r["made_up_caught"] for r in results),
+        "picks_rejected": sum(len(r["rejections"]) for r in results),
         "degraded": sum(bool(r["degraded_reason"]) for r in results),
         "seconds_p50": round(statistics.median(seconds), 2),
         "seconds_p95": round(sorted(seconds)[max(int(len(seconds) * 0.95) - 1, 0)], 2),

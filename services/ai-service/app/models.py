@@ -111,6 +111,9 @@ class Interaction(Base):
     # Tokens and time per step: {"pick": {"calls", "input", "cached",
     # "output", "reasoning", "ms"}, ...} (migration 0003).
     steps: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # Why the check turned picks down: [{"attempt": 1, "problems": [...]}]
+    # (migration 0004). Dish names and prices only.
+    rejections: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
 
 

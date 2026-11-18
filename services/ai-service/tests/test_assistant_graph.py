@@ -389,6 +389,10 @@ async def test_an_unknown_code_is_made_up_and_the_retry_sees_the_code() -> None:
     final, _ = await _run(deps(smart, chat(_u())))
     assert final["made_up"] == 1
     assert [c.item_id for c in final["dishes"]] == ["m-1"]
+    # Why the first pick was turned down is kept with the turn.
+    assert final["rejections"] == [
+        {"attempt": 1, "problems": ["'D99' is not one of the dishes you were given"]}
+    ]
     retry_prompt = smart.asked[1][1][-1].content
     assert "'D99' is not one of the dishes you were given" in retry_prompt
     assert "[D1] Chicken Qorma" in retry_prompt  # same codes on the retry

@@ -233,6 +233,7 @@ async def _save(
             first_output_ms=first_output_ms,
             error_code=final.get("degraded_reason"),
             steps=usage.steps or None,
+            rejections=final.get("rejections") or None,
         )
         session.add(interaction)
         await session.commit()

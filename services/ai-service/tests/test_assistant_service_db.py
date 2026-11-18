@@ -126,3 +126,13 @@ async def test_older_turns_are_folded_into_the_summary(sessions, monkeypatch) ->
         conversation = await s.get(Conversation, conversation_id)
     assert conversation.turn_count == 6
     assert conversation.summarized_seq == 4 and conversation.summary == "Wants mild curries."
+
+
+async def test_why_a_pick_was_turned_down_is_stored(sessions) -> None:
+    done, _ = await _turn(sessions, deps(chat(_pick("D99"), _pick("D1")), chat(_u())), "curry")
+    async with sessions() as s:
+        row = await s.get(Interaction, done["interaction_id"])
+    assert done["status"] == "answered"
+    assert row.rejections == [
+        {"attempt": 1, "problems": ["'D99' is not one of the dishes you were given"]}
+    ]
