@@ -6,9 +6,9 @@ modes support unevenly (B5-D1). Code clamps and checks the values instead
 (`Understanding.cleaned`, app/assistant/check.py): the model is never
 trusted to stay in range."""
 
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.schemas import DietaryTag
 
@@ -23,7 +23,35 @@ Intent = Literal[
 INTENTS: tuple[str, ...] = Intent.__args__  # type: ignore[attr-defined]
 
 
-class Constraints(BaseModel):
+def _lists_may_be_null(schema: dict[str, Any]) -> None:
+    """In the JSON schema sent to the model, a list of plain values may also
+    be null. gpt-oss on Groq answers `"dietary": null` for "none", and Groq
+    rejects output that breaks the schema (400). Lists of objects (`$ref`)
+    stay arrays: qwen3 answered null to every nullable `$ref` (B5-D17)."""
+    for prop in schema.get("properties", {}).values():
+        if prop.get("type") == "array" and "$ref" not in prop.get("items", {}):
+            prop["type"] = ["array", "null"]
+
+
+class ModelFacing(BaseModel):
+    """A schema the model fills in: a null list reads as empty."""
+
+    model_config = ConfigDict(json_schema_extra=_lists_may_be_null)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _null_lists_are_empty(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            for name, field in cls.model_fields.items():
+                if (
+                    data.get(name, ...) is None
+                    and getattr(field.annotation, "__origin__", None) is list
+                ):
+                    data = {**data, name: []}
+        return data
+
+
+class Constraints(ModelFacing):
     # Flat numbers, not a nested money object: local models (qwen3 on
     # Ollama) answered a nested `{amount, currency} | null` with null every
     # time — 0 of 5 budgets on the eval.
@@ -51,7 +79,7 @@ class Constraints(BaseModel):
     min_rating: float | None = Field(default=None, description="Lowest restaurant rating, 1–5.")
 
 
-class Understanding(BaseModel):
+class Understanding(ModelFacing):
     """The fast model's one call per message (B5-D4): what is being asked,
     a clean English search query, and the constraints as filters."""
 
@@ -100,13 +128,13 @@ class Understanding(BaseModel):
         return self.model_copy(update={"constraints": constraints, "search_query": query})
 
 
-class PickedItem(BaseModel):
+class PickedItem(ModelFacing):
     item_id: str
     quantity: int = 1
     reason: str = Field(description="Why this dish, in a few words, from the given facts.")
 
 
-class Pick(BaseModel):
+class Pick(ModelFacing):
     """The smart model's choice among the candidates it was given (B5-D3):
     IDs only — names, prices and everything shown come from our data."""
 

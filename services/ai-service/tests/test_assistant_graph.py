@@ -356,3 +356,16 @@ def test_understanding_is_clamped() -> None:
 def test_menu_fixture_is_consistent() -> None:
     assert len({h.id for h in MENU}) == len(MENU)
     assert dish("x", "X", 1).data["restaurant_id"] == "r-1"
+
+
+def test_model_facing_lists_may_come_back_null() -> None:
+    # gpt-oss on Groq answers "dietary": null; the schema must allow it (Groq
+    # rejects output that breaks the schema) and it reads as an empty list.
+    from app.assistant.schemas import Constraints
+
+    props = Understanding.model_json_schema()["$defs"]["Constraints"]["properties"]
+    assert props["dietary"]["type"] == ["array", "null"]
+    assert Pick.model_json_schema()["properties"]["items"]["type"] == "array"  # $ref: kept
+    c = Constraints.model_validate({"dietary": None, "cuisines": None, "exclude": ["beef"]})
+    assert (c.dietary, c.cuisines, c.exclude) == ([], [], ["beef"])
+    assert Pick.model_validate({"items": None}).items == []

@@ -19,7 +19,7 @@ _DIR = Path(__file__).parent
 # name -> version in use. Bump here after adding v<N+1>.md.
 ACTIVE: dict[str, int] = {
     "assistant_rules": 1,
-    "understand": 1,
+    "understand": 2,
     "pick": 1,
     "explain": 1,
     "summarize": 1,

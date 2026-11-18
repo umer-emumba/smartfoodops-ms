@@ -60,7 +60,7 @@ async def test_a_turn_is_stored_with_its_interaction(sessions) -> None:
     assert turns[1].content == "Try the qorma."
     assert turns[1].meta["item_ids"] == ["m-1"] and turns[1].meta["intent"] == "recommend_dishes"
     assert row.kind == "chat" and row.status == "answered"
-    assert row.prompt_version == "assistant_rules@v1,understand@v1,pick@v1,explain@v1"
+    assert row.prompt_version == "assistant_rules@v1,understand@v2,pick@v1,explain@v1"
     # The explain call's usage (the fakes' structured calls report none).
     assert (row.input_tokens, row.output_tokens) == (1000, 50)
     assert row.cost_usd == Decimal("0.000125")  # 1000 x $0.10 + 50 x $0.50, per million
