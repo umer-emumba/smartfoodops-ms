@@ -7,5 +7,5 @@ cd "$(dirname "$0")/.."
 uv run --frozen mypy libs/*/src
 for service in services/*/; do
     echo "mypy: $service"
-    (cd "$service" && uv run --frozen mypy app)
+    (cd "$service" && uv run --frozen mypy app $([ -d evals ] && echo evals))
 done

@@ -188,7 +188,7 @@ def _hit(kind: str, point: m.ScoredPoint) -> Hit:
 
 @dataclass(frozen=True)
 class Load:
-    """A kitchen's load right now (restaurant-service, app/kitchen.py)."""
+    """A kitchen's load right now (restaurant-service, app/restaurant_client.py)."""
 
     active_orders: int
     max_orders: int
@@ -355,6 +355,46 @@ class Retriever:
         metrics.SEARCHES.labels("restaurant_suggestion", "hits" if hits else "empty").inc()
         return hits
 
+    async def items_by_id(self, item_ids: Sequence[str]) -> list[Hit]:
+        """The dishes with these IDs that a customer could order now (the
+        same rules as `catalog_filter`), in the order asked — for "my usual":
+        dishes from past orders, by ID rather than by search."""
+        if not item_ids:
+            return []
+        points = await self._client.retrieve(
+            name(MENU_ITEMS),
+            ids=[point_id("menu_item", i) for i in item_ids],
+            with_payload=True,
+            with_vectors=False,
+        )
+        orderable = {
+            str(p.payload["menu_item_id"]): Hit(
+                kind="item",
+                id=str(p.payload["menu_item_id"]),
+                score=0.0,
+                text=str(p.payload.get("text", "")),
+                data={k: v for k, v in p.payload.items() if k not in _INTERNAL},
+            )
+            for p in points
+            if p.payload
+            and not p.payload.get("deleted")
+            and p.payload.get("restaurant_status") == "active"
+            and p.payload.get("is_available")
+            and p.payload.get("in_stock")
+        }
+        return [orderable[i] for i in dict.fromkeys(item_ids) if i in orderable]
+
+    async def customer_profile(self, customer_id: str) -> str | None:
+        """The customer's order-history summary (app/documents.py
+        `customer_summary`), or None if they have no delivered orders."""
+        points = await self._client.retrieve(
+            name(ORDER_HISTORY),
+            ids=[point_id("customer_summary", customer_id)],
+            with_payload=["text"],
+            with_vectors=False,
+        )
+        return str(points[0].payload.get("text")) if points and points[0].payload else None
+
     async def _restaurant_payloads(self, ids: list[str]) -> dict[str, dict[str, Any]]:
         if not ids:
             return {}
@@ -411,10 +451,10 @@ class Retriever:
 
 
 def default_retriever() -> Retriever:
-    from app import kitchen, qdrant
+    from app import qdrant, restaurant_client
     from app.embedding import embedder
 
-    return Retriever(qdrant.client, embedder, kitchen.loads)
+    return Retriever(qdrant.client, embedder, restaurant_client.loads)
 
 
 _default: Retriever | None = None

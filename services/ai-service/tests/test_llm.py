@@ -38,7 +38,7 @@ def _settings(**overrides: Any) -> Settings:
         "database_url": "postgresql+asyncpg://x/y",
         "llm_api_key": SecretStr("test-key"),
     }
-    return Settings(**(base | overrides))  # type: ignore[arg-type]
+    return Settings(_env_file=None, **(base | overrides))  # type: ignore[arg-type,call-arg]
 
 
 # --- Building models from config ---
@@ -63,6 +63,7 @@ def test_openai_by_config_with_base_url() -> None:
             llm_model_smart="big-model",
             llm_model_fast="small-model",
             llm_base_url="http://vllm:8000/v1",
+            llm_effort_smart="omit",
             llm_effort_fast="none",
         )
     )
@@ -70,7 +71,8 @@ def test_openai_by_config_with_base_url() -> None:
     assert isinstance(fast, ChatOpenAI)
     assert fast.model_name == "small-model"
     assert fast.openai_api_base == "http://vllm:8000/v1"
-    assert fast.reasoning_effort is None
+    assert fast.reasoning_effort == "none"  # sent: thinking off
+    assert llm.model("smart").reasoning_effort is None  # omitted
 
 
 def test_openai_needs_explicit_models() -> None:
@@ -258,6 +260,32 @@ def test_usage_splits_cached_input_out() -> None:
     # Sonnet 5.5: 300 x $2 + 200 x $10 + 600 x $0.20 + 100 x $2.50, per million.
     assert usage.cost_usd("claude-sonnet-5-5") == pytest.approx(0.00297)
     assert usage.cost_usd("unknown-model") is None
+
+
+def test_reasoning_tokens_are_counted_within_output() -> None:
+    usage = Usage.from_metadata(
+        {
+            "input_tokens": 500,
+            "output_tokens": 300,
+            "total_tokens": 800,
+            "output_token_details": {"reasoning": 250},
+        }
+    )
+    assert (usage.output, usage.reasoning) == (300, 250)
+
+
+def test_turn_usage_adds_up_per_step() -> None:
+    from app.llm import TurnUsage
+
+    turn = TurnUsage()
+    turn.add("m", Usage(input=100, output=10), step="pick", ms=5)
+    turn.add("m", Usage(input=120, output=20, reasoning=15), step="pick", ms=7)
+    turn.add("m", Usage(input=50, output=5, cache_read=40), step="explain", ms=3)
+    assert turn.steps == {
+        "pick": {"calls": 2, "input": 220, "cached": 0, "output": 30, "reasoning": 15, "ms": 12},
+        "explain": {"calls": 1, "input": 90, "cached": 40, "output": 5, "reasoning": 0, "ms": 3},
+    }
+    assert (turn.calls, turn.input_tokens, turn.output_tokens) == (3, 310, 35)
 
 
 async def test_every_call_records_outcome_tokens_and_cost() -> None:

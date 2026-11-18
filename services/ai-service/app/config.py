@@ -55,7 +55,7 @@ class Settings(BaseServiceSettings, KafkaConsumerSettings):
     # Where the backfill reads from (app/reindex.py) — internal endpoints.
     restaurant_service_url: str = "http://restaurant-service:8000"
     order_service_url: str = "http://order-service:8000"
-    # Restaurant suggestions read kitchen load live (app/kitchen.py); past
+    # Restaurant suggestions read kitchen load live (app/restaurant_client.py); past
     # this they rank without it rather than wait.
     kitchen_load_timeout_seconds: float = 1.0
 
@@ -73,7 +73,9 @@ class Settings(BaseServiceSettings, KafkaConsumerSettings):
     llm_model_smart: str = ""
     llm_model_fast: str = ""
     # Reasoning effort per role (low | medium | high …). Empty means the
-    # default in app/llm.py; "none" means not sent (models without it).
+    # default in app/llm.py; "omit" means not sent (models that reject it).
+    # "none" is sent as is: it turns thinking off on models that think by
+    # default (qwen3 on Ollama: 13 s → 2.8 s a call, same answer).
     llm_effort_smart: str = ""
     llm_effort_fast: str = ""
     # Output caps per call (B5-D10). Thinking counts against them, so they
@@ -87,6 +89,22 @@ class Settings(BaseServiceSettings, KafkaConsumerSettings):
     # A smart-model call that fails for a transient reason (rate limit,
     # outage, timeout) is retried once on the fast model.
     llm_fallback_to_fast: bool = True
+
+    # The assistant (docs/week5-plan.md step 2).
+    # Prices are PKR; a budget in dollars is converted at this fixed rate and
+    # the answer says so (there's no live FX feed).
+    usd_to_pkr: float = 280.0
+    # Dishes retrieved for the pick step: enough choice, a bounded prompt.
+    assistant_candidates: int = 15
+    assistant_restaurants: int = 5
+    # Search radius around the customer, when the request carries a location.
+    assistant_radius_km: float = 8.0
+    # Memory: the last N turns go to the model word for word; older ones are
+    # folded into the conversation summary once this many are unsummarized.
+    assistant_history_turns: int = 6
+    assistant_summarize_after: int = 12
+    # Longest customer message accepted.
+    assistant_max_message_chars: int = 500
 
     @property
     def index_suffix(self) -> str:

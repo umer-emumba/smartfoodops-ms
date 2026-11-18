@@ -19,7 +19,8 @@ import logging
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from contextvars import ContextVar
+from dataclasses import dataclass, field
 from typing import Any, Literal, TypeVar
 from uuid import UUID
 
@@ -202,6 +203,7 @@ class Usage:
     output: int = 0
     cache_read: int = 0
     cache_write: int = 0
+    reasoning: int = 0  # the part of `output` spent thinking (billed as output)
 
     @classmethod
     def from_metadata(cls, meta: dict[str, Any] | None) -> "Usage":
@@ -213,11 +215,13 @@ class Usage:
         cache_read = int(details.get("cache_read") or 0)
         cache_write = int(details.get("cache_creation") or 0)
         total_in = int(meta.get("input_tokens") or 0)
+        out_details = meta.get("output_token_details") or {}
         return cls(
             input=max(total_in - cache_read - cache_write, 0),
             output=int(meta.get("output_tokens") or 0),
             cache_read=cache_read,
             cache_write=cache_write,
+            reasoning=int(out_details.get("reasoning") or 0),
         )
 
     def cost_usd(self, model: str) -> float | None:
@@ -232,6 +236,55 @@ class Usage:
         ) / 1_000_000
 
 
+@dataclass
+class TurnUsage:
+    """Everything the LLM calls of one assistant turn added up — for its
+    `ai_interactions` row. Collected by `usage_scope()`."""
+
+    calls: int = 0
+    input_tokens: int = 0  # all input, cached or not
+    output_tokens: int = 0
+    cost_usd: float = 0.0
+    models: list[str] = field(default_factory=list)
+    # The same, per graph step (understand, pick, explain, ...): where the
+    # tokens of a turn went. A retried step shows calls 2.
+    steps: dict[str, dict[str, int]] = field(default_factory=dict)
+
+    def add(self, model: str, usage: Usage, step: str = "", ms: int = 0) -> None:
+        total_in = usage.input + usage.cache_read + usage.cache_write
+        self.calls += 1
+        self.input_tokens += total_in
+        self.output_tokens += usage.output
+        self.cost_usd += usage.cost_usd(model) or 0.0
+        if model not in self.models:
+            self.models.append(model)
+        s = self.steps.setdefault(
+            step or "other",
+            {"calls": 0, "input": 0, "cached": 0, "output": 0, "reasoning": 0, "ms": 0},
+        )
+        s["calls"] += 1
+        s["input"] += total_in
+        s["cached"] += usage.cache_read
+        s["output"] += usage.output
+        s["reasoning"] += usage.reasoning
+        s["ms"] += ms
+
+
+_turn_usage: ContextVar[TurnUsage | None] = ContextVar("turn_usage", default=None)
+
+
+@contextmanager
+def usage_scope() -> Iterator[TurnUsage]:
+    """Adds up the usage of every call made inside the block (and in tasks
+    it starts — they inherit the context) into the yielded object."""
+    totals = TurnUsage()
+    token = _turn_usage.set(totals)
+    try:
+        yield totals
+    finally:
+        _turn_usage.reset(token)
+
+
 _unpriced_warned: set[str] = set()
 
 
@@ -240,16 +293,32 @@ class _UsageRecorder(BaseCallbackHandler):
     and cost. A callback, so it sees streamed, structured and fallback calls
     alike without each step remembering to."""
 
+    # Run in the caller's thread and context, not an executor: the per-turn
+    # totals (`usage_scope`) are found through a context variable.
+    run_inline = True
+
     def __init__(self, provider: str, role: Role, model: str) -> None:
         self.provider, self.role, self.model = provider, role, model
         self._started: dict[UUID, float] = {}
+        self._steps: dict[UUID, str] = {}
 
     def on_chat_model_start(
-        self, serialized: Any, messages: Any, *, run_id: UUID, **_: Any
+        self,
+        serialized: Any,
+        messages: Any,
+        *,
+        run_id: UUID,
+        metadata: dict[str, Any] | None = None,
+        **_: Any,
     ) -> None:
         self._started[run_id] = time.perf_counter()
+        # LangGraph tags every call made inside a node with the node's name.
+        self._steps[run_id] = str((metadata or {}).get("langgraph_node") or self.role)
 
     def on_llm_end(self, response: LLMResult, *, run_id: UUID, **_: Any) -> None:
+        started = self._started.get(run_id)
+        ms = int((time.perf_counter() - started) * 1000) if started is not None else 0
+        step = self._steps.pop(run_id, self.role)
         self._finish(run_id, "ok")
         usage = Usage()
         model = self.model
@@ -259,9 +328,10 @@ class _UsageRecorder(BaseCallbackHandler):
                     meta = getattr(gen.message, "usage_metadata", None)
                     usage = Usage.from_metadata(meta)  # type: ignore[arg-type]
                     model = gen.message.response_metadata.get("model_name") or model
-        self.record_usage(model, usage)
+        self.record_usage(model, usage, step=step, ms=ms)
 
     def on_llm_error(self, error: BaseException, *, run_id: UUID, **_: Any) -> None:
+        self._steps.pop(run_id, None)
         mapped = classify(error)
         self._finish(run_id, mapped.result if mapped else "error")
 
@@ -273,7 +343,9 @@ class _UsageRecorder(BaseCallbackHandler):
                 time.perf_counter() - started
             )
 
-    def record_usage(self, model: str, usage: Usage) -> None:
+    def record_usage(self, model: str, usage: Usage, step: str = "", ms: int = 0) -> None:
+        if (turn := _turn_usage.get()) is not None:
+            turn.add(model, usage, step=step, ms=ms)
         for kind in ("input", "output", "cache_read", "cache_write"):
             count = getattr(usage, kind)
             if count:
@@ -328,7 +400,7 @@ class LLM:
     def _effort(self, role: Role) -> str:
         c = self._config
         configured = c.llm_effort_smart if role == "smart" else c.llm_effort_fast
-        if configured == "none":
+        if configured == "omit":
             return ""
         if configured:
             return configured

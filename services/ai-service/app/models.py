@@ -13,9 +13,20 @@ Stored text is redacted first (app/privacy.py, B5-D8).
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
+from typing import Any
 
 from sfo_common import new_id
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -47,6 +58,8 @@ class Conversation(Base):
     # Older turns are folded into this summary, so a long chat sends the
     # model a bounded history (step 2).
     summary: Mapped[str] = mapped_column(Text, default="", server_default="")
+    # Turns with seq <= this are in `summary` (step 2, migration 0002).
+    summarized_seq: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     turn_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
@@ -65,6 +78,10 @@ class ConversationTurn(Base):
     seq: Mapped[int] = mapped_column(Integer)
     role: Mapped[str] = mapped_column(String)  # user | assistant
     content: Mapped[str] = mapped_column(Text)
+    # Assistant turns: what was understood and shown (intent, filters, card
+    # IDs), so a follow-up ("something cheaper", "the second one") builds on
+    # it without re-reading the text.
+    meta: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
@@ -91,6 +108,9 @@ class Interaction(Base):
     # Time to the first card/token the customer saw (step 3).
     first_output_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error_code: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Tokens and time per step: {"pick": {"calls", "input", "cached",
+    # "output", "reasoning", "ms"}, ...} (migration 0003).
+    steps: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
 
 

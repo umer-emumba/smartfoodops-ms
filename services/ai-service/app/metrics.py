@@ -43,6 +43,28 @@ KITCHEN_LOAD_LOOKUPS = Counter(
     "Live kitchen-load reads for restaurant suggestions (failed: ranked without load)",
     ["result"],
 )
+LIVE_QUOTES = Counter(
+    "ai_live_quotes_total",
+    "Live price/availability reads for the assistant's check (failed: the index's copy was used)",
+    ["result"],
+)
+# --- The assistant (docs/week5-plan.md step 2). ---
+ASSISTANT_INTENTS = Counter(
+    "ai_assistant_intents_total", "Assistant messages by intent", ["intent"]
+)
+ASSISTANT_OUTCOMES = Counter(
+    "ai_assistant_outcomes_total",
+    "How picks ended: retried (check failed once), fallback (search results shown), "
+    "no_match (model found nothing fitting), nothing_found (search found nothing)",
+    ["outcome"],
+)
+ASSISTANT_TURNS = Counter(
+    "ai_assistant_turns_total", "Assistant turns by how they ended", ["status"]
+)
+ASSISTANT_MADE_UP_IDS = Counter(
+    "ai_assistant_made_up_ids_total",
+    "IDs the model picked that weren't among its candidates (caught by the check)",
+)
 
 # --- LLM calls (docs/week5-plan.md B5-D1, B5-D10), recorded for every call
 # by app/llm.py's callback, whichever provider and step made it. ---

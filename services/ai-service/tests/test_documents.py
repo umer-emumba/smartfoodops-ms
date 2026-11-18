@@ -76,7 +76,7 @@ def test_long_review_becomes_chunks_with_context() -> None:
 
 
 def test_collection_suffix_names_model_and_revision() -> None:
-    s = Settings(database_url="postgresql+asyncpg://x/y", service_name="ai-service")
+    s = Settings(_env_file=None, database_url="postgresql+asyncpg://x/y", service_name="ai-service")  # type: ignore[call-arg]
     assert s.index_suffix == "bge_base_en_v1_5_r2"
 
 

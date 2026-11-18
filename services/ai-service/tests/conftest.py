@@ -57,3 +57,32 @@ async def store(embedder: FakeEmbedder, monkeypatch: pytest.MonkeyPatch) -> Asyn
     for kind in (*store_module.CATALOG, store_module.ORDER_HISTORY):
         await client.delete_collection(store_module.name(kind))
     await client.close()
+
+
+# --- ai_db (the assistant's memory and interaction log, Week 5) ---
+
+AI_TEST_DATABASE_URL = os.environ.get(
+    "AI_TEST_DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost:15438/ai_db_test"
+)
+
+
+@pytest.fixture(scope="session")
+def migrated_database() -> str:
+    from sfo_common.testing import prepare_test_database
+
+    return prepare_test_database(AI_TEST_DATABASE_URL)
+
+
+@pytest_asyncio.fixture
+async def sessions(migrated_database: str) -> AsyncIterator:
+    """A session factory on an emptied ai_db_test."""
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    engine = create_async_engine(migrated_database)
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("TRUNCATE ai_interactions, conversation_turns, conversations CASCADE")
+        )
+    yield async_sessionmaker(engine, expire_on_commit=False)
+    await engine.dispose()

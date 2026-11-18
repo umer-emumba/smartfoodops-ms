@@ -1,10 +1,10 @@
-"""Kitchen load (app/kitchen.py) and how it and the rating weigh into a
+"""Kitchen load (app/restaurant_client.py) and how it and the rating weigh into a
 restaurant suggestion (app/retrieval.py). Load is a ranking hint: any
 failure to read it is "unknown", never an error."""
 
 import httpx
 import pytest
-from app import kitchen, metrics
+from app import metrics, restaurant_client
 from app.retrieval import Load, load_factor, rating_factor
 
 
@@ -27,10 +27,10 @@ async def test_loads_are_read_from_restaurant_service(monkeypatch: pytest.Monkey
         }
         return httpx.Response(200, json={"loads": [row]})
 
-    monkeypatch.setattr(kitchen, "client", _client(handler))
-    assert await kitchen.loads(["r-1", "r-2"]) == {"r-1": Load(4, 10, True)}
+    monkeypatch.setattr(restaurant_client, "client", _client(handler))
+    assert await restaurant_client.loads(["r-1", "r-2"]) == {"r-1": Load(4, 10, True)}
     assert seen == [("/internal/restaurants/load", b'{"restaurant_ids":["r-1","r-2"]}')]
-    assert await kitchen.loads([]) == {}
+    assert await restaurant_client.loads([]) == {}
     assert len(seen) == 1  # nothing to ask, no call
 
 
@@ -43,9 +43,9 @@ async def test_loads_are_read_from_restaurant_service(monkeypatch: pytest.Monkey
     ],
 )
 async def test_any_failure_means_unknown_load(monkeypatch: pytest.MonkeyPatch, respond) -> None:
-    monkeypatch.setattr(kitchen, "client", _client(respond))
+    monkeypatch.setattr(restaurant_client, "client", _client(respond))
     before = metrics.KITCHEN_LOAD_LOOKUPS.labels("failed")._value.get()
-    assert await kitchen.loads(["r-1"]) == {}
+    assert await restaurant_client.loads(["r-1"]) == {}
     assert metrics.KITCHEN_LOAD_LOOKUPS.labels("failed")._value.get() == before + 1
 
 

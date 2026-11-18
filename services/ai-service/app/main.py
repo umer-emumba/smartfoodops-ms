@@ -9,7 +9,7 @@ from sfo_common.db import check_db_ready
 from sfo_common.health import add_health_routes
 from sfo_observability import configure_logging, instrument_fastapi, instrument_metrics
 
-from app import kitchen, qdrant
+from app import qdrant, restaurant_client
 from app.api.routes import router
 from app.config import settings
 from app.db import engine
@@ -37,7 +37,7 @@ async def _lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
             yield
     warm_up.cancel()
     await qdrant.client.close()
-    await kitchen.client.aclose()
+    await restaurant_client.client.aclose()
 
 
 async def _warm_up() -> None:
