@@ -160,7 +160,9 @@ async def forward_request(resource: str, rest_of_path: str, request: Request) ->
         upstream_response = await clients[service].request(
             request.method,
             target_url,
-            params=request.query_params,
+            # multi_items: a repeated key (`dietary=halal&dietary=vegan`)
+            # keeps every value; the mapping itself keeps only the last.
+            params=tuple(request.query_params.multi_items()),
             headers=forward_headers,
             content=await _read_body_capped(request),
         )
@@ -208,7 +210,7 @@ async def _stream_upstream(request: Request, *, pool: str, path: str, label: str
     upstream_request = client.build_request(
         request.method,
         f"{settings.service_urls[service]}{path}",
-        params=request.query_params,
+        params=tuple(request.query_params.multi_items()),
         headers=forward_headers,
         content=body,
     )

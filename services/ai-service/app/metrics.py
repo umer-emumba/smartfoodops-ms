@@ -38,6 +38,11 @@ QUERY_SECONDS = Histogram(
 SEARCHES = Counter(
     "ai_searches_total", "Searches served, by kind and whether anything matched", ["kind", "result"]
 )
+KITCHEN_LOAD_LOOKUPS = Counter(
+    "ai_kitchen_load_lookups_total",
+    "Live kitchen-load reads for restaurant suggestions (failed: ranked without load)",
+    ["result"],
+)
 
 # --- LLM calls (docs/week5-plan.md B5-D1, B5-D10), recorded for every call
 # by app/llm.py's callback, whichever provider and step made it. ---

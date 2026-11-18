@@ -32,8 +32,9 @@ scripts/seed.py, `docker compose exec ai-service python -m app.reindex`).
   really different. `--compare` does it properly: a paired bootstrap of the
   per-query differences against an earlier `--json` file.
 - Violations: every hit is checked against its query's filters (price,
-  dietary tags, radius, in stock, available, active restaurant; for order
-  history, that the order is the caller's). Any violation fails `--check` —
+  dietary tags, spice, excluded words, cuisine, restaurant rating, radius,
+  in stock, available, active restaurant; for order history, that the order
+  is the caller's). Any violation fails `--check` —
   that's a correctness bug, not a ranking one.
 
 Item names are matched as "Restaurant / Item", so the golden set doesn't
@@ -45,6 +46,7 @@ import argparse
 import json
 import math
 import random
+import re
 import statistics
 import sys
 import time
@@ -153,7 +155,25 @@ def _km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
     return 2 * EARTH_KM * math.asin(math.sqrt(a))
 
 
-def _item_violations(item: dict[str, Any], params: dict[str, Any]) -> list[str]:
+def _words(*texts: str | None) -> set[str]:
+    """ai-service's app/documents.py `words` (folded plurals), restated so
+    the check doesn't trust the code it checks."""
+    out = set()
+    for text in texts:
+        for w in re.findall(r"[a-z]+", (text or "").lower()):
+            if len(w) <= 1:
+                continue
+            if len(w) > 4 and w.endswith("es"):
+                w = w[:-2]
+            elif len(w) > 3 and w.endswith("s") and not w.endswith("ss"):
+                w = w[:-1]
+            out.add(w)
+    return out
+
+
+def _item_violations(
+    item: dict[str, Any], params: dict[str, Any], ratings: dict[str, float | None]
+) -> list[str]:
     """What's wrong with one item (an item hit, or a dish under a cuisine)."""
     name = item.get("name", "?")
     wrong = []
@@ -164,10 +184,27 @@ def _item_violations(item: dict[str, Any], params: dict[str, Any]) -> list[str]:
     missing = set(params.get("dietary", [])) - set(item.get("dietary_tags", []))
     if missing:
         wrong.append(f"{name}: not {', '.join(sorted(missing))}")
+    if "max_spice" in params and item["spice_level"] > params["max_spice"]:
+        wrong.append(f"{name}: spice {item['spice_level']} > {params['max_spice']}")
+    if banned := _words(*params.get("exclude", [])) & _words(
+        item.get("name"), item.get("category"), item.get("description")
+    ):
+        wrong.append(f"{name}: mentions {', '.join(sorted(banned))}")
+    if params.get("cuisine") and not _words(*params["cuisine"]) & _words(item.get("cuisine")):
+        wrong.append(f"{name}: cuisine {item.get('cuisine')!r}")
+    if "min_rating" in params:
+        rating = ratings.get(str(item.get("restaurant_id")))
+        if rating is None or rating < params["min_rating"]:
+            wrong.append(f"{name}: restaurant rated {rating}")
     return wrong
 
 
-def _violations(q: dict[str, Any], hits: list[dict[str, Any]], customer_id: str) -> list[str]:
+def _violations(
+    q: dict[str, Any],
+    hits: list[dict[str, Any]],
+    customer_id: str,
+    ratings: dict[str, float | None],
+) -> list[str]:
     """Hits that break the query's filters — must be none, whatever the rank."""
     params, wrong = q["params"], []
     for hit in hits:
@@ -188,12 +225,16 @@ def _violations(q: dict[str, Any], hits: list[dict[str, Any]], customer_id: str)
                 if km > params.get("radius_km", 5.0) * 1.01:
                     wrong.append(f"{dish.get('name', hit['id'])}: {km:.1f} km away")
             if q["kind"] in ("item", "cuisine"):
-                wrong += _item_violations(dish, params)
+                wrong += _item_violations(dish, params, ratings)
     return wrong
 
 
 def evaluate(
-    client: httpx.Client, q: dict[str, Any], auth: dict[str, str], customer_id: str
+    client: httpx.Client,
+    q: dict[str, Any],
+    auth: dict[str, str],
+    customer_id: str,
+    ratings: dict[str, float | None],
 ) -> dict[str, Any]:
     if q["kind"] == "order":
         path, params, headers = "/v1/ai/search/history", {"q": q["q"]}, auth
@@ -214,7 +255,7 @@ def evaluate(
         "recall": recall,
         "rr": 0.0 if first is None else 1 / (first + 1),
         "seconds": seconds,
-        "violations": _violations(q, hits, customer_id),
+        "violations": _violations(q, hits, customer_id, ratings),
         "top": [(_label(q["kind"], h), ok) for h, ok in zip(hits[:TOP_K], marks, strict=False)],
     }
 
@@ -287,6 +328,14 @@ def _login(client: httpx.Client) -> tuple[dict[str, str], str]:
     return auth, str(me.json()["id"])
 
 
+def _ratings(client: httpx.Client) -> dict[str, float | None]:
+    """Each restaurant's average rating, from restaurant-service (not the
+    index), for the min_rating check."""
+    resp = client.get("/v1/restaurants", params={"limit": 100})
+    resp.raise_for_status()
+    return {str(r["id"]): r["avg_rating"] for r in resp.json()["items"]}
+
+
 def _percentile(values: list[float], p: float) -> float:
     return statistics.quantiles(values, n=100, method="inclusive")[int(p) - 1]
 
@@ -310,7 +359,8 @@ def main() -> None:
     with httpx.Client(base_url=args.base_url, timeout=30, transport=_WaitOutRateLimit()) as client:
         auth, customer_id = _login(client)
         started = time.perf_counter()
-        all_results = [evaluate(client, q, auth, customer_id) for q in queries]
+        ratings = _ratings(client)
+        all_results = [evaluate(client, q, auth, customer_id, ratings) for q in queries]
         seconds = time.perf_counter() - started
 
     results = [r for r in all_results if "unanswerable" not in r["q"]["tags"]]

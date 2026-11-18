@@ -44,7 +44,8 @@ class Settings(BaseServiceSettings, KafkaConsumerSettings):
     # Bump when the documents' text or payload changes shape: with the dense
     # model it names the collections (B4-D6), so a new index is built next to
     # the old one by `python -m app.reindex` instead of mixing two formats.
-    index_revision: int = 1
+    # r2 (Week 5 step 1): `cuisine_words` and `words` in the payload.
+    index_revision: int = 2
 
     # The customer summary (app/documents.py) is built from this many of the
     # latest orders: recent taste, and a rebuild that costs the same however
@@ -54,6 +55,9 @@ class Settings(BaseServiceSettings, KafkaConsumerSettings):
     # Where the backfill reads from (app/reindex.py) — internal endpoints.
     restaurant_service_url: str = "http://restaurant-service:8000"
     order_service_url: str = "http://order-service:8000"
+    # Restaurant suggestions read kitchen load live (app/kitchen.py); past
+    # this they rank without it rather than wait.
+    kitchen_load_timeout_seconds: float = 1.0
 
     # The LLM (docs/week5-plan.md B5-D1). Only app/llm.py reads these. Which
     # provider, and its key: empty until the user adds one to .env (the

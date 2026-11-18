@@ -54,6 +54,61 @@ async def test_search_passes_the_filters(calls) -> None:
     )
 
 
+async def test_search_passes_the_assistant_filters(calls) -> None:
+    resp = await _get(
+        "/v1/ai/search",
+        q="curry",
+        max_spice=1,
+        cuisine=["thai", "chinese"],
+        exclude=["beef", "egg"],
+        min_rating=4,
+    )
+    assert resp.status_code == 200
+    [(_, f)] = calls
+    assert (f.max_spice, f.cuisines, f.exclude, f.min_rating) == (
+        1,
+        ("thai", "chinese"),
+        ("beef", "egg"),
+        4,
+    )
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"kind": "restaurant", "max_spice": 1},
+        {"kind": "restaurant", "exclude": ["beef"]},
+        {"kind": "review", "cuisine": ["thai"]},
+        {"kind": "review", "min_rating": 4},
+        {"max_spice": 4},
+        {"min_rating": 6},
+        {"exclude": ["x" * 41]},
+        {"exclude": [" "]},
+    ],
+)
+async def test_filters_that_dont_apply_are_rejected(calls, params) -> None:
+    resp = await _get("/v1/ai/search", q="food", **params)
+    assert resp.status_code in (400, 422)
+    assert calls == []
+
+
+async def test_restaurant_suggestions_use_the_dish_filters(monkeypatch) -> None:
+    seen: list[tuple[str, Filters]] = []
+
+    async def suggest(query: str, filters: Filters) -> list[Hit]:
+        seen.append((query, filters))
+        return [Hit(kind="restaurant", id="r-1", score=0.9, text="Desi Dastarkhwan", data={})]
+
+    monkeypatch.setattr(retrieval, "suggest_restaurants", suggest)
+    resp = await _get(
+        "/v1/ai/restaurants/suggest", q="mild chicken", max_price=800, max_spice=1, min_rating=4
+    )
+    assert resp.status_code == 200
+    assert resp.json()["kind"] == "restaurant"
+    [(_, f)] = seen
+    assert (f.kind, f.max_price, f.max_spice, f.min_rating, f.limit) == ("item", 800, 1, 4, 5)
+
+
 async def test_radius_only_with_a_location(calls) -> None:
     await _get("/v1/ai/search", q="tea", radius_km=3)
     assert calls[0][1].radius_km is None

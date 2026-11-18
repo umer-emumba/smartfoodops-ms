@@ -67,6 +67,21 @@ async def test_forwards_and_strips_hop_by_hop_headers(gateway) -> None:
     assert "\n" not in seen["x-request-id"]
 
 
+async def test_repeated_query_params_are_all_forwarded(gateway) -> None:
+    """`dietary=halal&dietary=vegan` must reach the backend as both, not the last."""
+    seen = []
+
+    def handler(request):
+        seen.append(request.url.query)
+        return httpx.Response(200, json={"hits": []})
+
+    gateway(handler)
+    async with _client() as c:
+        r = await c.get("/v1/ai/search?q=curry&dietary=halal&dietary=vegan&exclude=beef")
+    assert r.status_code == 200
+    assert seen == [b"q=curry&dietary=halal&dietary=vegan&exclude=beef"]
+
+
 async def test_dot_dot_path_rejected(gateway) -> None:
     gateway(lambda request: httpx.Response(200, json={"leaked": True}))
     async with _client() as c:

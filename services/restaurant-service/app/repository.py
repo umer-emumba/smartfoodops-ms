@@ -25,6 +25,26 @@ async def get_restaurant(session: AsyncSession, restaurant_id: str) -> Restauran
     return await session.get(Restaurant, restaurant_id)
 
 
+async def get_loads(session: AsyncSession, restaurant_ids: list[str]) -> list[dict]:
+    """How full each kitchen is right now — read as committed, no lock: a
+    ranking hint (ai-service), not the capacity check (activities.py)."""
+    stmt = select(
+        Restaurant.id,
+        Restaurant.active_order_count,
+        Restaurant.max_concurrent_orders,
+        Restaurant.is_accepting_orders,
+    ).where(Restaurant.id.in_(restaurant_ids))
+    return [
+        {
+            "restaurant_id": rid,
+            "active_orders": active,
+            "max_orders": cap,
+            "is_accepting_orders": accepting,
+        }
+        for rid, active, cap, accepting in (await session.execute(stmt)).all()
+    ]
+
+
 async def list_restaurants(
     session: AsyncSession, *, city: str | None, cursor: str | None, limit: int
 ) -> dict:

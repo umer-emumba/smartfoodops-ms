@@ -281,6 +281,21 @@ class QuoteItem(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class LoadRequest(RequestModel):
+    restaurant_ids: list[EntityId] = Field(min_length=1, max_length=100)
+
+
+class RestaurantLoad(BaseModel):
+    restaurant_id: str
+    active_orders: int
+    max_orders: int
+    is_accepting_orders: bool
+
+
+class LoadResponse(BaseModel):
+    loads: list[RestaurantLoad]
+
+
 class QuoteResponse(BaseModel):
     restaurant: QuoteRestaurant
     items: list[QuoteItem]

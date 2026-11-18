@@ -9,6 +9,7 @@ neighbours ("Chicken Biryani" alone says nothing about where it's from).
 Point IDs are uuid5 of the entity, so the same entity always lands on the
 same point and every write is an overwrite, never a duplicate."""
 
+import re
 import uuid
 from collections import Counter
 from dataclasses import dataclass, field
@@ -31,6 +32,29 @@ SPICE = {0: "not spicy", 1: "mildly spicy", 2: "spicy", 3: "very spicy"}
 # aren't needed to stay well inside bge-base's 512-token window.
 CHUNK_WORDS = 220
 OVERLAP_WORDS = 40
+
+
+_WORD = re.compile(r"[a-z]+")
+
+
+def stem(word: str) -> str:
+    """A crude plural fold — "chillies" → "chilli", "nuts" → "nut". Not
+    English morphology: it only has to fold the same way on both sides, the
+    stored words and the words a search excludes (app/retrieval.py)."""
+    word = word.lower()
+    if len(word) > 4 and word.endswith("es"):
+        return word[:-2]
+    if len(word) > 3 and word.endswith("s") and not word.endswith("ss"):
+        return word[:-1]
+    return word
+
+
+def words(*texts: str | None) -> list[str]:
+    """The distinct folded words of the texts, for keyword filters: a dish's
+    name, category and description (exclusions: "no beef"), a cuisine label
+    ("Thai / Pan-Asian" → thai, pan, asian)."""
+    found = {stem(w) for t in texts if t for w in _WORD.findall(t.lower()) if len(w) > 1}
+    return sorted(found)
 
 
 def point_id(kind: str, key: str) -> str:
@@ -67,9 +91,11 @@ def menu_item(p: MenuItemUpsertedPayload) -> Doc:
             "restaurant_name": p.restaurant_name,
             "restaurant_status": p.restaurant_status,
             "cuisine": p.cuisine_type,
+            "cuisine_words": words(p.cuisine_type),
             "city": p.city,
             "location": _location(p.lat, p.lng),
             "category": p.category_name,
+            "words": words(p.name, p.category_name, p.description),
             "name": p.name,
             "description": p.description,
             "price": float(p.price),
@@ -112,6 +138,7 @@ def restaurant(p: RestaurantUpsertedPayload) -> Doc:
             "name": p.name,
             "restaurant_status": p.status,
             "cuisine": p.cuisine_type,
+            "cuisine_words": words(p.cuisine_type),
             "city": p.city,
             "address": p.address,
             "location": _location(p.lat, p.lng),

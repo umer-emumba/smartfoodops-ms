@@ -29,6 +29,7 @@ def test_public_routes_classified_correctly() -> None:
     )
     assert is_public_route("GET", "restaurants", "0198abc1-2345-7def-8901-abcdef123456/reviews")
     assert is_public_route("GET", "ai", "search")
+    assert is_public_route("GET", "ai", "restaurants/suggest")
 
 
 def test_private_routes_not_misclassified_as_public() -> None:

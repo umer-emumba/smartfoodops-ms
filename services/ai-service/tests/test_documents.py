@@ -77,4 +77,24 @@ def test_long_review_becomes_chunks_with_context() -> None:
 
 def test_collection_suffix_names_model_and_revision() -> None:
     s = Settings(database_url="postgresql+asyncpg://x/y", service_name="ai-service")
-    assert s.index_suffix == "bge_base_en_v1_5_r1"
+    assert s.index_suffix == "bge_base_en_v1_5_r2"
+
+
+def test_filter_words_fold_plurals_the_same_on_both_sides() -> None:
+    assert documents.words("Thai / Pan-Asian") == ["asian", "pan", "thai"]
+    assert documents.words("Chinese-Pakistani") == ["chinese", "pakistani"]
+    # Stored "green chillies" and an excluded "chilli" meet at the same word.
+    assert documents.stem("chillies") == documents.stem("chilli") == "chilli"
+    assert documents.stem("nuts") == "nut" and documents.stem("tomatoes") == "tomato"
+    assert documents.stem("glass") == "glass"
+    assert documents.words(None, "") == []
+
+
+def test_item_payload_carries_its_filter_words() -> None:
+    doc = documents.menu_item(
+        _item(name="Beef Nihari", description="Slow-cooked with green chillies.")
+    )
+    assert {"beef", "nihari", "rice", "chilli", "slow", "cooked"} <= set(doc.payload["words"])
+    assert doc.payload["cuisine_words"] == ["pakistani"]
+    # Words are payload only: the embedded text is unchanged.
+    assert "words" not in doc.text

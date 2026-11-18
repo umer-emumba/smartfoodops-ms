@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import events, owners, repository
 from app.db import get_session
-from app.schemas import QuoteRequest, QuoteResponse
+from app.schemas import LoadRequest, LoadResponse, QuoteRequest, QuoteResponse
 
 # Service-to-service endpoints. api-gateway only forwards /v1/* paths, so
 # nothing under /internal is reachable by clients — only by other services on
@@ -30,6 +30,17 @@ async def quote(
         raise NotFoundError("Restaurant not found")
     items = await repository.get_items_by_ids(session, restaurant_id, body.item_ids)
     return {"restaurant": restaurant, "items": items}
+
+
+@router.post("/restaurants/load", response_model=LoadResponse)
+async def restaurant_loads(
+    body: LoadRequest,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """ai-service's restaurant suggestions (docs/week5-plan.md step 1): each
+    kitchen's active orders against its cap, right now. Not in the events —
+    it changes with every order. Unknown IDs are left out."""
+    return {"loads": await repository.get_loads(session, body.restaurant_ids)}
 
 
 @router.get("/restaurants/{restaurant_id}/owner")

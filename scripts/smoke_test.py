@@ -978,6 +978,43 @@ def ai(base_url: str) -> None:
         owners = {h["data"]["customer_id"] for h in hist.json()["hits"]}
         check("history is only the caller's orders", hist.status_code == 200 and owners <= {me})
 
+        section("AI search: the assistant's filters, restaurant suggestions")
+        params: list[tuple[str, str | int]] = [
+            ("q", "curry"),
+            ("max_spice", 1),
+            ("exclude", "beef"),
+            ("exclude", "chicken"),  # repeated keys must all reach ai-service
+            ("dietary", "halal"),
+            ("limit", 20),
+        ]
+        dishes = [h["data"] for h in c.get("/v1/ai/search", params=params).json()["hits"]]
+        check(
+            "filters hold: spice ≤ 1, halal, no beef, no chicken",
+            dishes
+            and all(
+                d["spice_level"] <= 1
+                and "halal" in d["dietary_tags"]
+                and not {"beef", "chicken"} & set(f"{d['name']} {d['description']}".lower().split())
+                for d in dishes
+            ),
+            [d["name"] for d in dishes],
+        )
+        thai = c.get("/v1/ai/search", params={"q": "noodles", "cuisine": "thai"}).json()["hits"]
+        check(
+            "cuisine filter: 'thai' matches 'Thai / Pan-Asian'",
+            thai and all("thai" in h["data"]["cuisine"].lower() for h in thai),
+        )
+        suggest = c.get("/v1/ai/restaurants/suggest", params={"q": "chicken", "max_spice": 1})
+        picks = suggest.json().get("hits", [])
+        check(
+            "suggestions: public, ranked, with dishes and live load",
+            suggest.status_code == 200
+            and picks
+            and [p["score"] for p in picks] == sorted((p["score"] for p in picks), reverse=True)
+            and all(p["data"]["dishes"] and p["data"]["load"] is not None for p in picks),
+            suggest.status_code,
+        )
+
         section("AI metrics")
 
         def scraped(query: str) -> str:
