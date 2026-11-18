@@ -129,7 +129,7 @@ class Understanding(ModelFacing):
 
 
 class PickedItem(ModelFacing):
-    item_id: str
+    item_id: str = Field(description='The dish\'s code in brackets, e.g. "D3".')
     quantity: int = 1
     reason: str = Field(description="Why this dish, in a few words, from the given facts.")
 
@@ -139,7 +139,9 @@ class Pick(ModelFacing):
     IDs only — names, prices and everything shown come from our data."""
 
     items: list[PickedItem] = Field(default_factory=list)
-    restaurant_ids: list[str] = Field(default_factory=list)
+    restaurant_ids: list[str] = Field(
+        default_factory=list, description='Restaurant codes in brackets, e.g. "R1".'
+    )
     no_match: bool = Field(
         default=False, description="True if nothing given fits what the customer asked for."
     )

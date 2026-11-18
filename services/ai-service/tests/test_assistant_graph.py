@@ -109,7 +109,8 @@ async def test_the_model_sees_fenced_text_and_the_profile() -> None:
     assert "‹b>now‹/b>" in understand_msgs[-1].content  # tags defused
     [(_, pick_msgs)] = smart.asked
     body = pick_msgs[-1].content
-    assert "<menu_text>" in body and "[m-1] Chicken Qorma" in body
+    assert "<menu_text>" in body and "[D1] Chicken Qorma" in body
+    assert "m-1" not in body and "r-1" not in body  # codes, not real IDs
     assert "<order_history>" in body and "likes mild curries" in body
     assert "Untrusted text" in pick_msgs[0].content  # the rules prompt
 
@@ -274,7 +275,8 @@ async def test_my_usual_puts_past_dishes_first() -> None:
     smart = chat(_pick("m-3"))
     await _run(deps(smart, chat(_u("order_history", "usual")), retriever), "my usual")
     body = smart.asked[0][1][-1].content
-    assert body.index("[m-3]") < body.index("[m-1]")
+    assert "[D1] Malai Boti" in body  # m-3, the past dish, comes first
+    assert body.index("Malai Boti") < body.index("Chicken Qorma")
     assert retriever.searches[1][1].customer_id == "u-1"
 
 
@@ -369,3 +371,34 @@ def test_model_facing_lists_may_come_back_null() -> None:
     c = Constraints.model_validate({"dietary": None, "cuisines": None, "exclude": ["beef"]})
     assert (c.dietary, c.cuisines, c.exclude) == ([], [], ["beef"])
     assert Pick.model_validate({"items": None}).items == []
+
+
+# --- Short codes instead of IDs (pick@v2) ---
+
+
+async def test_the_model_answers_with_codes_and_gets_real_ids_back() -> None:
+    # MENU order: D1 m-1 Chicken Qorma, D2 m-2 Daal Chawal, D3 m-3 Malai Boti.
+    smart = chat(_pick("D2", "d3"))  # any case
+    final, _ = await _run(deps(smart, chat(_u())))
+    assert [c.item_id for c in final["dishes"]] == ["m-2", "m-3"]
+    assert final["status"] == "answered" and final["made_up"] == 0
+
+
+async def test_an_unknown_code_is_made_up_and_the_retry_sees_the_code() -> None:
+    smart = chat(_pick("D99"), _pick("[D1]"))
+    final, _ = await _run(deps(smart, chat(_u())))
+    assert final["made_up"] == 1
+    assert [c.item_id for c in final["dishes"]] == ["m-1"]
+    retry_prompt = smart.asked[1][1][-1].content
+    assert "'D99' is not one of the dishes you were given" in retry_prompt
+    assert "[D1] Chicken Qorma" in retry_prompt  # same codes on the retry
+
+
+def test_restaurant_codes_map_back() -> None:
+    state: Any = {
+        "understanding": _u("suggest_restaurants"),
+        "restaurant_candidates": {"r-9": {}, "r-7": {}},
+    }
+    codes = g._codes(state)
+    assert codes == {"R1": "r-9", "R2": "r-7"}
+    assert g._decode(Pick(restaurant_ids=["R2", "r-x"]), codes).restaurant_ids == ["r-7", "r-x"]

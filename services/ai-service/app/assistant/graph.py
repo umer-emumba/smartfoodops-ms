@@ -355,18 +355,47 @@ async def nothing(state: TurnState) -> dict[str, Any]:
 # --- pick ---
 
 
-def _dish_line(item_id: str, d: Mapping[str, Any]) -> str:
+def _codes(state: TurnState) -> dict[str, str]:
+    """Short codes for this turn's candidates: D1… for dishes, R1… for
+    restaurants → their real IDs. The model answers with a code, not a
+    36-character ID it can miscopy (1 in 8 Groq runs changed a character).
+    Rebuilt from the same candidates on a retry, so codes stay the same within
+    a turn. They mean nothing in the next turn: never store them or put them
+    in the history or summary."""
+    if state["understanding"].intent == "suggest_restaurants":
+        ids, prefix = list(state.get("restaurant_candidates", {})), "R"
+    else:
+        ids, prefix = list(state.get("candidates", {})), "D"
+    return {f"{prefix}{n}": real for n, real in enumerate(ids, 1)}
+
+
+def _decode(chosen: Pick, codes: Mapping[str, str]) -> Pick:
+    """The model's codes → real IDs. Anything that isn't a code is left as
+    written, so the check reports it as made up, in the model's own words."""
+
+    def real(ref: str) -> str:
+        return codes.get(ref.strip().strip("[]").upper(), ref)
+
+    return chosen.model_copy(
+        update={
+            "items": [i.model_copy(update={"item_id": real(i.item_id)}) for i in chosen.items],
+            "restaurant_ids": [real(r) for r in chosen.restaurant_ids],
+        }
+    )
+
+
+def _dish_line(code: str, d: Mapping[str, Any]) -> str:
     tags = ", ".join(d.get("dietary_tags") or []) or "no tags"
     desc = " ".join(str(d.get("description", "")).split())[:180]
     return (
-        f"[{item_id}] {d.get('name')} — {d.get('restaurant_name')} "
-        f"(restaurant {d.get('restaurant_id')}, {d.get('cuisine') or 'restaurant'}) · "
+        f"[{code}] {d.get('name')} — {d.get('restaurant_name')} "
+        f"({d.get('cuisine') or 'restaurant'}) · "
         f"{_rs(float(d.get('price', 0)))} · spice {d.get('spice_level')} · {tags}\n"
         f"    {desc}"
     )
 
 
-def _restaurant_line(rid: str, d: Mapping[str, Any]) -> str:
+def _restaurant_line(code: str, d: Mapping[str, Any]) -> str:
     rating = (
         f"rated {d['avg_rating']:.1f} by {d.get('review_count', 0)}"
         if d.get("avg_rating")
@@ -376,7 +405,7 @@ def _restaurant_line(rid: str, d: Mapping[str, Any]) -> str:
     dishes = "; ".join(
         f"{x.get('name')} {_rs(float(x.get('price', 0)))}" for x in d.get("dishes", [])
     )
-    return f"[{rid}] {d.get('name')} ({d.get('cuisine')}) · {rating}{busy}\n    matching: {dishes}"
+    return f"[{code}] {d.get('name')} ({d.get('cuisine')}) · {rating}{busy}\n    matching: {dishes}"
 
 
 def _ask(state: TurnState) -> str:
@@ -394,16 +423,18 @@ def _ask(state: TurnState) -> str:
     return "\n".join(lines)
 
 
-def _pick_messages(state: TurnState) -> list[BaseMessage]:
+def _pick_messages(state: TurnState, codes: Mapping[str, str]) -> list[BaseMessage]:
     u = state["understanding"]
     parts = [_ask(state)]
     if u.intent == "suggest_restaurants":
         parts.append("Task: suggest restaurants.")
-        body = "\n".join(_restaurant_line(k, v) for k, v in state["restaurant_candidates"].items())
+        rs = state["restaurant_candidates"]
+        body = "\n".join(_restaurant_line(code, rs[rid]) for code, rid in codes.items())
         parts.append(fence("restaurant_text", body))
     else:
         parts.append("Task: " + ("a meal (one order)." if state.get("meal") else "options."))
-        body = "\n".join(_dish_line(k, v) for k, v in state["candidates"].items())
+        cs = state["candidates"]
+        body = "\n".join(_dish_line(code, cs[iid]) for code, iid in codes.items())
         parts.append(fence("menu_text", body))
     if state.get("profile"):
         parts.append(fence("order_history", str(state["profile"])))
@@ -422,11 +453,12 @@ async def pick(state: TurnState, runtime: Runtime[Deps]) -> dict[str, Any]:
         return {"pick": None, "attempts": attempts}
     _status("choosing")
     try:
-        chosen = await deps.llm.structured("smart", Pick).ainvoke(_pick_messages(state))
+        codes = _codes(state)
+        chosen = await deps.llm.structured("smart", Pick).ainvoke(_pick_messages(state, codes))
     except LLMError as exc:
         logger.warning("pick failed: %s", exc.code)
         return {"pick": None, "attempts": attempts, "degraded_reason": exc.code}
-    return {"pick": chosen, "attempts": attempts}
+    return {"pick": _decode(chosen, codes), "attempts": attempts}
 
 
 # --- check ---

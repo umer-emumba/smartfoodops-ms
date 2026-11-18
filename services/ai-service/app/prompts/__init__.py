@@ -20,7 +20,7 @@ _DIR = Path(__file__).parent
 ACTIVE: dict[str, int] = {
     "assistant_rules": 1,
     "understand": 2,
-    "pick": 1,
+    "pick": 2,
     "explain": 1,
     "summarize": 1,
 }
