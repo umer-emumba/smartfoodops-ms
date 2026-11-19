@@ -19,6 +19,10 @@ from app.config import settings
 ORDER_FACTS = "order_facts"
 RIDER_SHIFT_FACTS = "rider_shift_facts"
 FAILED_EVENTS = "failed_events"
+# AI (docs/week5-plan.md step 6): one document per interaction (`_id` =
+# interaction_id) and per content draft decision (`_id` = draft_id).
+AI_INTERACTIONS = "ai_interactions"
+AI_CONTENT_DECISIONS = "ai_content_decisions"
 
 # tz_aware: datetimes come back as UTC-aware, like everywhere else. 2s
 # server selection: an outage fails a request fast instead of after 30s.
@@ -41,6 +45,13 @@ async def ensure_indexes(database: AsyncDatabase = db) -> None:
     )
     await database[RIDER_SHIFT_FACTS].create_index([("rider_id", ASCENDING), ("at", ASCENDING)])
     await database[FAILED_EVENTS].create_index([("at", ASCENDING)])
+    await database[AI_INTERACTIONS].create_index([("at", ASCENDING)])
+    await database[AI_INTERACTIONS].create_index([("user_id", ASCENDING), ("at", ASCENDING)])
+    await database[AI_CONTENT_DECISIONS].create_index([("at", ASCENDING)])
+    await facts.create_index(
+        [("ai_interaction_id", ASCENDING)],
+        partialFilterExpression={"ai_interaction_id": {"$type": "string"}},
+    )
 
 
 async def check_ready() -> bool:

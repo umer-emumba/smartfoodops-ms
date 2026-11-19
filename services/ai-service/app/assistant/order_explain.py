@@ -13,6 +13,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app import events
 from app.assistant.graph import Deps
 from app.assistant.order_facts import diagnose
 from app.assistant.order_words import CORRECT_FALLBACKS, PROMPTS, chunks, facts_event, word
@@ -65,6 +66,8 @@ async def explain_order(
             steps=usage.steps or None,
         )
         session.add(row)
+        await session.flush()
+        session.add(events.interaction_recorded(row))
         await session.commit()
         interaction_id = row.id
     yield {

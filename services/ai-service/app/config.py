@@ -3,10 +3,10 @@ from typing import Literal
 
 from pydantic import SecretStr
 from sfo_common import BaseServiceSettings
-from sfo_common.config import CelerySettings, KafkaConsumerSettings
+from sfo_common.config import KafkaConsumerSettings, OutboxRelaySettings
 
 
-class Settings(BaseServiceSettings, KafkaConsumerSettings, CelerySettings):
+class Settings(BaseServiceSettings, KafkaConsumerSettings, OutboxRelaySettings):
     # Vector store (docs/week4-plan.md B4-D2). Short timeout: a Qdrant outage
     # fails a search or readiness check fast instead of hanging the request.
     qdrant_url: str = "http://qdrant:6333"

@@ -136,3 +136,18 @@ async def test_why_a_pick_was_turned_down_is_stored(sessions) -> None:
     assert row.rejections == [
         {"attempt": 1, "problems": ["'D99' is not one of the dishes you were given"]}
     ]
+
+
+async def test_each_turn_writes_one_analytics_event_without_any_text(sessions) -> None:
+    """Step 6: AiInteractionRecorded goes into the outbox in the same
+    transaction as the interaction; metadata only (B5-D8)."""
+    from app.models import OutboxEvent
+
+    done, _ = await _turn(sessions, deps(chat(_pick()), chat(_u())), "mild curry, I'm Ali")
+    async with sessions() as s:
+        [row] = (await s.scalars(select(OutboxEvent))).all()
+    assert row.event_type == "AiInteractionRecorded" and row.aggregate_id == "u-1"
+    p = row.payload
+    assert p["interaction_id"] == done["interaction_id"] and p["kind"] == "chat"
+    assert p["status"] == "answered" and p["shown_item_ids"] == ["m-1"]
+    assert "Ali" not in str(p) and "curry" not in str(p)  # no customer words

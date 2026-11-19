@@ -267,6 +267,11 @@ async def test_an_order_explanation_streams_facts_then_words(use, sessions) -> N
     async with sessions() as s:
         row = (await s.scalars(select(Interaction))).one()
     assert row.kind == "order_explain" and row.status == "answered"
+    from app.models import OutboxEvent
+
+    async with sessions() as s:
+        event = (await s.scalars(select(OutboxEvent))).one()
+    assert event.payload["kind"] == "order_explain" and event.payload["interaction_id"] == row.id
     assert row.prompt_version == "assistant_rules@v1,order_explain@v1"
     assert orders.tokens and all(t for t in orders.tokens)  # read with the caller's token
 

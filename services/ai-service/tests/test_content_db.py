@@ -197,3 +197,21 @@ async def test_a_pending_draft_cant_be_accepted_and_others_cant_see_it(world) ->
     assert other.status_code == 404
     listed = (await _call("GET", "/v1/ai/content", params={"restaurant_id": "r-1"})).json()
     assert [d["id"] for d in listed["items"]] == [draft["id"]]
+
+
+async def test_generation_and_decision_are_analytics_events(world, sessions) -> None:
+    from app.models import OutboxEvent
+
+    draft_id = await _ready(sessions)
+    await _call("POST", f"/v1/ai/content/{draft_id}/reject")
+    async with sessions() as s:
+        rows = (await s.scalars(select(OutboxEvent).order_by(OutboxEvent.created_at))).all()
+    assert [r.event_type for r in rows] == ["AiInteractionRecorded", "ContentDraftDecided"]
+    assert rows[0].payload["kind"] == "content" and rows[0].payload["restaurant_id"] == "r-1"
+    assert rows[1].payload == {
+        "draft_id": draft_id,
+        "restaurant_id": "r-1",
+        "owner_id": OWNER,
+        "kind": "menu_description",
+        "decision": "rejected",
+    }

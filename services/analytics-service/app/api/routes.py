@@ -7,6 +7,8 @@ in the window they were placed in.
   restaurant (ownership from `restaurant_admin_id` on its orders' facts, else
   from restaurant-service, app/owners.py).
 - `GET /v1/analytics/peak-hours` — system admin: orders per hour of day.
+- `GET /v1/analytics/ai` — system admin: the Part B PDF's AI metrics
+  (app/ai_queries.py, docs/week5-plan.md step 6).
 
 Failed notification sends aren't here: they live only in
 notification-service, and are on the Grafana dashboards (Prometheus)."""
@@ -18,7 +20,7 @@ from fastapi import APIRouter, Depends, Query
 from sfo_auth import CurrentUser, Role
 from sfo_common.errors import ForbiddenError, NotFoundError, ValidationAppError
 
-from app import mongo, owners, queries
+from app import ai_queries, mongo, owners, queries
 from app.auth_deps import require_roles
 from app.config import settings
 from app.queries import Window
@@ -120,3 +122,13 @@ async def peak_hours(
         "timezone": settings.analytics_timezone,
         "peak_hours": await queries.peak_hours(mongo.db, window, settings.analytics_timezone),
     }
+
+
+@router.get("/ai")
+async def ai(
+    window: Window = Depends(_window),
+    _: CurrentUser = Depends(require_roles(Role.SYSTEM_ADMIN)),
+) -> dict:
+    """Usage, questions asked / answered, order conversion after AI,
+    recommendation acceptance, response time and engagement."""
+    return {"window": _window_body(window), **await ai_queries.ai_metrics(mongo.db, window)}

@@ -180,6 +180,7 @@ async def create_order(
         delivery_lng=body.delivery_lng,
         special_instructions=body.special_instructions,
         promo_code=body.promo_code,
+        ai_interaction_id=body.ai_interaction_id,
         payment_method=body.payment_method,
         subtotal=subtotal,
         total_amount=subtotal,
@@ -213,6 +214,7 @@ async def create_order(
                     "items": [
                         {"menu_item_id": i.menu_item_id, "quantity": i.quantity} for i in items
                     ],
+                    "ai_interaction_id": order.ai_interaction_id,
                 },
                 correlation_id=get_correlation_id() or None,
             )

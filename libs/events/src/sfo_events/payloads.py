@@ -43,6 +43,10 @@ class OrderPlacedPayload(EventPayload):
     restaurant_admin_id: str | None
     total_amount: Decimal
     items: list[OrderItemRef]
+    # The AI assistant answer the order was placed from, if any
+    # (week5-plan step 6: recommendation acceptance). Optional: older events
+    # and orders placed without the assistant have none.
+    ai_interaction_id: str | None = None
 
 
 class OrderLine(EventPayload):
@@ -235,6 +239,38 @@ class ReviewSubmittedPayload(EventPayload):
     source_version: int
 
 
+class AiInteractionRecordedPayload(EventPayload):
+    """One AI interaction (week5-plan step 6): a chat turn, an order
+    explanation or a content generation. Metadata only — never the
+    customer's words or the answer (B5-D8)."""
+
+    interaction_id: str
+    user_id: str
+    kind: str  # chat / order_explain / content
+    intent: str | None
+    status: str  # answered / refused / degraded / interrupted / error
+    conversation_id: str | None = None
+    restaurant_id: str | None = None  # content: whose
+    shown_item_ids: list[str] = []  # dish cards shown (chat)
+    shown_restaurant_ids: list[str] = []
+    latency_ms: int | None = None
+    first_output_ms: int | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_usd: Decimal = Decimal(0)
+    model: str = ""
+
+
+class ContentDraftDecidedPayload(EventPayload):
+    """A restaurant owner accepted or rejected an AI content draft."""
+
+    draft_id: str
+    restaurant_id: str
+    owner_id: str
+    kind: str
+    decision: Literal["accepted", "rejected"]
+
+
 PAYLOAD_MODELS: dict[EventType, type[EventPayload]] = {
     EventType.ORDER_PLACED: OrderPlacedPayload,
     EventType.ORDER_AWAITING_RESTAURANT: OrderTransitionPayload,
@@ -255,6 +291,8 @@ PAYLOAD_MODELS: dict[EventType, type[EventPayload]] = {
     EventType.MENU_ITEM_UPSERTED: MenuItemUpsertedPayload,
     EventType.MENU_ITEM_DELETED: MenuItemDeletedPayload,
     EventType.REVIEW_SUBMITTED: ReviewSubmittedPayload,
+    EventType.AI_INTERACTION_RECORDED: AiInteractionRecordedPayload,
+    EventType.CONTENT_DRAFT_DECIDED: ContentDraftDecidedPayload,
 }
 
 

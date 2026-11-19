@@ -154,6 +154,30 @@ SAMPLE_PAYLOADS: dict[EventType, dict[str, Any]] = {
         "review_count": 21,
         "source_version": 10,
     },
+    EventType.AI_INTERACTION_RECORDED: {
+        "interaction_id": "ai-1",
+        "user_id": "cust-1",
+        "kind": "chat",
+        "intent": "recommend_dishes",
+        "status": "answered",
+        "conversation_id": "conv-1",
+        "restaurant_id": None,
+        "shown_item_ids": ["item-1", "item-2"],
+        "shown_restaurant_ids": [],
+        "latency_ms": 4800,
+        "first_output_ms": 3600,
+        "input_tokens": 5300,
+        "output_tokens": 700,
+        "cost_usd": Decimal("0.0021"),
+        "model": "claude-sonnet-5-5",
+    },
+    EventType.CONTENT_DRAFT_DECIDED: {
+        "draft_id": "draft-1",
+        "restaurant_id": "rest-1",
+        "owner_id": "radmin-1",
+        "kind": "promotion",
+        "decision": "accepted",
+    },
 }
 
 

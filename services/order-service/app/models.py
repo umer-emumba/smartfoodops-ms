@@ -102,6 +102,10 @@ class Order(Base):
     delivery_fee: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
     discount_amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
     promo_code: Mapped[str | None] = mapped_column(String, nullable=True)
+    # The AI assistant answer the customer ordered from, if any (sent by the
+    # app; week5-plan step 6). Passed on in OrderPlaced for analytics'
+    # recommendation acceptance; not checked against ai-service.
+    ai_interaction_id: Mapped[str | None] = mapped_column(String, nullable=True)
     total_amount: Mapped[Decimal] = mapped_column(Numeric(10, 2))
     payment_method: Mapped[str] = mapped_column(String, default="card_simulated")
     # Post-delivery refunds (week2-plan D13). The order stays `delivered`; a

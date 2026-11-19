@@ -59,6 +59,13 @@ for them, and checks each is well-formed and true to the restaurant's data;
 accepts a menu description (the item changes, then is put back) and a
 promotion (it is created, then deleted), rejects a message; a customer gets
 403. Needs ai-worker and an LLM: ~6–8 LLM calls.
+
+--ai-analytics (docs/week5-plan.md step 6) makes AI activity through the API
+— a chat answer with dishes, an order placed from one of its dish cards
+(tagged with the answer), that order's explanation — then checks
+GET /v1/analytics/ai for the time since the run started against direct
+counts in ai-db and order-db (local stack: reads both with psql). The order
+is cancelled afterwards. ~5 LLM calls.
 """
 
 import argparse
@@ -1021,6 +1028,123 @@ def content(base_url: str) -> None:
         check("a customer gets 403", r.status_code == 403, r.status_code)
 
 
+def ai_analytics(base_url: str) -> None:
+    with httpx.Client(base_url=base_url, timeout=15, transport=_WaitOutRateLimit()) as c:
+        admin = bearer(login(c, ADMIN)["access_token"])
+        customer = bearer(login(c, CUSTOMER)["access_token"])
+        start = datetime.now(UTC) - timedelta(seconds=2)
+
+        section("AI analytics: make some AI activity")
+        dishes: list[dict[str, Any]] = []
+        answer: dict[str, Any] = {}
+        for question in ("something mild with chicken, under Rs 1500", "biryani for one"):
+            events = _chat(c, customer, {"message": question})
+            answer = events[-1][1] if events and events[-1][0] == "done" else {}
+            dishes = next((d["dishes"] for k, d in events if k == "cards"), [])
+            if dishes:
+                break
+        check("a chat answer with dish cards", bool(dishes) and bool(answer), answer)
+        if not dishes:
+            return
+        card = dishes[0]
+        rest = c.get(f"/v1/restaurants/{card['restaurant_id']}").json()
+        r = c.post(
+            "/v1/orders",
+            headers={**customer, "Idempotency-Key": str(uuid.uuid4())},
+            json={
+                "restaurant_id": card["restaurant_id"],
+                "delivery_address_text": "1 Analytics Avenue",
+                "delivery_lat": rest["lat"] + 0.01,
+                "delivery_lng": rest["lng"] + 0.01,
+                "items": [{"menu_item_id": card["item_id"], "quantity": 1}],
+                "ai_interaction_id": answer["interaction_id"],
+            },
+        )
+        order_id = r.json().get("id") if r.status_code == 201 else None
+        check(
+            "an order placed from a dish card, tagged with the answer",
+            order_id is not None and r.json().get("ai_interaction_id") == answer["interaction_id"],
+            (r.status_code, r.text[:200]),
+        )
+        try:
+            if order_id:
+                explained = _get_sse(c, f"/v1/ai/orders/{order_id}/explain", customer)
+                check("that order explained", explained[-1][0] == "done", explained[-1:])
+
+            section("AI analytics: the numbers match ai-db and order-db")
+
+            def metrics() -> dict[str, Any]:
+                return c.get(
+                    "/v1/analytics/ai", headers=admin, params={"from": start.isoformat()}
+                ).json()
+
+            def arrived() -> dict[str, Any] | None:
+                m = metrics()
+                done = (
+                    m["usage"]["chat_turns"] >= 1
+                    and m["usage"]["order_explanations"] >= 1
+                    and m["conversion"]["orders_from_ai_answers"] >= 1
+                )
+                return m if done else None
+
+            deadline, m = time.monotonic() + 45, None
+            while time.monotonic() < deadline and (m := arrived()) is None:
+                time.sleep(1)
+            check("events reached analytics (outbox → Kafka → Mongo)", m is not None)
+            if m is None:
+                return
+            since = start.isoformat()
+            ai_db = compose(
+                'ai-db psql -U postgres -d ai_db -tAc "select '
+                "count(*) filter (where kind='chat'), "
+                "count(*) filter (where kind='order_explain'), "
+                "count(*) filter (where kind='chat' and status='answered') "
+                f"from ai_interactions where created_at >= '{since}'\""
+            ).split("|")
+            tagged = compose(
+                'order-db psql -U postgres -d order_db -tAc "select count(*) from orders '
+                f"where ai_interaction_id is not null and created_at >= '{since}'\""
+            )
+            chat_n, explain_n, answered_n = (int(x) for x in ai_db)
+            check(
+                "chat turns = ai-db",
+                m["usage"]["chat_turns"] == chat_n,
+                (m["usage"]["chat_turns"], chat_n),
+            )
+            check(
+                "order explanations = ai-db",
+                m["usage"]["order_explanations"] == explain_n,
+                (m["usage"]["order_explanations"], explain_n),
+            )
+            check(
+                "questions answered = ai-db",
+                m["questions"]["answered"] == answered_n,
+                (m["questions"]["answered"], answered_n),
+            )
+            check(
+                "orders from AI answers = order-db",
+                m["conversion"]["orders_from_ai_answers"] == int(tagged),
+                (m["conversion"]["orders_from_ai_answers"], tagged),
+            )
+            rec = m["recommendations"]
+            check(
+                "the ordered dish card counts as accepted",
+                rec["dish_cards_ordered"] >= 1 and rec["acceptance_rate"] is not None,
+                rec,
+            )
+            check("response time measured", m["response_time"]["chat"]["mean_ms"] is not None)
+            print(
+                f"        {json.dumps({k: m[k] for k in ('questions', 'recommendations')})[:300]}"
+            )
+
+            section("AI analytics: access")
+            denied = c.get("/v1/analytics/ai", headers=customer)
+            check("customers can't read it", denied.status_code == 403, denied.status_code)
+        finally:
+            if order_id:
+                c.post(f"/v1/orders/{order_id}/cancel", headers=customer, json={})
+
+
 def lifecycle(base_url: str, deep: bool) -> None:
     with httpx.Client(base_url=base_url, timeout=15, transport=_WaitOutRateLimit()) as c:
         lc = _Lifecycle(c, base_url, deep)
@@ -1441,6 +1565,11 @@ def main() -> None:
         help="also check the search index follows catalog edits (local stack only)",
     )
     parser.add_argument(
+        "--ai-analytics",
+        action="store_true",
+        help="also check the AI metrics against ai-db and order-db (local stack only)",
+    )
+    parser.add_argument(
         "--content",
         action="store_true",
         help="also generate the five kinds of restaurant content (needs ai-worker)",
@@ -1470,6 +1599,8 @@ def main() -> None:
             explain(args.base_url)
         if args.content:
             content(args.base_url)
+        if args.ai_analytics:
+            ai_analytics(args.base_url)
     except httpx.ConnectError:
         sys.exit(f"Can't reach {args.base_url} — is `docker compose up` running?")
     failed = [name for name, ok in _results if not ok]

@@ -24,7 +24,7 @@ from sfo_common.errors import ConflictError, ForbiddenError, NotFoundError, Vali
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app import metrics
+from app import events, metrics
 from app.config import settings
 from app.content import data
 from app.content.kinds import KINDS, FeedbackBatchOut, batch_messages, batches
@@ -151,8 +151,18 @@ async def _decide(
         )
         if result.first() is None:
             raise ConflictError("This draft isn't waiting for a decision")
-        await session.commit()
         draft = await session.get(ContentDraft, draft_id)
+        assert draft is not None
+        session.add(
+            events.content_decided(
+                draft_id=draft.id,
+                restaurant_id=draft.restaurant_id,
+                owner_id=draft.requested_by,
+                kind=draft.kind,
+                decision=str(status),
+            )
+        )
+        await session.commit()
     assert draft is not None
     metrics.CONTENT_DRAFTS.labels(draft.kind, str(status)).inc()
     return draft
@@ -338,6 +348,7 @@ async def _save(
         )
         session.add(row)
         await session.flush()
+        session.add(events.interaction_recorded(row, restaurant_id=draft.restaurant_id))
         interaction_id = row.id
         await session.execute(
             update(ContentDraft)

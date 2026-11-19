@@ -16,6 +16,7 @@ from enum import StrEnum
 from typing import Any
 
 from sfo_common import new_id
+from sfo_events.outbox import OutboxEventMixin
 from sqlalchemy import (
     JSON,
     DateTime,
@@ -28,6 +29,7 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.sql import text
 
 from app.db import Base
 
@@ -166,7 +168,23 @@ class ContentDraft(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
+class OutboxEvent(Base, OutboxEventMixin):
+    """ai-service's events for analytics (docs/week5-plan.md step 6),
+    written in the same transaction as the interaction or decision they
+    describe; ai-worker relays them to `ai-events` (sfo_events.relay)."""
+
+    __tablename__ = "outbox_events"
+    __table_args__ = (
+        Index(
+            "ix_outbox_events_undispatched",
+            "created_at",
+            postgresql_where=text("dispatched_at IS NULL"),
+        ),
+    )
+
+
 __all__ = [
+    "OutboxEvent",
     "ContentDraft",
     "ContentKind",
     "DraftStatus",

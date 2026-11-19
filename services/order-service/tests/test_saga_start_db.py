@@ -56,7 +56,7 @@ def restaurant(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(restaurant_client, "get_quote", get_quote)
 
 
-async def _place_order(key: str | None = None) -> Any:
+async def _place_order(key: str | None = None, **extra: Any) -> Any:
     token = make_test_token(
         user_id="u-customer", role=Role.CUSTOMER, jwks_url=settings.jwt_jwks_url, ttl_minutes=5
     )
@@ -75,6 +75,7 @@ async def _place_order(key: str | None = None) -> Any:
                 "promo_code": "WELCOME10",
                 "payment_method": "card_simulated_decline",
                 "items": [{"menu_item_id": "m-1", "quantity": 2}],
+                **extra,
             },
         )
 
@@ -137,3 +138,34 @@ async def test_reconciler_starts_sagas_for_stranded_orders_only(
     assert await reconciler.reconcile_once(object()) == 1  # type: ignore[arg-type]
     assert [s.order_id for s in started] == [stranded.id]
     assert await reconciler.count_abandoned() == 1
+
+
+async def test_an_order_from_an_ai_answer_carries_its_id_in_order_placed(
+    session_factory: Factory, restaurant: None, started: list
+) -> None:
+    """Recommendation acceptance (week5-plan step 6): the app sends the
+    assistant interaction the order came from; OrderPlaced passes it on."""
+    from app.models import OutboxEvent
+    from sqlalchemy import select
+
+    resp = await _place_order(ai_interaction_id="ai-42")
+    assert resp.status_code == 201 and resp.json()["ai_interaction_id"] == "ai-42"
+    async with session_factory() as s:
+        row = (
+            await s.scalars(
+                select(OutboxEvent).where(
+                    OutboxEvent.aggregate_id == resp.json()["id"],
+                    OutboxEvent.event_type == "OrderPlaced",
+                )
+            )
+        ).one()
+    assert row.payload["ai_interaction_id"] == "ai-42"
+    # Without it: null, as on every older event.
+    plain = await _place_order()
+    async with session_factory() as s:
+        row = (
+            await s.scalars(
+                select(OutboxEvent).where(OutboxEvent.aggregate_id == plain.json()["id"])
+            )
+        ).one()
+    assert row.payload["ai_interaction_id"] is None

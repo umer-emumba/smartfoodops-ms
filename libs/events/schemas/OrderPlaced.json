@@ -22,6 +22,18 @@
     "OrderPlacedPayload": {
       "additionalProperties": false,
       "properties": {
+        "ai_interaction_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ai Interaction Id"
+        },
         "customer_id": {
           "title": "Customer Id",
           "type": "string"

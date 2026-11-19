@@ -88,7 +88,7 @@ async def sessions(migrated_database: str) -> AsyncIterator:
         await conn.execute(
             text(
                 "TRUNCATE ai_interactions, conversation_turns, conversations, "
-                "content_drafts CASCADE"
+                "content_drafts, outbox_events CASCADE"
             )
         )
     yield async_sessionmaker(engine, expire_on_commit=False)

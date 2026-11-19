@@ -32,7 +32,7 @@ from sfo_common.errors import ConflictError, NotFoundError
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app import metrics
+from app import events, metrics
 from app.assistant.graph import Deps, TurnState, graph
 from app.config import settings
 from app.llm import LLMError, map_errors, usage_scope
@@ -353,6 +353,15 @@ async def _save(
             rejections=final.get("rejections") or None,
         )
         session.add(interaction)
+        await session.flush()
+        # Same transaction: the analytics event can't be lost or invented.
+        session.add(
+            events.interaction_recorded(
+                interaction,
+                shown_item_ids=[c.item_id for c in final.get("dishes", [])],
+                shown_restaurant_ids=[r.restaurant_id for r in final.get("restaurants", [])],
+            )
+        )
         await session.commit()
         return interaction.id
 

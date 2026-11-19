@@ -31,6 +31,8 @@ from sfo_events.kafka import (
     header_value,
 )
 from sfo_events.payloads import (
+    AiInteractionRecordedPayload,
+    ContentDraftDecidedPayload,
     DeliveryStatusUpdatedPayload,
     OrderPlacedPayload,
     OrderTransitionPayload,
@@ -40,7 +42,13 @@ from sfo_events.payloads import (
 from sfo_events.reasons import reason_code, reason_label
 
 from app import business_metrics as m
-from app.mongo import FAILED_EVENTS, ORDER_FACTS, RIDER_SHIFT_FACTS
+from app.mongo import (
+    AI_CONTENT_DECISIONS,
+    AI_INTERACTIONS,
+    FAILED_EVENTS,
+    ORDER_FACTS,
+    RIDER_SHIFT_FACTS,
+)
 
 # The milestone each order event records.
 ORDER_MILESTONES: dict[EventType, str] = {
@@ -88,6 +96,11 @@ async def _order_event(
         "restaurant_id": p.restaurant_id,
         "restaurant_admin_id": p.restaurant_admin_id,
     }
+    if isinstance(p, OrderPlacedPayload):
+        # What was ordered, and from which AI answer if any (step 6:
+        # recommendation acceptance, conversion).
+        fields["item_ids"] = [i.menu_item_id for i in p.items]
+        fields["ai_interaction_id"] = p.ai_interaction_id
     if isinstance(p, OrderTransitionPayload):
         # OrderPlaced's total is the pre-pricing subtotal; later events
         # carry the final one.
@@ -164,11 +177,30 @@ async def _shift(db: AsyncDatabase, event: DomainEvent, p: RiderShiftChangedPayl
         m.RIDER_SHIFT_CHANGES.labels(str(p.on_shift).lower()).inc()
 
 
+async def _ai_interaction(
+    db: AsyncDatabase, event: DomainEvent, p: AiInteractionRecordedPayload
+) -> None:
+    """Facts only: written once (a replay changes nothing)."""
+    doc = p.model_dump(exclude={"interaction_id"})
+    doc["cost_usd"] = _decimal(p.cost_usd)
+    doc["at"] = event.occurred_at
+    await _upsert(db, AI_INTERACTIONS, p.interaction_id, {"$setOnInsert": doc})
+
+
+async def _content_decided(
+    db: AsyncDatabase, event: DomainEvent, p: ContentDraftDecidedPayload
+) -> None:
+    doc = p.model_dump(exclude={"draft_id"}) | {"at": event.occurred_at}
+    await _upsert(db, AI_CONTENT_DECISIONS, p.draft_id, {"$setOnInsert": doc})
+
+
 _HANDLERS: dict[EventType, Callable[[AsyncDatabase, DomainEvent, Any], Awaitable[None]]] = {
     **dict.fromkeys(ORDER_MILESTONES, _order_event),
     EventType.DELIVERY_STATUS_UPDATED: _delivery_event,
     EventType.REFUND_PROCESSED: _refund,
     EventType.RIDER_SHIFT_CHANGED: _shift,
+    EventType.AI_INTERACTION_RECORDED: _ai_interaction,
+    EventType.CONTENT_DRAFT_DECIDED: _content_decided,
     # PaymentSuccessful: no metric needs it.
 }
 

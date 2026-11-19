@@ -240,7 +240,7 @@ services:
     command:
       - |
         set -e
-        for topic in order-events delivery-events payment-events restaurant-events; do
+        for topic in order-events delivery-events payment-events restaurant-events ai-events; do
           for name in "$$topic" "$$topic.dlq"; do
             kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists \
               --topic "$$name" --partitions 3 --replication-factor 1 \
@@ -248,7 +248,7 @@ services:
           done
         done
         kafka-topics --bootstrap-server kafka:9092 --describe \
-          --topic 'order-events|delivery-events|payment-events|restaurant-events' \
+          --topic 'order-events|delivery-events|payment-events|restaurant-events|ai-events' \
           --exclude-internal
 
   schema-registry:

@@ -16,6 +16,9 @@ class Topic(StrEnum):
     DELIVERY = "delivery-events"
     PAYMENT = "payment-events"
     RESTAURANT = "restaurant-events"
+    # ai-service's interactions and content decisions (docs/week5-plan.md
+    # step 6), keyed by user_id; consumed by analytics-service.
+    AI = "ai-events"
 
 
 def dlq_topic(topic: str) -> str:
@@ -43,6 +46,8 @@ class EventType(StrEnum):
     MENU_ITEM_UPSERTED = "MenuItemUpserted"
     MENU_ITEM_DELETED = "MenuItemDeleted"
     REVIEW_SUBMITTED = "ReviewSubmitted"
+    AI_INTERACTION_RECORDED = "AiInteractionRecorded"
+    CONTENT_DRAFT_DECIDED = "ContentDraftDecided"
 
 
 # The topic each event is published to. RiderShiftChanged rides on
@@ -70,6 +75,8 @@ EVENT_TOPICS: dict[EventType, Topic] = {
     EventType.MENU_ITEM_UPSERTED: Topic.RESTAURANT,
     EventType.MENU_ITEM_DELETED: Topic.RESTAURANT,
     EventType.REVIEW_SUBMITTED: Topic.RESTAURANT,
+    EventType.AI_INTERACTION_RECORDED: Topic.AI,
+    EventType.CONTENT_DRAFT_DECIDED: Topic.AI,
 }
 
 

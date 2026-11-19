@@ -33,6 +33,9 @@ class OrderCreate(RequestModel):
     # Simulated card (week2-plan step 3): `card_simulated_decline` always
     # declines, so the payment-failure path can be exercised end to end.
     payment_method: PaymentMethod = "card_simulated"
+    # Set by the app when the order comes from an AI assistant answer
+    # (docs/week5-plan.md step 6).
+    ai_interaction_id: EntityId | None = None
 
 
 class RestaurantResponseRequest(RequestModel):
@@ -88,6 +91,7 @@ class OrderResponse(BaseModel):
     delivery_fee: MoneyAmount
     discount_amount: MoneyAmount
     promo_code: str | None
+    ai_interaction_id: str | None = None
     total_amount: MoneyAmount
     payment_method: str
     refunded_amount: MoneyAmount
