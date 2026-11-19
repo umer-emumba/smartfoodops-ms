@@ -195,11 +195,42 @@ class Live:
         return {i: self.load_table[i] for i in ids if i in self.load_table}
 
 
-def deps(smart: Any, fast: Any, retriever: Any = None, live: Live | None = None, **over: Any):
-    live = live or Live()
+class Orders:
+    """order/delivery/payment reads as the customer: `records` by order ID;
+    a missing ID raises NotFoundError like order-service's 404."""
+
+    def __init__(self, *records: Any, latest: str | None = None) -> None:
+        self.records = {str(r.order["id"]): r for r in records}
+        self.latest = latest if latest is not None else next(iter(self.records), None)
+        self.tokens: list[str] = []
+
+    async def record(self, token: str, order_id: str) -> Any:
+        from sfo_common.errors import NotFoundError
+
+        self.tokens.append(token)
+        if order_id not in self.records:
+            raise NotFoundError("Order not found")
+        return self.records[order_id]
+
+    async def latest_order(self, token: str) -> str | None:
+        self.tokens.append(token)
+        return self.latest
+
+
+def deps(
+    smart: Any,
+    fast: Any,
+    retriever: Any = None,
+    live: Live | None = None,
+    orders: Orders | None = None,
+    **over: Any,
+):
+    live, orders = live or Live(), orders or Orders()
     return Deps(
         llm=llm(smart, fast, **over),
         retriever=retriever or FakeRetriever(),  # type: ignore[arg-type]
         quotes=live.quotes,
         loads=live.loads,
+        orders=orders.record,
+        latest_order=orders.latest_order,
     )

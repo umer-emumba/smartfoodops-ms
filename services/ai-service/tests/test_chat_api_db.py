@@ -221,3 +221,63 @@ async def test_a_failure_mid_answer_ends_with_an_error_event(use, sessions) -> N
         row = (await s.scalars(select(Interaction))).one()
         conversation = (await s.scalars(select(Conversation))).one()
     assert row.status == "error" and conversation.busy_until is None
+
+
+# --- GET /v1/ai/orders/{id}/explain (step 4) ---
+
+
+def _late_order() -> Any:
+    from app.order_client import OrderRecord
+
+    due = (datetime.now(UTC) - timedelta(minutes=12)).isoformat()
+    order = {
+        "id": "o-9",
+        "order_number": 77,
+        "restaurant_id": "r-1",
+        "status": "confirmed",
+        "total_amount": "900.00",
+        "refunded_amount": "0",
+        "created_at": due,
+    }
+    return OrderRecord(order, {"ready_at": due}, None)
+
+
+async def _explain(order_id: str, headers: dict[str, str] | None = None):
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        return await c.get(
+            f"/v1/ai/orders/{order_id}/explain", headers=_as() if headers is None else headers
+        )
+
+
+async def test_an_order_explanation_streams_facts_then_words(use, sessions) -> None:
+    from tests.assistant_fakes import Orders
+
+    orders = Orders(_late_order())
+    fast = chat(text="Sorry, order #77 is 12 minutes late in the kitchen.")
+    use(deps(chat(), fast, orders=orders))
+    resp = await _explain("o-9")
+    assert resp.status_code == 200
+    events = _events(resp.text)
+    kinds = [k for k, _ in events]
+    assert kinds[0] == "status" and kinds[-1] == "done"
+    assert kinds.index("facts") < kinds.index("token")
+    assert events[-1][1]["situation"] == "kitchen_late"
+    text = "".join(d["text"] for k, d in events if k == "token")
+    assert text == "Sorry, order #77 is 12 minutes late in the kitchen."
+    async with sessions() as s:
+        row = (await s.scalars(select(Interaction))).one()
+    assert row.kind == "order_explain" and row.status == "answered"
+    assert row.prompt_version == "assistant_rules@v1,order_explain@v1"
+    assert orders.tokens and all(t for t in orders.tokens)  # read with the caller's token
+
+
+async def test_explaining_an_order_you_cant_see_is_404(use) -> None:
+    from tests.assistant_fakes import Orders
+
+    use(deps(chat(), chat(), orders=Orders()))
+    assert (await _explain("o-someone-elses")).status_code == 404
+
+
+async def test_order_explanations_are_for_customers(use) -> None:
+    assert (await _explain("o-9", headers={})).status_code == 401
+    assert (await _explain("o-9", _as("r-1", Role.RESTAURANT_ADMIN))).status_code == 403

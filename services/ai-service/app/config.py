@@ -55,6 +55,12 @@ class Settings(BaseServiceSettings, KafkaConsumerSettings):
     # Where the backfill reads from (app/reindex.py) — internal endpoints.
     restaurant_service_url: str = "http://restaurant-service:8000"
     order_service_url: str = "http://order-service:8000"
+    # Order explanations read these public APIs as the customer (step 4).
+    delivery_service_url: str = "http://delivery-service:8000"
+    payment_service_url: str = "http://payment-service:8000"
+    order_facts_timeout_seconds: float = 3.0
+    # Times in explanations are shown in Pakistan time (no daylight saving).
+    display_utc_offset_hours: float = 5.0
     # Restaurant suggestions read kitchen load live (app/restaurant_client.py); past
     # this they rank without it rather than wait.
     kitchen_load_timeout_seconds: float = 1.0

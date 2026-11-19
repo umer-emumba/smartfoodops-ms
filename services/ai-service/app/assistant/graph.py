@@ -38,9 +38,12 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.runtime import Runtime
 from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedResponse
+from sfo_common.errors import AppError
 
-from app import metrics
+from app import metrics, order_client
 from app.assistant import check as checks
+from app.assistant.order_facts import diagnose
+from app.assistant.order_words import CORRECT_FALLBACKS, chunks, facts_event, word
 from app.assistant.schemas import (
     Constraints,
     DishCard,
@@ -51,6 +54,7 @@ from app.assistant.schemas import (
 )
 from app.config import settings
 from app.llm import LLM, LLMError, map_errors
+from app.order_client import OrderRecord
 from app.prompts import fence, load
 from app.restaurant_client import LiveRestaurant
 from app.retrieval import Filters, Hit, Load, Retriever
@@ -74,6 +78,7 @@ CANNED = {
         "it explains that order from its live details."
     ),
 }
+NO_ORDERS = "I can't find any orders on your account yet."
 SEARCH_DOWN = "Search is unavailable right now. Please try again in a minute."
 
 
@@ -85,6 +90,9 @@ class Deps:
     retriever: Retriever
     quotes: Callable[[dict[str, list[str]]], Awaitable[dict[str, LiveRestaurant]]]
     loads: Callable[[Sequence[str]], Awaitable[dict[str, Load]]]
+    # Order explanations (step 4): read as the customer, with their token.
+    orders: Callable[[str, str], Awaitable[OrderRecord]] = order_client.record
+    latest_order: Callable[[str], Awaitable[str | None]] = order_client.latest_order_id
 
 
 class TurnState(TypedDict, total=False):
@@ -95,6 +103,9 @@ class TurnState(TypedDict, total=False):
     summary: str  # older turns, folded
     previous: dict[str, Any] | None  # meta of the last assistant turn
     page_restaurant_id: str | None
+    # The customer's bearer token, for reading their orders as them (order
+    # help). In memory for the turn only: never stored or sent to a model.
+    auth_token: str | None
     lat: float | None
     lng: float | None
     # Built along the way.
@@ -223,19 +234,61 @@ async def understand(state: TurnState, runtime: Runtime[Deps]) -> dict[str, Any]
 
 def route(state: TurnState) -> str:
     intent = state["understanding"].intent
+    if intent == "order_help" and state.get("auth_token"):
+        return "order_help"
     if intent in CANNED:
         return "reply"
     return "retrieve"
 
 
 async def reply(state: TurnState) -> dict[str, Any]:
-    """Greeting, out of scope, order help (until step 4 wires order
-    explanations in): fixed words, no model, no search."""
+    """Greeting, out of scope (and order help without a token, e.g. the
+    CLI): fixed words, no model, no search."""
     intent = state["understanding"].intent
     text = CANNED[intent]
     _emit({"type": "token", "text": text})
     status: TurnStatus = "refused" if intent == "out_of_scope" else "answered"
     return {"text": text, "status": status, "dishes": [], "restaurants": []}
+
+
+async def order_help(state: TurnState, runtime: Runtime[Deps]) -> dict[str, Any]:
+    """ "Where is my order?": the customer's latest order, explained the same
+    way as `GET /v1/ai/orders/{id}/explain` — facts and reason from code,
+    wording from the model, numbers checked (step 4)."""
+    _status("checking_order")
+    deps, token = runtime.context, state.get("auth_token") or ""
+    order_id = await deps.latest_order(token)
+    if order_id is None:
+        _emit({"type": "token", "text": NO_ORDERS})
+        return {"text": NO_ORDERS, "status": "answered", "dishes": [], "restaurants": []}
+    try:
+        record = await deps.orders(token, order_id)
+    except AppError as exc:
+        logger.warning("order help couldn't read the order: %s", exc)
+        text = CANNED["order_help"]
+        _emit({"type": "token", "text": text})
+        return {
+            "text": text,
+            "status": "degraded",
+            "degraded_reason": "orders_unavailable",
+            "dishes": [],
+            "restaurants": [],
+        }
+    load = None
+    if record.order.get("status") in ("confirmed", "assigned"):
+        rid = str(record.order["restaurant_id"])
+        load = (await deps.loads([rid])).get(rid)
+    d = diagnose(record.order, record.delivery, record.payment, load)
+    _emit(facts_event(d))
+    _status("writing")
+    text, fallback = await word(d, deps.llm)
+    for piece in chunks(text):
+        _emit({"type": "token", "text": piece})
+    out: dict[str, Any] = {"text": text, "dishes": [], "restaurants": []}
+    out["status"] = "answered" if fallback in CORRECT_FALLBACKS else "degraded"
+    if fallback not in CORRECT_FALLBACKS:
+        out["degraded_reason"] = fallback
+    return out
 
 
 # --- retrieve ---
@@ -664,6 +717,7 @@ def build() -> CompiledStateGraph[TurnState, Deps, TurnState, TurnState]:
     g = StateGraph(TurnState, context_schema=Deps)
     g.add_node("understand", understand)
     g.add_node("reply", reply)
+    g.add_node("order_help", order_help)
     g.add_node("retrieve", retrieve)
     g.add_node("search_down", search_down)
     g.add_node("nothing", nothing)
@@ -671,11 +725,11 @@ def build() -> CompiledStateGraph[TurnState, Deps, TurnState, TurnState]:
     g.add_node("check", check)
     g.add_node("explain", explain)
     g.add_edge(START, "understand")
-    g.add_conditional_edges("understand", route, ["reply", "retrieve"])
+    g.add_conditional_edges("understand", route, ["reply", "order_help", "retrieve"])
     g.add_conditional_edges("retrieve", after_retrieve, ["search_down", "nothing", "pick"])
     g.add_edge("pick", "check")
     g.add_conditional_edges("check", after_check, ["pick", "explain"])
-    for last in ("reply", "search_down", "nothing", "explain"):
+    for last in ("reply", "order_help", "search_down", "nothing", "explain"):
         g.add_edge(last, END)
     return g.compile()
 

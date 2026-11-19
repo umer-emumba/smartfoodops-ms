@@ -22,7 +22,7 @@ import contextlib
 import logging
 import time
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any, cast
@@ -66,6 +66,9 @@ class ChatRequest:
     restaurant_id: str | None = None
     lat: float | None = None
     lng: float | None = None
+    # The caller's bearer token: order help reads their orders as them.
+    # Never stored.
+    token: str | None = field(default=None, repr=False)
 
 
 @dataclass
@@ -153,8 +156,8 @@ class Turn:
     req: ChatRequest
     message: str  # trimmed and redacted
     conversation_id: str
-    state: TurnState
-    started: float
+    state: TurnState = field(repr=False)  # carries the caller's token
+    started: float = 0.0
 
 
 async def start_turn(req: ChatRequest, sessions: async_sessionmaker[AsyncSession]) -> Turn:
@@ -176,6 +179,7 @@ async def start_turn(req: ChatRequest, sessions: async_sessionmaker[AsyncSession
         "page_restaurant_id": req.restaurant_id,
         "lat": req.lat,
         "lng": req.lng,
+        "auth_token": req.token,
     }
     return Turn(req, message, conversation_id, state, started)
 

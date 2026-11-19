@@ -23,6 +23,7 @@ ACTIVE: dict[str, int] = {
     "pick": 2,
     "explain": 1,
     "summarize": 1,
+    "order_explain": 1,
 }
 
 

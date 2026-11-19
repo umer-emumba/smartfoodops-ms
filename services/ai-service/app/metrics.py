@@ -67,6 +67,13 @@ ASSISTANT_FIRST_OUTPUT = Histogram(
     "(target p95 < 4 s, docs/week5-plan.md §3)",
     buckets=(0.25, 0.5, 1, 2, 3, 4, 6, 8, 12, 20, 40, 90),
 )
+ORDER_EXPLANATIONS = Counter(
+    "ai_order_explanations_total",
+    "Order explanations by how they were worded: worded (model, passed the number "
+    "guard), number_guard (model added a number not in the facts: code's text), "
+    "llm_failed, no_llm",
+    ["outcome"],
+)
 ASSISTANT_MADE_UP_IDS = Counter(
     "ai_assistant_made_up_ids_total",
     "IDs the model picked that weren't among its candidates (caught by the check)",

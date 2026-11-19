@@ -43,10 +43,20 @@ done, every card is a real, available catalog item at its current price, a
 follow-up continues the same conversation, a second message while the first
 is answering gets 409, and time to first output is measured. Works without
 an LLM too (degraded answers); with one it makes ~10 LLM calls.
+
+--explain (docs/week5-plan.md step 4) makes orders in each state through
+the API — delivered then partly refunded, declined by the restaurant,
+payment declined, cancelled by the customer, and kept in the kitchen past
+its ready time (prep time set to 1 minute, riders off shift, ~2 minutes) —
+and asks GET /v1/ai/orders/{id}/explain for each: the situation and facts
+must match what happened (decided in code, so this holds for any model),
+and every number in the words must be in the facts. ~5 LLM calls. Puts
+back the prep time, riders and any open order.
 """
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 import threading
@@ -54,6 +64,8 @@ import time
 import uuid
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 import httpx
@@ -747,6 +759,142 @@ class _Lifecycle:
         self.on_shift()
 
 
+class _Explain(_Lifecycle):
+    def explained(self, oid: str, situation: str, fact: str) -> None:
+        events = _get_sse(self.c, f"/v1/ai/orders/{oid}/explain", self.customer)
+        kinds = [k for k, _ in events]
+        facts = next((d for k, d in events if k == "facts"), {})
+        done = events[-1][1] if events and events[-1][0] == "done" else {}
+        text = "".join(d["text"] for k, d in events if k == "token")
+        check(
+            f"explained as {situation}",
+            done.get("situation") == situation and kinds[0] == "status" and bool(text),
+            done.get("situation") or kinds[-1:],
+        )
+        check(
+            f"facts say: {fact}", any(fact in f for f in facts.get("facts", [])), facts.get("facts")
+        )
+        allowed = _numbers(" ".join([*facts.get("facts", []), f"#{facts.get('order_number')}"]))
+        extra = _numbers(text) - allowed
+        check(
+            "every number in the words is in the facts",
+            not extra or done.get("status") != "answered",
+            extra,
+        )
+        print(f'        "{text[:150]}"')
+
+    def run(self) -> None:
+        def delivered_then_refunded() -> None:
+            oid = self.accepted_order()
+            offer = self.offer(self.rider1)
+            self.rider_act(self.rider1, offer["delivery_id"], "accept")
+            self.wait_status(oid, "assigned")
+            self.deliver(self.rider1, oid, offer["delivery_id"])
+            self.c.post(
+                f"/v1/orders/{oid}/refund",
+                headers=self.admin,
+                json={"amount": "5.00", "reason": "Cold"},
+            ).raise_for_status()
+            self.wait(lambda: self.order(oid)["refunded_at"], "refund recorded")
+            self.explained(oid, "refunded", "a partial refund of Rs 5")
+
+        def restaurant_declines() -> None:
+            oid = self.place()
+            self.wait_status(oid, "awaiting_restaurant_acceptance")
+            self.respond(oid, "reject")
+            self.wait_status(oid, "rejected")
+            self.explained(oid, "rejected", "the restaurant declined the order")
+
+        def payment_declines() -> None:
+            oid = self.place("card_simulated_decline")
+            self.wait_status(oid, "rejected")
+            self.explained(oid, "rejected", "the payment was declined")
+
+        def customer_cancels() -> None:
+            oid = self.place()
+            self.wait_status(oid, "awaiting_restaurant_acceptance")
+            self.c.post(
+                f"/v1/orders/{oid}/cancel",
+                headers=self.customer,
+                json={"reason": "Changed my mind"},
+            )
+            self.wait_status(oid, "cancelled")
+            self.explained(oid, "cancelled", "you (the customer) cancelled it")
+
+        def kitchen_late() -> None:
+            url = f"/v1/restaurants/{self.rest['id']}"
+            prep = self.c.get(url).json()["avg_prep_time_minutes"]
+            try:
+                self.c.patch(url, headers=self.owner, json={"avg_prep_time_minutes": 1})
+                for rider in (self.rider1, self.rider2):  # nobody takes it
+                    self.c.patch("/v1/riders/me/status", headers=rider, json={"status": "offline"})
+                oid = self.accepted_order()
+                self.wait_status(oid, "confirmed")
+                ready = self.wait(lambda: self.delivery(oid).get("ready_at"), "ready_at")
+                # Late = more than a minute past ready_at (ai-service's rule).
+                # Wait on the clock: every explain call is an LLM call.
+                due = datetime.fromisoformat(ready)
+                due = due if due.tzinfo else due.replace(tzinfo=UTC)
+                late_at = due + timedelta(seconds=75)
+                wait_s = (late_at - datetime.now(UTC)).total_seconds()
+                print(f"        (waiting {max(wait_s, 0):.0f}s for the food to be late)")
+                time.sleep(max(wait_s, 0))
+                self.explained(oid, "kitchen_late", "the restaurant hasn't marked it ready yet")
+            finally:
+                self.c.patch(url, headers=self.owner, json={"avg_prep_time_minutes": prep})
+
+        self.scenario("Explain: delivered, then partly refunded", delivered_then_refunded)
+        self.scenario("Explain: the restaurant declines", restaurant_declines)
+        self.scenario("Explain: payment declined", payment_declines)
+        self.scenario("Explain: the customer cancels", customer_cancels)
+        self.scenario("Explain: the kitchen is late (~2 minutes)", kitchen_late)
+
+        section("Explain: access")
+        other = self.c.get(f"/v1/ai/orders/{self.placed[0]}/explain", headers=self.owner)
+        check(
+            "restaurant owners can't use it (customers only)",
+            other.status_code == 403,
+            other.status_code,
+        )
+        missing = self.c.get("/v1/ai/orders/nope/explain", headers=self.customer)
+        check("an unknown order is 404", missing.status_code == 404, missing.status_code)
+
+
+_NUMBER = re.compile(r"\d{1,2}:\d{2}|\d[\d,]*(?:\.\d+)?")
+
+
+def _numbers(text: str) -> set[str]:
+    """Same normalisation as ai-service's number guard."""
+    out = set()
+    for raw in _NUMBER.findall(text):
+        out.add(raw if ":" in raw else format(Decimal(raw.replace(",", "")).normalize(), "f"))
+    return out
+
+
+def _get_sse(c: httpx.Client, path: str, headers: dict[str, str]) -> list[tuple[str, Any]]:
+    events: list[tuple[str, Any]] = []
+    with c.stream("GET", path, headers=headers, timeout=120) as r:
+        if r.status_code != 200:
+            r.read()
+            return [("http", r.status_code)]
+        name = None
+        for line in r.iter_lines():
+            if line.startswith("event: "):
+                name = line[7:]
+            elif line.startswith("data: ") and name:
+                events.append((name, json.loads(line[6:])))
+    return events
+
+
+def explain(base_url: str) -> None:
+    with httpx.Client(base_url=base_url, timeout=15, transport=_WaitOutRateLimit()) as c:
+        ex = _Explain(c, base_url, deep=False)
+        try:
+            ex.run()
+        finally:
+            ex.clean_up()
+
+
 def lifecycle(base_url: str, deep: bool) -> None:
     with httpx.Client(base_url=base_url, timeout=15, transport=_WaitOutRateLimit()) as c:
         lc = _Lifecycle(c, base_url, deep)
@@ -1167,6 +1315,11 @@ def main() -> None:
         help="also check the search index follows catalog edits (local stack only)",
     )
     parser.add_argument(
+        "--explain",
+        action="store_true",
+        help="also make orders in each state and check their AI explanations (~3 minutes)",
+    )
+    parser.add_argument(
         "--assistant",
         action="store_true",
         help="also ask the AI assistant (streamed); ~10 LLM calls if one is configured",
@@ -1182,6 +1335,8 @@ def main() -> None:
             ai(args.base_url)
         if args.assistant:
             assistant(args.base_url)
+        if args.explain:
+            explain(args.base_url)
     except httpx.ConnectError:
         sys.exit(f"Can't reach {args.base_url} — is `docker compose up` running?")
     failed = [name for name, ok in _results if not ok]
