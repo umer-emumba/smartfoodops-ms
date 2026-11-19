@@ -10,6 +10,7 @@ from sfo_common.health import add_health_routes
 from sfo_observability import configure_logging, instrument_fastapi, instrument_metrics
 
 from app import qdrant, restaurant_client
+from app.api.chat import router as chat_router
 from app.api.routes import router
 from app.config import settings
 from app.db import engine
@@ -67,6 +68,7 @@ instrument_fastapi(app)
 # Grafana "Service overview" dashboard and the HighErrorRate alert.
 instrument_metrics(app)
 app.include_router(router)
+app.include_router(chat_router)
 
 
 async def _readiness() -> bool:

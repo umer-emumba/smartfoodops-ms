@@ -1,7 +1,13 @@
-"""One assistant turn end to end (docs/week5-plan.md step 2): load the
-conversation's memory, run the graph, stream its events, then store both
-turns and the interaction row. Step 3's SSE route is a thin wrapper around
-`run_turn`.
+"""One assistant turn end to end (docs/week5-plan.md steps 2–3): claim the
+conversation and load its memory (`start_turn`, before any byte is
+streamed, so a busy or unknown conversation is a plain 409 / 404), run the
+graph and stream its events (`stream_turn`), then store both turns and the
+interaction row — also when the client goes away mid-answer
+(`interrupted`) or something breaks (`error`).
+
+One turn at a time per conversation: `busy_until` is set atomically when a
+turn starts and cleared when it is saved; it expires on its own if the
+process dies.
 
 Memory (B5-D8: stored text is redacted): the last
 `assistant_history_turns` turns go to the model word for word, older ones
@@ -11,17 +17,19 @@ been sent — the customer never waits for it.
 Events, in order: `status`… → `cards` → `token`… → `done`. `done` carries
 the conversation and interaction IDs, the status and the timings."""
 
+import asyncio
+import contextlib
 import logging
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any, cast
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from sfo_common.errors import NotFoundError
-from sqlalchemy import select
+from sfo_common.errors import ConflictError, NotFoundError
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app import metrics
@@ -67,17 +75,38 @@ class Memory:
     previous: dict[str, Any] | None
 
 
-async def _memory(session: AsyncSession, req: ChatRequest) -> Memory:
+BUSY = "Still answering your last message in this conversation."
+
+
+async def _claim(session: AsyncSession, req: ChatRequest) -> Memory:
+    """Marks the conversation busy and loads its memory. One UPDATE … WHERE
+    not busy, so two messages arriving together can't both get through, on
+    any number of replicas. Database time throughout."""
+    until = func.now() + timedelta(seconds=settings.assistant_turn_lock_seconds)
     if req.conversation_id is None:
-        conversation = Conversation(user_id=req.user_id)
+        conversation = Conversation(user_id=req.user_id, busy_until=until)
         session.add(conversation)
         await session.flush()
         return Memory(conversation, [], None)
-    found = await session.get(Conversation, req.conversation_id)
-    if found is None or found.user_id != req.user_id:
-        # Someone else's conversation looks the same as none at all.
-        raise NotFoundError("Conversation not found")
-    conversation = found
+    claimed = await session.execute(
+        update(Conversation)
+        .where(
+            Conversation.id == req.conversation_id,
+            Conversation.user_id == req.user_id,
+            or_(Conversation.busy_until.is_(None), Conversation.busy_until < func.now()),
+        )
+        .values(busy_until=until)
+        .returning(Conversation.id)
+    )
+    if claimed.first() is None:
+        found = await session.get(Conversation, req.conversation_id)
+        if found is None or found.user_id != req.user_id:
+            # Someone else's conversation looks the same as none at all.
+            raise NotFoundError("Conversation not found")
+        raise ConflictError(BUSY)
+    loaded = await session.get(Conversation, req.conversation_id, populate_existing=True)
+    assert loaded is not None
+    conversation = loaded
     turns = (
         await session.scalars(
             select(ConversationTurn)
@@ -117,17 +146,27 @@ def _meta(state: TurnState) -> dict[str, Any]:
     }
 
 
-async def run_turn(
-    req: ChatRequest, deps: Deps, sessions: async_sessionmaker[AsyncSession]
-) -> AsyncIterator[dict[str, Any]]:
+@dataclass(frozen=True)
+class Turn:
+    """A claimed turn, ready to stream."""
+
+    req: ChatRequest
+    message: str  # trimmed and redacted
+    conversation_id: str
+    state: TurnState
+    started: float
+
+
+async def start_turn(req: ChatRequest, sessions: async_sessionmaker[AsyncSession]) -> Turn:
+    """Before any event: NotFoundError for an unknown or someone else's
+    conversation, ConflictError while it is still answering."""
     started = time.perf_counter()
     message = redact(" ".join(req.message.split())[: settings.assistant_max_message_chars])
     async with sessions() as session:
-        memory = await _memory(session, req)
+        memory = await _claim(session, req)
         await session.commit()
         conversation_id = memory.conversation.id
         summary = memory.conversation.summary
-
     state: TurnState = {
         "user_id": req.user_id,
         "message": message,
@@ -138,48 +177,121 @@ async def run_turn(
         "lat": req.lat,
         "lng": req.lng,
     }
+    return Turn(req, message, conversation_id, state, started)
+
+
+ERROR_TEXT = "Something went wrong on our side. Please try again."
+
+
+async def stream_turn(
+    turn: Turn, deps: Deps, sessions: async_sessionmaker[AsyncSession]
+) -> AsyncIterator[dict[str, Any]]:
+    """The graph's events, then `done` — or a final `error` event. Always
+    saves the turn and frees the conversation: answered / refused /
+    degraded, `interrupted` (client gone: cancelled or closed; what was
+    streamed so far is kept) or `error`."""
     final: dict[str, Any] = {}
     first_output_ms: int | None = None
-    with usage_scope() as usage:
-        async for mode, chunk in graph.astream(
-            state, context=deps, stream_mode=["custom", "values"]
-        ):
-            data = cast(dict[str, Any], chunk)
-            if mode == "values":
-                final = data
-                continue
-            if first_output_ms is None and data.get("type") in ("cards", "token"):
-                first_output_ms = int((time.perf_counter() - started) * 1000)
-            yield data
+    text: list[str] = []
+    saved = False
 
-    latency_ms = int((time.perf_counter() - started) * 1000)
-    status = final.get("status") or "answered"
-    if final.get("degraded_reason") and status == "answered":
-        status = "degraded"
-    interaction_id = await _save(
-        sessions,
-        conversation_id=conversation_id,
-        req=req,
-        message=message,
-        final=final,
-        status=status,
-        usage=usage,
-        provider=deps.llm.provider if usage.calls else "",
-        latency_ms=latency_ms,
-        first_output_ms=first_output_ms,
-    )
-    metrics.ASSISTANT_TURNS.labels(status).inc()
+    def elapsed_ms() -> int:
+        return int((time.perf_counter() - turn.started) * 1000)
+
+    async def save(status: str, **over: Any) -> str:
+        nonlocal saved
+        interaction_id = await _save(
+            sessions,
+            conversation_id=turn.conversation_id,
+            req=turn.req,
+            message=turn.message,
+            final=final | over,
+            status=status,
+            usage=usage,
+            provider=deps.llm.provider if usage.calls else "",
+            latency_ms=elapsed_ms(),
+            first_output_ms=first_output_ms,
+        )
+        saved = True
+        metrics.ASSISTANT_TURNS.labels(status).inc()
+        return interaction_id
+
+    with usage_scope() as usage:
+        try:
+            async for mode, chunk in graph.astream(
+                turn.state, context=deps, stream_mode=["custom", "values"]
+            ):
+                data = cast(dict[str, Any], chunk)
+                if mode == "values":
+                    final = data
+                    continue
+                if first_output_ms is None and data.get("type") in ("cards", "token"):
+                    first_output_ms = elapsed_ms()
+                    metrics.ASSISTANT_FIRST_OUTPUT.observe(first_output_ms / 1000)
+                if data.get("type") == "token":
+                    text.append(data["text"])
+                yield data
+
+            status = final.get("status") or "answered"
+            if final.get("degraded_reason") and status == "answered":
+                status = "degraded"
+            interaction_id = await save(status)
+        except (asyncio.CancelledError, GeneratorExit):
+            # The client went away: the LLM call was cancelled with the graph.
+            # Keep what they saw. Shielded: the save must outlive the cancel.
+            logger.info("assistant turn interrupted after %d ms", elapsed_ms())
+            with contextlib.suppress(Exception):
+                await asyncio.shield(
+                    save("interrupted", text="".join(text), degraded_reason="client_gone")
+                )
+            raise
+        except Exception:
+            logger.exception("assistant turn failed")
+            with contextlib.suppress(Exception):
+                await save("error", text="".join(text), degraded_reason="internal")
+            yield {"type": "error", "code": "internal", "message": ERROR_TEXT}
+            return
+        finally:
+            if not saved:
+                await _release(sessions, turn.conversation_id)
+
     yield {
         "type": "done",
-        "conversation_id": conversation_id,
+        "conversation_id": turn.conversation_id,
         "interaction_id": interaction_id,
         "status": status,
         "intent": final["understanding"].intent if final.get("understanding") else None,
-        "latency_ms": latency_ms,
+        "latency_ms": elapsed_ms(),
         "first_output_ms": first_output_ms,
     }
+
+
+async def run_turn(
+    req: ChatRequest, deps: Deps, sessions: async_sessionmaker[AsyncSession]
+) -> AsyncIterator[dict[str, Any]]:
+    """start + stream + summary, in one: the CLI and the eval. The SSE route
+    (app/api/chat.py) uses the parts, so the summary runs after the stream
+    has closed."""
+    turn = await start_turn(req, sessions)
+    async for event in stream_turn(turn, deps, sessions):
+        yield event
     if deps.llm.configured:
-        await maybe_summarize(sessions, deps, conversation_id)
+        await maybe_summarize(sessions, deps, turn.conversation_id)
+
+
+async def _release(sessions: async_sessionmaker[AsyncSession], conversation_id: str) -> None:
+    """Frees a conversation whose turn couldn't be saved. Best effort: the
+    mark expires anyway."""
+    try:
+        async with sessions() as session:
+            await session.execute(
+                update(Conversation)
+                .where(Conversation.id == conversation_id)
+                .values(busy_until=None)
+            )
+            await session.commit()
+    except Exception:
+        logger.warning("couldn't free conversation %s; it frees itself", conversation_id)
 
 
 async def _save(
@@ -217,6 +329,7 @@ async def _save(
         )
         conversation.turn_count = seq + 2
         conversation.updated_at = datetime.now(UTC)
+        conversation.busy_until = None  # the next message may come in
         interaction = Interaction(
             user_id=req.user_id,
             kind=InteractionKind.CHAT,

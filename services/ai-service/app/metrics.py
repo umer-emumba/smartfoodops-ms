@@ -61,6 +61,12 @@ ASSISTANT_OUTCOMES = Counter(
 ASSISTANT_TURNS = Counter(
     "ai_assistant_turns_total", "Assistant turns by how they ended", ["status"]
 )
+ASSISTANT_FIRST_OUTPUT = Histogram(
+    "ai_assistant_first_output_seconds",
+    "Time from the message to the first card or token the customer sees "
+    "(target p95 < 4 s, docs/week5-plan.md §3)",
+    buckets=(0.25, 0.5, 1, 2, 3, 4, 6, 8, 12, 20, 40, 90),
+)
 ASSISTANT_MADE_UP_IDS = Counter(
     "ai_assistant_made_up_ids_total",
     "IDs the model picked that weren't among its candidates (caught by the check)",

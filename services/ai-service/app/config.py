@@ -105,6 +105,13 @@ class Settings(BaseServiceSettings, KafkaConsumerSettings):
     assistant_summarize_after: int = 12
     # Longest customer message accepted.
     assistant_max_message_chars: int = 500
+    # A conversation is busy while a turn is answered (409 for a second
+    # message); the mark expires after this long if the process dies. Longer
+    # than a slow turn (~65 s on a local 8B model).
+    assistant_turn_lock_seconds: int = 120
+    # SSE comment sent while a turn has nothing new to say: the gateway closes
+    # an AI stream after 45 s of silence (B5-D13), i.e. 3 missed heartbeats.
+    assistant_heartbeat_seconds: float = 15.0
 
     @property
     def index_suffix(self) -> str:

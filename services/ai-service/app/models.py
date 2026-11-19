@@ -61,6 +61,11 @@ class Conversation(Base):
     # Turns with seq <= this are in `summary` (step 2, migration 0002).
     summarized_seq: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     turn_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # Set while a turn is being answered, so a second message on the same
+    # conversation gets 409 instead of running without the first answer in
+    # its history. Expires on its own if the answering process dies (step 3,
+    # migration 0005).
+    busy_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 

@@ -36,6 +36,13 @@ AI_INDEX_SECONDS, drops out when marked unavailable, and comes back; search
 is public and history private; the AI metrics are scraped. Needs the index
 built (`docker compose exec ai-service python -m app.reindex`). The edit is
 reverted.
+
+--assistant (docs/week5-plan.md step 3) asks the assistant through the
+gateway as the demo customer: the answer streams status → cards → token →
+done, every card is a real, available catalog item at its current price, a
+follow-up continues the same conversation, a second message while the first
+is answering gets 409, and time to first output is measured. Works without
+an LLM too (degraded answers); with one it makes ~10 LLM calls.
 """
 
 import argparse
@@ -1034,6 +1041,110 @@ def ai(base_url: str) -> None:
         check("searches are counted (Prometheus)", searches not in ("none", "0"), searches)
 
 
+def _chat(c: httpx.Client, headers: dict[str, str], body: dict[str, Any]) -> list[tuple[str, Any]]:
+    """POSTs to the assistant and reads the whole SSE stream."""
+    events: list[tuple[str, Any]] = []
+    with c.stream("POST", "/v1/ai/chat", json=body, headers=headers, timeout=120) as r:
+        if r.status_code != 200:
+            r.read()
+            return [("http", r.status_code)]
+        name = None
+        for line in r.iter_lines():
+            if line.startswith("event: "):
+                name = line[7:]
+            elif line.startswith("data: ") and name:
+                events.append((name, json.loads(line[6:])))
+    return events
+
+
+def assistant(base_url: str) -> None:
+    with httpx.Client(base_url=base_url, timeout=15, transport=_WaitOutRateLimit()) as c:
+        customer = bearer(login(c, CUSTOMER)["access_token"])
+
+        section("AI assistant: streamed answer")
+        started = time.monotonic()
+        events = _chat(c, customer, {"message": "something mild with chicken, under Rs 1500"})
+        took = time.monotonic() - started
+        kinds = [k for k, _ in events]
+        done = events[-1][1] if events and events[-1][0] == "done" else {}
+        check(
+            "streams status → cards → token → done",
+            bool(done)
+            and kinds[0] == "status"
+            and "cards" in kinds
+            and kinds.index("cards") < len(kinds) - 1
+            and all(k in ("status", "cards", "token", "done") for k in kinds),
+            kinds[-3:],
+        )
+        print(
+            f"        ({took:.1f}s, status {done.get('status')}, first output "
+            f"{done.get('first_output_ms')} ms)"
+        )
+        cards = next((d for k, d in events if k == "cards"), {"dishes": [], "restaurants": []})
+        menus: dict[str, dict[str, Any]] = {}
+        bad = []
+        for card in cards["dishes"]:
+            rid = card["restaurant_id"]
+            if rid not in menus:
+                menus[rid] = {i["id"]: i for i in c.get(f"/v1/restaurants/{rid}/menu").json()}
+            item = menus[rid].get(card["item_id"])
+            if item is None or not item["is_available"] or float(item["price"]) != card["price"]:
+                bad.append(card["name"])
+        check(
+            "every card is a real, available catalog item at its current price",
+            not bad and (cards["dishes"] or done.get("status") == "refused"),
+            bad or "no cards",
+        )
+
+        section("AI assistant: conversation")
+        cid = done.get("conversation_id")
+        follow = _chat(c, customer, {"message": "something cheaper", "conversation_id": cid})
+        check(
+            "a follow-up continues the same conversation",
+            follow[-1][0] == "done" and follow[-1][1]["conversation_id"] == cid,
+            follow[-1:],
+        )
+        # A second message while the first is still answering.
+        with c.stream(
+            "POST",
+            "/v1/ai/chat",
+            json={"message": "biryani", "conversation_id": cid},
+            headers=customer,
+            timeout=120,
+        ) as first:
+            lines = first.iter_lines()
+            next(lines)  # the answer has started
+            second = c.post(
+                "/v1/ai/chat",
+                json={"message": "and a drink", "conversation_id": cid},
+                headers=customer,
+            )
+            for _ in lines:  # let the first answer finish
+                pass
+        if second.status_code == 200:
+            print("        (skipped the 409 check: the first answer finished first)")
+        else:
+            check(
+                "a second message while answering gets 409",
+                second.status_code == 409,
+                second.status_code,
+            )
+
+        section("AI assistant: access and input")
+        check("needs a login", c.post("/v1/ai/chat", json={"message": "hi"}).status_code == 401)
+        check(
+            "an unknown conversation is 404",
+            c.post(
+                "/v1/ai/chat", json={"message": "hi", "conversation_id": "nope"}, headers=customer
+            ).status_code
+            == 404,
+        )
+        check(
+            "an empty message is 422",
+            c.post("/v1/ai/chat", json={"message": " "}, headers=customer).status_code == 422,
+        )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--base-url", default="http://localhost:8080")
@@ -1055,6 +1166,11 @@ def main() -> None:
         action="store_true",
         help="also check the search index follows catalog edits (local stack only)",
     )
+    parser.add_argument(
+        "--assistant",
+        action="store_true",
+        help="also ask the AI assistant (streamed); ~10 LLM calls if one is configured",
+    )
     args = parser.parse_args()
     try:
         run(args.base_url, args.deep)
@@ -1064,6 +1180,8 @@ def main() -> None:
             events(args.base_url)
         if args.ai:
             ai(args.base_url)
+        if args.assistant:
+            assistant(args.base_url)
     except httpx.ConnectError:
         sys.exit(f"Can't reach {args.base_url} — is `docker compose up` running?")
     failed = [name for name, ok in _results if not ok]
