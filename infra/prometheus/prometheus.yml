@@ -33,6 +33,7 @@ scrape_configs:
           - payment-worker:9100
           - delivery-worker:9100
           - notification-worker:9100
+          - ai-worker:9100
 
   # Temporal SDK metrics from the workers embedded in these services:
   # activity/workflow task latency and failures, schedule-to-start, polls.

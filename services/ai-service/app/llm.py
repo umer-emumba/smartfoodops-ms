@@ -30,10 +30,11 @@ from langchain_core.exceptions import OutputParserException
 from langchain_core.language_models import BaseChatModel
 from langchain_core.outputs import ChatGeneration, LLMResult
 from langchain_core.runnables import Runnable, RunnableConfig, RunnableLambda
+from opentelemetry.trace import Span, SpanKind
 from pydantic import BaseModel, ValidationError
 from sfo_common.errors import ServiceUnavailableError
 
-from app import metrics
+from app import metrics, spans
 from app.config import Settings, settings
 
 logger = logging.getLogger(__name__)
@@ -301,6 +302,7 @@ class _UsageRecorder(BaseCallbackHandler):
         self.provider, self.role, self.model = provider, role, model
         self._started: dict[UUID, float] = {}
         self._steps: dict[UUID, str] = {}
+        self._spans: dict[UUID, Span] = {}
 
     def on_chat_model_start(
         self,
@@ -313,7 +315,21 @@ class _UsageRecorder(BaseCallbackHandler):
     ) -> None:
         self._started[run_id] = time.perf_counter()
         # LangGraph tags every call made inside a node with the node's name.
-        self._steps[run_id] = str((metadata or {}).get("langgraph_node") or self.role)
+        step = str((metadata or {}).get("langgraph_node") or self.role)
+        self._steps[run_id] = step
+        # A span per call (step 7), named and tagged after OpenTelemetry's
+        # GenAI conventions; a child of the graph step's span. Not made
+        # current: the callback can't scope it, the HTTP call shows beside it.
+        self._spans[run_id] = spans.tracer.start_span(
+            f"llm {self.role}",
+            kind=SpanKind.CLIENT,
+            attributes={
+                "gen_ai.operation.name": "chat",
+                "gen_ai.system": self.provider,
+                "gen_ai.request.model": self.model,
+                "ai.step": step,
+            },
+        )
 
     def on_llm_end(self, response: LLMResult, *, run_id: UUID, **_: Any) -> None:
         started = self._started.get(run_id)
@@ -328,12 +344,25 @@ class _UsageRecorder(BaseCallbackHandler):
                     meta = getattr(gen.message, "usage_metadata", None)
                     usage = Usage.from_metadata(meta)  # type: ignore[arg-type]
                     model = gen.message.response_metadata.get("model_name") or model
+        if (span := self._spans.pop(run_id, None)) is not None:
+            span.set_attributes(
+                {
+                    "gen_ai.response.model": model,
+                    "gen_ai.usage.input_tokens": usage.input + usage.cache_read + usage.cache_write,
+                    "gen_ai.usage.output_tokens": usage.output,
+                }
+            )
+            span.end()
         self.record_usage(model, usage, step=step, ms=ms)
 
     def on_llm_error(self, error: BaseException, *, run_id: UUID, **_: Any) -> None:
         self._steps.pop(run_id, None)
         mapped = classify(error)
-        self._finish(run_id, mapped.result if mapped else "error")
+        result = mapped.result if mapped else "error"
+        if (span := self._spans.pop(run_id, None)) is not None:
+            spans.fail(span, result)
+            span.end()
+        self._finish(run_id, result)
 
     def _finish(self, run_id: UUID, result: str) -> None:
         started = self._started.pop(run_id, None)

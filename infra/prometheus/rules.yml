@@ -77,3 +77,49 @@ groups:
         labels: { severity: critical }
         annotations:
           summary: "{{ $labels.service }} ({{ $labels.job }}) isn't serving metrics"
+
+  # The AI layer (docs/week5-plan.md step 7). LLM calls are counted by
+  # ai-service and ai-worker (app/llm.py), whichever step made them.
+  - name: ai
+    rules:
+      - alert: AiLlmErrors
+        # Over 20% of LLM calls failing (not counting rate limits, which are
+        # retried and expected on a free tier — on the dashboard), with at
+        # least 5 calls in the window so one bad call in a quiet hour doesn't
+        # page. Answers still go out (search cards, code's text) but worse.
+        expr: |
+          (
+            sum(rate(ai_llm_calls_total{result!~"ok|rate_limited"}[5m]))
+              / sum(rate(ai_llm_calls_total[5m]))
+          ) > 0.2
+          and sum(increase(ai_llm_calls_total[5m])) >= 5
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $value | humanizePercentage }} of LLM calls fail"
+
+      - alert: AiLlmAuth
+        # The provider refused our key (wrong, revoked or out of credit):
+        # nothing will get better until someone changes LLM_API_KEY. The
+        # series only appears at the first rejected call (already at 1, which
+        # increase() doesn't count), so a series new in the window counts too
+        # (as OrdersOverdue).
+        expr: |
+          sum by (service, provider) (increase(ai_llm_calls_total{result="auth"}[5m])) > 0
+            or sum by (service, provider) (
+              ai_llm_calls_total{result="auth"} unless ai_llm_calls_total{result="auth"} offset 5m
+            ) > 0
+        labels: { severity: critical }
+        annotations:
+          summary: "{{ $labels.service }}: {{ $labels.provider }} rejects the LLM API key"
+
+      - alert: AiAnswersSlow
+        # First card or word later than the 4 s target (p95, docs/week5-plan.md
+        # §3) for 10 minutes. On a free tier, bursts of turns get throttled by
+        # the provider; `for: 10m` keeps a short burst from firing it.
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(ai_assistant_first_output_seconds_bucket[5m]))) > 4
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Assistant first output p95 is {{ $value | humanizeDuration }}"

@@ -24,7 +24,7 @@ from sfo_common.errors import ConflictError, ForbiddenError, NotFoundError, Vali
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app import events, metrics
+from app import events, metrics, spans
 from app.config import settings
 from app.content import data
 from app.content.kinds import KINDS, FeedbackBatchOut, batch_messages, batches
@@ -287,7 +287,12 @@ async def generate(sessions: async_sessionmaker[AsyncSession], llm: LLM, draft_i
     spec = KINDS[draft.kind]
     started = time.perf_counter()
     status, output, error = DraftStatus.FAILED, None, None
-    with usage_scope() as usage:
+    with (
+        spans.tracer.start_as_current_span(
+            "content.generate", attributes={"ai.kind": draft.kind, "ai.attempt": draft.attempts}
+        ) as span,
+        usage_scope() as usage,
+    ):
         try:
             if not llm.configured:
                 raise LLMNotConfigured("No LLM is configured")
@@ -307,6 +312,11 @@ async def generate(sessions: async_sessionmaker[AsyncSession], llm: LLM, draft_i
         except Exception:
             logger.exception("content draft %s failed", draft_id)
             error = "internal"
+        span.set_attribute("ai.status", str(status))
+        if status != DraftStatus.READY:
+            # A code, not the message (which can quote the model's text).
+            safe = error == "internal" or (error or "").startswith("llm_")
+            spans.fail(span, error if safe and error else "not_usable")
     await _save(sessions, llm, draft, status, output, error, usage, started)
     metrics.CONTENT_DRAFTS.labels(draft.kind, str(status)).inc()
     logger.info("content draft %s (%s): %s %s", draft_id, draft.kind, status, error or "")

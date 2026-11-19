@@ -218,6 +218,8 @@ async def stream_turn(
         )
         saved = True
         metrics.ASSISTANT_TURNS.labels(status).inc()
+        if status not in ("interrupted", "error"):
+            metrics.ASSISTANT_ANSWER.labels("chat").observe(elapsed_ms() / 1000)
         return interaction_id
 
     with usage_scope() as usage:

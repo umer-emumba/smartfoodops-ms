@@ -3,7 +3,8 @@ at Grafana's start-up). Edit here, then run:
 
     uv run python infra/grafana/build_dashboards.py
 
-Five dashboards (docs/week3-plan.md step 5, docs/week4-plan.md step 5):
+Six dashboards (docs/week3-plan.md step 5, docs/week4-plan.md step 5,
+docs/week5-plan.md step 7):
 - Service overview: requests, errors and latency per service (RED).
 - Orders & deliveries: the business flow — orders, outcomes, restaurant
   responses, delivery time, sagas, riders, live tracking.
@@ -12,6 +13,8 @@ Five dashboards (docs/week3-plan.md step 5, docs/week4-plan.md step 5):
 - Logs: every container's logs from Loki, filterable, with trace links.
 - AI / Retrieval: search latency and results, embedding, the indexer's lag
   and health.
+- AI Assistant (docs/week5-plan.md step 7): turns, answer time against the
+  targets, LLM errors by type, checks catching the model, tokens and cost.
 """
 
 import json
@@ -689,6 +692,193 @@ def ai_retrieval() -> dict[str, Any]:
     return dashboard("sfo-ai", "SmartFoodOps — AI / Retrieval", panels)
 
 
+def _p(q: float, metric: str, by: str = "", where: str = "") -> str:
+    """A histogram quantile over 5 minutes, optionally per label / filtered."""
+    labels = f"{by}, le" if by else "le"
+    selector = f"{metric}_bucket{{{where}}}" if where else f"{metric}_bucket"
+    return f"histogram_quantile({q}, sum by ({labels}) (rate({selector}[5m])))"
+
+
+def ai_assistant() -> dict[str, Any]:
+    """The GenAI layer (docs/week5-plan.md step 7): traffic, latency against
+    the §3 targets, LLM errors by type, answer quality, tokens and cost. Per
+    step timings of one turn are in Jaeger (spans `assistant.<step>`, `llm
+    <role>`)."""
+    lay = Layout()
+    failed = 'result!~"ok|rate_limited"'
+    panels = [
+        stat(
+            lay,
+            "First output p95 (chat)",
+            _p(0.95, "ai_assistant_first_output_seconds"),
+            unit="s",
+            thresholds=[(None, "green"), (4, "orange"), (8, "red")],
+            description="Message → first card or word. Target < 4 s; alert AiAnswersSlow.",
+        ),
+        stat(
+            lay,
+            "Full answer p95 (chat)",
+            _p(0.95, "ai_assistant_answer_seconds", where='kind="chat"'),
+            unit="s",
+            thresholds=[(None, "green"), (10, "orange"), (20, "red")],
+            description="Message → last word, finished answers only. Target < 10 s.",
+        ),
+        stat(
+            lay,
+            "LLM calls failing (5m)",
+            f"(sum(rate(ai_llm_calls_total{{{failed}}}[5m])) or vector(0))"
+            " / sum(rate(ai_llm_calls_total[5m]))",
+            unit="percentunit",
+            thresholds=[(None, "green"), (0.05, "orange"), (0.2, "red")],
+            description="Not counting rate limits. Alert AiLlmErrors above 20%, AiLlmAuth on a "
+            "rejected key.",
+        ),
+        stat(
+            lay,
+            "Rate-limited LLM calls (range)",
+            'round(sum(increase(ai_llm_calls_total{result="rate_limited"}[$__range]))) '
+            "or vector(0)",
+            thresholds=[(None, "green"), (1, "orange")],
+            description="The provider throttled us; retried, the answer just comes later.",
+        ),
+        stat(
+            lay,
+            "Made-up IDs caught (range)",
+            "round(sum(increase(ai_assistant_made_up_ids_total[$__range]))) or vector(0)",
+            thresholds=[(None, "green"), (1, "orange")],
+            description="Dishes the model picked that weren't among its candidates: the check "
+            "dropped them, the customer never saw them.",
+        ),
+        stat(
+            lay,
+            "LLM spend (range)",
+            "sum(increase(ai_llm_cost_usd_total[$__range])) or vector(0)",
+            unit="currencyUSD",
+            description="From the price table in app/llm.py; 0 for unpriced models.",
+        ),
+        # --- Traffic ---
+        timeseries(
+            lay,
+            "Assistant turns / min by how they ended",
+            [("sum by (status) (rate(ai_assistant_turns_total[5m])) * 60", "{{status}}")],
+            unit="short",
+            stack=True,
+            description="answered, refused (not food / nothing fits), degraded (search cards or "
+            "code's text), interrupted (customer left), error.",
+        ),
+        timeseries(
+            lay,
+            "Questions / min by intent",
+            [("sum by (intent) (rate(ai_assistant_intents_total[5m])) * 60", "{{intent}}")],
+            stack=True,
+        ),
+        # --- Latency ---
+        timeseries(
+            lay,
+            "Answer time p50 / p95 (targets: first 4 s, full 10 s)",
+            [
+                (_p(0.5, "ai_assistant_first_output_seconds"), "first output p50"),
+                (_p(0.95, "ai_assistant_first_output_seconds"), "first output p95"),
+                (_p(0.95, "ai_assistant_answer_seconds", "kind"), "full answer p95 ({{kind}})"),
+            ],
+            unit="s",
+        ),
+        timeseries(
+            lay,
+            "LLM call p95 by role and model",
+            [(_p(0.95, "ai_llm_call_seconds", "role, model"), "{{role}} {{model}}")],
+            unit="s",
+        ),
+        # --- Errors ---
+        timeseries(
+            lay,
+            "LLM calls / min by result",
+            [
+                (
+                    "sum by (result) (rate(ai_llm_calls_total[5m])) * 60",
+                    "{{result}}",
+                )
+            ],
+            stack=True,
+            description="ok, rate_limited, unavailable (timeout / 5xx), auth (bad key), "
+            "bad_request, bad_output (no valid structured answer).",
+        ),
+        timeseries(
+            lay,
+            "How picks ended / min",
+            [("sum by (outcome) (rate(ai_assistant_outcomes_total[5m])) * 60", "{{outcome}}")],
+            stack=True,
+            description="retried (check failed once), fallback (search cards shown), no_match, "
+            "nothing_found (search found nothing).",
+        ),
+        # --- Quality ---
+        timeseries(
+            lay,
+            "Checks in code catching the model / min",
+            [
+                ("sum(rate(ai_assistant_made_up_ids_total[5m])) * 60", "made-up dish IDs"),
+                (
+                    'sum(rate(ai_order_explanations_total{outcome="number_guard"}[5m])) * 60',
+                    "order explanation: number not in the facts",
+                ),
+                (
+                    "sum by (kind) (rate(ai_content_check_rejections_total[5m])) * 60",
+                    "content rejected: {{kind}}",
+                ),
+            ],
+        ),
+        timeseries(
+            lay,
+            "Order explanations and content drafts / min",
+            [
+                (
+                    "sum by (outcome) (rate(ai_order_explanations_total[5m])) * 60",
+                    "explain {{outcome}}",
+                ),
+                (
+                    "sum by (status) (rate(ai_content_drafts_total[5m])) * 60",
+                    "content {{status}}",
+                ),
+            ],
+        ),
+        # --- Cost ---
+        timeseries(
+            lay,
+            "Tokens / min by model",
+            [
+                (
+                    "sum by (model, kind) (rate(ai_llm_tokens_total[5m])) * 60",
+                    "{{model}} {{kind}}",
+                )
+            ],
+            stack=True,
+        ),
+        timeseries(
+            lay,
+            "Spend $ / hour by model",
+            [("sum by (model) (rate(ai_llm_cost_usd_total[5m])) * 3600", "{{model}}")],
+            unit="currencyUSD",
+            stack=True,
+        ),
+    ]
+    lay.new_row()
+    panels.append(alerts_panel(lay))
+    return dashboard(
+        "sfo-ai-assistant",
+        "SmartFoodOps — AI Assistant",
+        panels,
+        links=[
+            {
+                "title": "Assistant traces (Jaeger)",
+                "type": "link",
+                "url": "http://localhost:16686/search?service=ai-service"
+                "&operation=assistant.understand",
+                "targetBlank": True,
+            }
+        ],
+    )
+
+
 def main() -> None:
     OUT.mkdir(exist_ok=True)
     for name, board in {
@@ -697,6 +887,7 @@ def main() -> None:
         "event-pipeline": pipeline(),
         "logs": logs(),
         "ai-retrieval": ai_retrieval(),
+        "ai-assistant": ai_assistant(),
     }.items():
         (OUT / f"{name}.json").write_text(json.dumps(board, indent=2) + "\n")
         print(f"wrote {name}.json ({len(board['panels'])} panels)")

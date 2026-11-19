@@ -58,6 +58,7 @@ from app.order_client import OrderRecord
 from app.prompts import fence, load
 from app.restaurant_client import LiveRestaurant
 from app.retrieval import Filters, Hit, Load, Retriever
+from app.spans import traced_step
 
 logger = logging.getLogger(__name__)
 
@@ -715,15 +716,19 @@ async def explain(state: TurnState, runtime: Runtime[Deps]) -> dict[str, Any]:
 
 def build() -> CompiledStateGraph[TurnState, Deps, TurnState, TurnState]:
     g = StateGraph(TurnState, context_schema=Deps)
-    g.add_node("understand", understand)
-    g.add_node("reply", reply)
-    g.add_node("order_help", order_help)
-    g.add_node("retrieve", retrieve)
-    g.add_node("search_down", search_down)
-    g.add_node("nothing", nothing)
-    g.add_node("pick", pick)
-    g.add_node("check", check)
-    g.add_node("explain", explain)
+    nodes: dict[str, Callable[..., Any]] = {
+        "understand": understand,
+        "reply": reply,
+        "order_help": order_help,
+        "retrieve": retrieve,
+        "search_down": search_down,
+        "nothing": nothing,
+        "pick": pick,
+        "check": check,
+        "explain": explain,
+    }
+    for name, fn in nodes.items():
+        g.add_node(name, traced_step(name, fn))  # a span per step (step 7)
     g.add_edge(START, "understand")
     g.add_conditional_edges("understand", route, ["reply", "order_help", "retrieve"])
     g.add_conditional_edges("retrieve", after_retrieve, ["search_down", "nothing", "pick"])

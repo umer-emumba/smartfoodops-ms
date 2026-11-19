@@ -1,0 +1,17 @@
+# Failure drill "bad LLM key" (docs/week5-plan.md step 7): ai-service and
+# ai-worker with a key the provider rejects. Used by
+# `scripts/smoke_test.py --ai-drills`, or by hand:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.ai-drill.yml \
+#     up -d --no-deps --wait ai-service ai-worker      # break
+#   docker compose up -d --no-deps --wait ai-service ai-worker   # restore
+#
+# `environment` wins over `env_file`, so services/ai-service/.env is left
+# as it is.
+services:
+  ai-service:
+    environment:
+      LLM_API_KEY: drill-invalid-key
+  ai-worker:
+    environment:
+      LLM_API_KEY: drill-invalid-key

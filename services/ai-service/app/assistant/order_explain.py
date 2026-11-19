@@ -13,7 +13,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app import events
+from app import events, metrics, spans
 from app.assistant.graph import Deps
 from app.assistant.order_facts import diagnose
 from app.assistant.order_words import CORRECT_FALLBACKS, PROMPTS, chunks, facts_event, word
@@ -42,12 +42,17 @@ async def explain_order(
     yield facts_event(d)
     first_ms = int((time.perf_counter() - started) * 1000)
     yield {"type": "status", "stage": "writing"}
-    with usage_scope() as usage:
-        text, fallback = await word(d, deps.llm)
+    # No yield inside the span: a generator may be resumed in another context.
+    with spans.tracer.start_as_current_span("order_explain.word") as span:
+        span.set_attribute("ai.situation", d.code)
+        with usage_scope() as usage:
+            text, fallback = await word(d, deps.llm)
+        span.set_attribute("ai.wording", fallback or "worded")
     for piece in chunks(text):
         yield {"type": "token", "text": piece}
     latency_ms = int((time.perf_counter() - started) * 1000)
     status = "answered" if fallback in CORRECT_FALLBACKS else "degraded"
+    metrics.ASSISTANT_ANSWER.labels("order_explain").observe(latency_ms / 1000)
     async with sessions() as session:
         row = Interaction(
             user_id=user_id,

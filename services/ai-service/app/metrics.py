@@ -67,6 +67,14 @@ ASSISTANT_FIRST_OUTPUT = Histogram(
     "(target p95 < 4 s, docs/week5-plan.md §3)",
     buckets=(0.25, 0.5, 1, 2, 3, 4, 6, 8, 12, 20, 40, 90),
 )
+ASSISTANT_ANSWER = Histogram(
+    "ai_assistant_answer_seconds",
+    "Time from the message to the end of the answer, for answers that finished "
+    "(not interrupted or failed); kind chat | order_explain "
+    "(target p95 < 10 s, docs/week5-plan.md §3)",
+    ["kind"],
+    buckets=(0.5, 1, 2, 3, 4, 6, 8, 10, 15, 20, 40, 90),
+)
 ORDER_EXPLANATIONS = Counter(
     "ai_order_explanations_total",
     "Order explanations by how they were worded: worded (model, passed the number "
