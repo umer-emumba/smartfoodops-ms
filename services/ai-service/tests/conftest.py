@@ -5,6 +5,10 @@ tests are about what gets written when, not about the model. Run with
 
 import hashlib
 import os
+
+# The API imports the Celery app (content generation, step 5), which needs a
+# broker URL; tests never publish (enqueue is replaced).
+os.environ.setdefault("CELERY_BROKER_URL", "memory://")
 import uuid
 from collections.abc import AsyncIterator, Sequence
 
@@ -82,7 +86,10 @@ async def sessions(migrated_database: str) -> AsyncIterator:
     engine = create_async_engine(migrated_database)
     async with engine.begin() as conn:
         await conn.execute(
-            text("TRUNCATE ai_interactions, conversation_turns, conversations CASCADE")
+            text(
+                "TRUNCATE ai_interactions, conversation_turns, conversations, "
+                "content_drafts CASCADE"
+            )
         )
     yield async_sessionmaker(engine, expire_on_commit=False)
     await engine.dispose()

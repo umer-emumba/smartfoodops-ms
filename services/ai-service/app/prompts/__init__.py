@@ -24,6 +24,13 @@ ACTIVE: dict[str, int] = {
     "explain": 1,
     "summarize": 1,
     "order_explain": 1,
+    "content_rules": 1,
+    "content_description": 1,
+    "content_promotion": 1,
+    "content_dishes": 1,
+    "content_message": 1,
+    "content_feedback_batch": 1,
+    "content_feedback_combine": 1,
 }
 
 

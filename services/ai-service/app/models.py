@@ -122,7 +122,54 @@ class Interaction(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
 
 
+class ContentKind(StrEnum):
+    """What a restaurant can generate (Part B PDF, "Restaurant Productivity
+    Enhancement"; docs/week5-plan.md step 5)."""
+
+    MENU_DESCRIPTION = "menu_description"
+    PROMOTION = "promotion"
+    DISH_PICKS = "dish_picks"
+    ENGAGEMENT_MESSAGE = "engagement_message"
+    FEEDBACK_SUMMARY = "feedback_summary"
+
+
+class DraftStatus(StrEnum):
+    PENDING = "pending"  # queued for ai-worker
+    READY = "ready"  # generated and checked; waiting for the owner
+    FAILED = "failed"  # couldn't be generated (error kept)
+    ACCEPTED = "accepted"  # the owner took it (and, where it applies, it was applied)
+    REJECTED = "rejected"
+
+
+class ContentDraft(Base):
+    """AI-written restaurant content — a draft until its owner accepts it
+    (B5-D7): nothing reaches the catalog without that (migration 0006)."""
+
+    __tablename__ = "content_drafts"
+    __table_args__ = (Index("ix_content_drafts_restaurant_created", "restaurant_id", "created_at"),)
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
+    restaurant_id: Mapped[str] = mapped_column(String)
+    requested_by: Mapped[str] = mapped_column(String)  # the owner's user ID
+    kind: Mapped[str] = mapped_column(String)  # ContentKind
+    # What the owner asked for: menu_item_id, goal, tone, …
+    params: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String, default=DraftStatus.PENDING)
+    # The checked result, shaped per kind (app/content/kinds.py).
+    output: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    error: Mapped[str | None] = mapped_column(String, nullable=True)
+    # What accepting created or changed: {"promotion_id": …} / {"menu_item_id": …}
+    applied: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    interaction_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 __all__ = [
+    "ContentDraft",
+    "ContentKind",
+    "DraftStatus",
     "Base",
     "Conversation",
     "ConversationTurn",

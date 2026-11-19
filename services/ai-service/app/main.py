@@ -11,6 +11,7 @@ from sfo_observability import configure_logging, instrument_fastapi, instrument_
 
 from app import qdrant, restaurant_client
 from app.api.chat import router as chat_router
+from app.api.content import router as content_router
 from app.api.routes import router
 from app.config import settings
 from app.db import engine
@@ -69,6 +70,7 @@ instrument_fastapi(app)
 instrument_metrics(app)
 app.include_router(router)
 app.include_router(chat_router)
+app.include_router(content_router)
 
 
 async def _readiness() -> bool:

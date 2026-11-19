@@ -74,6 +74,17 @@ ORDER_EXPLANATIONS = Counter(
     "llm_failed, no_llm",
     ["outcome"],
 )
+CONTENT_DRAFTS = Counter(
+    "ai_content_drafts_total",
+    "Restaurant content drafts by kind and what happened: requested, ready, pending "
+    "(retry after a transient LLM error), failed, accepted, rejected",
+    ["kind", "status"],
+)
+CONTENT_CHECK_REJECTIONS = Counter(
+    "ai_content_check_rejections_total",
+    "Content the model wrote that failed its checks in code (asked again once)",
+    ["kind"],
+)
 ASSISTANT_MADE_UP_IDS = Counter(
     "ai_assistant_made_up_ids_total",
     "IDs the model picked that weren't among its candidates (caught by the check)",
