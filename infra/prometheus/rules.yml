@@ -35,6 +35,15 @@ groups:
         annotations:
           summary: "{{ $labels.service }}: {{ $value | humanizePercentage }} of requests fail with 5xx"
 
+      - alert: IndexLagging
+        # Catalog changes take over 30s to become searchable (week4-plan step 5):
+        # the indexer is behind, or Qdrant is down and events are being retried.
+        expr: histogram_quantile(0.95, sum by (le) (rate(ai_index_lag_seconds_bucket[5m]))) > 30
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "Search index p95 lag is {{ $value | humanizeDuration }}"
+
       - alert: SagaSystemErrors
         # An order ended because retries ran out on an infrastructure error.
         expr: sum(increase(saga_outcomes_total{reason="system_error"}[15m])) > 0

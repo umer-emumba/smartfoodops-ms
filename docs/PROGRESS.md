@@ -15,6 +15,13 @@ reviews, verification runs — is in the git history and commit messages.
 | Week 2 | Order & Delivery Workflow | End-to-end order lifecycle | ☑ |
 | Week 3 | Events & Observability | Async processing + monitoring | ☑ |
 
+## Part B — Weekly Tracking Table
+
+| Week | Focus Area | What to Aim For | Done |
+|---|---|---|---|
+| Week 4 | Data Preparation + Retrieval | Embedding pipeline, vector DB populated, semantic search, retrieval API | ☑ |
+| Week 5 | AI Assistant + Streaming | Recommendations, order explanations, content generation, streaming | ☐ |
+
 ## Week 1 — Foundation + Core Services
 
 - [x] `docs/architecture.md`, `docs/technical-documentation.md`, `docs/PROGRESS.md` written
@@ -106,6 +113,46 @@ processes in dev.
       enabled (`smoke_test.py --events`, failure drills)
 - [x] Docs fully reflect the finished Part A system, ready for mentor review
 
+## Week 4 — Data Preparation + Retrieval (Part B)
+
+Plan and design decisions (B4-D1…D21): [week4-plan.md](./week4-plan.md). As built:
+[architecture.md#ai-layer-search-part-b-week-4](./architecture.md#ai-layer-search-part-b-week-4)
+and [technical-documentation.md#search-retrieval-layer](./technical-documentation.md#search-retrieval-layer).
+Branch `week4/retrieval-layer`. Verified with `smoke_test.py --deep --ai`, the retrieval
+eval and drills 6–7.
+
+| Step | What | Commit |
+|---|---|---|
+| 0 | `ai-service` skeleton, Qdrant, `ai-db`, gateway route | `865f673` |
+| 1 | Dietary tags, spice level, calories, descriptions; reviews with ratings; 10-restaurant catalog fixture; history imported by dev commands | `0c49925` |
+| 2 | `restaurant-events` (full snapshots, `catalog_version` as `source_version`), `restaurant-worker` relay | `bc60dbb` |
+| 3 | Documents and chunking, fastembed dense + BM25, Qdrant store, Kafka indexer, `app.reindex` backfill | `8a7448a` |
+| 4 | `retrieve()`, `GET /v1/ai/search`, `GET /v1/ai/search/history` | `89704ec` |
+| 5 | Metrics + *AI / Retrieval* dashboard + `IndexLagging` alert; retrieval eval (recall@5 0.902, MRR 0.953) and `check.sh --with-ai`; `smoke_test.py --ai`; drills; docs | `53b97fd` |
+| 6 | Golden set grown to 106 tagged queries with a held-out test split (B4-D17): recall@5 0.748, MRR 0.843 overall; dev unchanged at 0.902 / 0.953 | `1a88789` |
+| 7 | Embedding models compared on the eval (B4-D18): `scripts/compare_models.sh`, dev-only `docker-compose.models.yml`, `DENSE_DOCUMENT_PREFIX`; bge-base-en-v1.5 wins (test 0.741 / 0.854 vs bge-small 0.681 / 0.794) | `73809f3` |
+| 8 | Switched to bge-base-en-v1.5 (768-d): live index `*__bge_base_en_v1_5_r1`, eval 0.792 / 0.889 overall, bar raised to 0.74 / 0.84; image 1.1 GB, ai-service ~430 MiB | `756ad1c` |
+| 9 | Cheaper index updates (B4-D19): unchanged text → payload overwrite, no embedding (`ai_index_writes_total{result="payload_only"}`); customer summary from the latest 50 orders (`SUMMARY_MAX_ORDERS`) | `f4a8581` |
+| 10 | Week 4 diagrams in `docs/diagrams.md` (components, indexing, search, reindex, Qdrant collections) | `c5507c4` |
+| 11 | Eval gaps closed (B4-D20): 134 golden queries incl. 12 order-history, 10 filtered, 6 not-on-the-menu; filter-violation check (0); bootstrap ranges + `--compare`; latency p50 ~27 ms; recall@5 0.823, MRR 0.904; bar 0.77 / 0.85 | `6dd18cf` |
+| 12 | RRF k made explicit (`FUSION_K`, default 2) and measured at 2–60 (B4-D21): no real difference, kept 2 | (this commit) |
+
+**Week 4 known limits** (documented in technical-documentation.md): ranking has weak spots
+a query parser would fix (a spicy-sounding query isn't a spice filter; no protein data);
+negation, Roman Urdu and typos of rare dish names score low on the grown eval (0.05, 0.64,
+0.75 recall@5); seeded
+history only reaches the index through `app.reindex`; embedding shares the API process's
+CPU in dev; the ai-service image is 1.1 GB with bge-base (~814 MB with bge-small).
+
+### Original scope checklist
+
+- [x] Richer domain data and enough of it (catalog fixture, reviews, order history)
+- [x] Embedding pipeline (event-driven, idempotent by version, outage-safe)
+- [x] Vector DB populated (backfill from internal exports)
+- [x] Semantic search (hybrid, filtered, visibility enforced)
+- [x] Retrieval API (`retrieve()` for Week 5; public search, private history)
+- [x] Metrics, dashboard, alert; measured retrieval quality; drills; docs
+
 ## Improvements after Week 3
 
 Built after Part A was complete; each commit message has the details.
@@ -146,4 +193,4 @@ Built after Part A was complete; each commit message has the details.
       lifecycle flows, event-driven design, failure handling, consistency approach,
       tradeoffs) — all of it matches what's built (Weeks 1–3)
 - [x] `docs/PRD.md`: use cases, functional + non-functional requirements, milestones,
-      traceability (update status column each week)
+      traceability (update status column each week); Part B Week 4 in §8

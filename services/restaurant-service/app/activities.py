@@ -8,6 +8,11 @@ last unit — no read-then-write window. Within one transaction rows are
 locked in a fixed order (restaurant row, then items by id), so concurrent
 reservations queue behind each other instead of deadlocking.
 
+Events (week4-plan step 2): stock changes on every order, but only an item
+running out or coming back changes what search should show, so only those
+flips write a MenuItemUpserted (app/events.py) — in the same transaction,
+after the restaurant row is already locked by the capacity UPDATE.
+
 Idempotency: each order has at most one `stock_reservations` and one
 `promotion_redemptions` row (primary key = order_id). A retried activity
 finds the row and doesn't apply the change twice. A release that arrives
@@ -31,7 +36,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from temporalio import activity
 
-from app import cache
+from app import cache, events
 from app.db import SessionFactory
 from app.models import (
     MenuItem,
@@ -57,6 +62,17 @@ async def _free_capacity(session: AsyncSession, restaurant_id: str) -> None:
         .where(Restaurant.id == restaurant_id)
         .values(active_order_count=func.greatest(Restaurant.active_order_count - 1, 0))
     )
+
+
+async def _stock_flipped(session: AsyncSession, restaurant_id: str, item_ids: list[str]) -> None:
+    """Writes MenuItemUpserted for items whose in-stock state just changed."""
+    if not item_ids:
+        return
+    version = await events.next_version(session, restaurant_id)
+    restaurant = await session.get(Restaurant, restaurant_id)
+    assert restaurant is not None
+    items = (await session.execute(select(MenuItem).where(MenuItem.id.in_(item_ids)))).scalars()
+    await events.menu_items_upserted(session, restaurant, list(items), version)
 
 
 async def _restaurant_unavailable_reason(session: AsyncSession, restaurant_id: str) -> str:
@@ -127,6 +143,7 @@ async def reserve_order(data: ReserveOrderInput) -> ReserveOrderResult:
                 BusinessErrorType.CAPACITY_FULL, "Restaurant is at its concurrent-order limit"
             )
 
+        sold_out: list[str] = []
         for item_id, quantity in sorted(quantities.items()):
             taken = await session.execute(
                 update(MenuItem)
@@ -138,14 +155,18 @@ async def reserve_order(data: ReserveOrderInput) -> ReserveOrderResult:
                 )
                 # NULL (unlimited) stays NULL: NULL - n is NULL.
                 .values(stock_count=MenuItem.stock_count - quantity, version=MenuItem.version + 1)
-                .returning(MenuItem.id)
+                .returning(MenuItem.stock_count)
             )
-            if taken.first() is None:
+            row = taken.first()
+            if row is None:
                 raise business_error(
                     BusinessErrorType.OUT_OF_STOCK,
                     f"Menu item {item_id} is unavailable or has fewer than {quantity} left",
                 )
+            if row.stock_count == 0:
+                sold_out.append(item_id)
 
+        await _stock_flipped(session, data.restaurant_id, sold_out)
         await session.commit()
     await cache.invalidate(data.restaurant_id)
     return ReserveOrderResult(
@@ -182,15 +203,22 @@ async def release_reservation(data: OrderRef) -> None:
         restaurant_id = reservation.restaurant_id
         assert restaurant_id is not None
         await _free_capacity(session, restaurant_id)
+        back_in_stock: list[str] = []
         for line in sorted(reservation.items, key=lambda line: line["menu_item_id"]):
-            await session.execute(
+            given_back = await session.execute(
                 update(MenuItem)
                 .where(MenuItem.id == line["menu_item_id"], MenuItem.stock_count.is_not(None))
                 .values(
                     stock_count=MenuItem.stock_count + line["quantity"],
                     version=MenuItem.version + 1,
                 )
+                .returning(MenuItem.stock_count)
             )
+            row = given_back.first()
+            # It was at 0 before this release.
+            if row is not None and row.stock_count == line["quantity"]:
+                back_in_stock.append(line["menu_item_id"])
+        await _stock_flipped(session, restaurant_id, back_in_stock)
         reservation.status = ReservationStatus.RELEASED
         await session.commit()
     await cache.invalidate(restaurant_id)

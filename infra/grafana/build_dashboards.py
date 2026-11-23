@@ -3,13 +3,15 @@ at Grafana's start-up). Edit here, then run:
 
     uv run python infra/grafana/build_dashboards.py
 
-Four dashboards (docs/week3-plan.md step 5):
+Five dashboards (docs/week3-plan.md step 5, docs/week4-plan.md step 5):
 - Service overview: requests, errors and latency per service (RED).
 - Orders & deliveries: the business flow — orders, outcomes, restaurant
   responses, delivery time, sagas, riders, live tracking.
 - Event pipeline: outbox → Kafka → consumers → Celery → notifications, plus
   Temporal activities and RabbitMQ.
 - Logs: every container's logs from Loki, filterable, with trace links.
+- AI / Retrieval: search latency and results, embedding, the indexer's lag
+  and health.
 """
 
 import json
@@ -559,6 +561,134 @@ def logs() -> dict[str, Any]:
     return dashboard("sfo-logs", "SmartFoodOps — Logs", panels, templating={"list": variables})
 
 
+def ai_retrieval() -> dict[str, Any]:
+    lay = Layout()
+    search_p95 = (
+        "histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket"
+        '{service="ai-service", route=~"/v1/ai/search.*"}[5m])))'
+    )
+    indexer = 'group="ai-indexer"'
+    panels = [
+        stat(
+            lay,
+            "Search p95 (whole request)",
+            search_p95,
+            unit="s",
+            thresholds=[(None, "green"), (0.3, "orange"), (1, "red")],
+        ),
+        stat(
+            lay,
+            "Index lag p95",
+            "histogram_quantile(0.95, sum by (le) (rate(ai_index_lag_seconds_bucket[5m])))",
+            unit="s",
+            thresholds=[(None, "green"), (5, "orange"), (30, "red")],
+            description="Event written → document searchable. Alert IndexLagging above 30s.",
+        ),
+        stat(
+            lay,
+            "Indexer consumer lag",
+            f"sum(kafka_consumer_lag{{{indexer}}}) or vector(0)",
+            thresholds=[(None, "green"), (100, "orange")],
+        ),
+        stat(
+            lay,
+            "Indexer dead-lettered (range)",
+            f'round(sum(increase(kafka_events_consumed_total{{{indexer}, outcome="dead_lettered"}}'
+            "[$__range]))) or vector(0)",
+            thresholds=[(None, "green"), (1, "red")],
+        ),
+        stat(
+            lay,
+            "Indexer outage retries (range)",
+            f'round(sum(increase(kafka_event_retries_total{{{indexer}, kind="outage"}}'
+            "[$__range]))) or vector(0)",
+            thresholds=[(None, "green"), (1, "orange")],
+            description="Qdrant (or Kafka) unreachable: the event is retried, never dropped.",
+        ),
+        stat(
+            lay,
+            "Empty searches (range)",
+            'round(sum(increase(ai_searches_total{result="empty"}[$__range]))) or vector(0)',
+        ),
+        timeseries(
+            lay,
+            "Searches / s by kind and result",
+            [("sum by (kind, result) (rate(ai_searches_total[5m]))", "{{kind}} {{result}}")],
+            unit="reqps",
+        ),
+        timeseries(
+            lay,
+            "Qdrant query p50 / p95 by kind",
+            [
+                (
+                    "histogram_quantile(0.5, sum by (kind, le) "
+                    "(rate(ai_qdrant_query_seconds_bucket[5m])))",
+                    "{{kind}} p50",
+                ),
+                (
+                    "histogram_quantile(0.95, sum by (kind, le) "
+                    "(rate(ai_qdrant_query_seconds_bucket[5m])))",
+                    "{{kind}} p95",
+                ),
+            ],
+            unit="s",
+        ),
+        timeseries(
+            lay,
+            "Embedding p95 (query / document batch)",
+            [
+                (
+                    "histogram_quantile(0.95, sum by (purpose, le) "
+                    "(rate(ai_embed_seconds_bucket[5m])))",
+                    "{{purpose}}",
+                )
+            ],
+            unit="s",
+        ),
+        timeseries(
+            lay,
+            "Index lag p95 by event",
+            [
+                (
+                    "histogram_quantile(0.95, sum by (event_type, le) "
+                    "(rate(ai_index_lag_seconds_bucket[5m])))",
+                    "{{event_type}}",
+                )
+            ],
+            unit="s",
+        ),
+        timeseries(
+            lay,
+            "Index writes / s (written vs. stale)",
+            [
+                (
+                    "sum by (collection, result) (rate(ai_index_writes_total[5m]))",
+                    "{{collection}} {{result}}",
+                ),
+                ("sum(rate(ai_orders_skipped_total[5m]))", "orders skipped (restaurant gone)"),
+            ],
+            unit="ops",
+            stack=True,
+        ),
+        timeseries(
+            lay,
+            "Indexer: consumed / retried per second",
+            [
+                (
+                    f"sum by (topic, outcome) (rate(kafka_events_consumed_total{{{indexer}}}[5m]))",
+                    "{{topic}} {{outcome}}",
+                ),
+                (
+                    f"sum by (kind) (rate(kafka_event_retries_total{{{indexer}}}[5m]))",
+                    "retry ({{kind}})",
+                ),
+            ],
+            unit="ops",
+        ),
+    ]
+    return dashboard("sfo-ai", "SmartFoodOps — AI / Retrieval", panels)
+
+
 def main() -> None:
     OUT.mkdir(exist_ok=True)
     for name, board in {
@@ -566,6 +696,7 @@ def main() -> None:
         "orders-and-deliveries": business(),
         "event-pipeline": pipeline(),
         "logs": logs(),
+        "ai-retrieval": ai_retrieval(),
     }.items():
         (OUT / f"{name}.json").write_text(json.dumps(board, indent=2) + "\n")
         print(f"wrote {name}.json ({len(board['panels'])} panels)")

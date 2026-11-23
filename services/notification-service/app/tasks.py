@@ -71,7 +71,12 @@ async def deliver(notification_id: str) -> float | None:
         delay = None
         try:
             await senders.send(notification)
-        except senders.SendError as exc:
+        except Exception as exc:
+            # Any failure is an attempt, counted in the row: an unexpected one
+            # (a real provider's ConnectionError, a bug) would otherwise roll
+            # the row back unchanged and the sweep would re-queue it forever.
+            if not isinstance(exc, senders.SendError):
+                logger.exception("Unexpected error sending notification %s", notification.id)
             notification.retry_count += 1
             notification.last_error = str(exc)[:1000]
             if notification.retry_count >= settings.notify_max_attempts:

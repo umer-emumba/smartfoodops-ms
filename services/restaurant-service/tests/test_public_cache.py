@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
-from app import cache, repository
+from app import cache, events, repository
 from app.config import settings
 from app.db import get_session
 from app.main import app
@@ -67,6 +67,9 @@ def env(monkeypatch):
         is_accepting_orders=True,
         max_concurrent_orders=20,
         avg_prep_time_minutes=20,
+        description="",
+        rating_sum=0,
+        review_count=0,
         # Column defaults only apply on flush; these objects never touch a DB.
         created_at=datetime(2026, 10, 8, tzinfo=UTC),
     )
@@ -87,12 +90,21 @@ def env(monkeypatch):
                 price=Decimal("8.50"),
                 is_available=True,
                 stock_count=None,
+                dietary_tags=[],
+                spice_level=0,
+                calories=None,
                 version=1,
             )
         ]
 
     monkeypatch.setattr(repository, "get_restaurant", get_restaurant)
     monkeypatch.setattr(repository, "list_menu", list_menu)
+
+    # Event writing is covered against a real database (test_events_db.py).
+    async def next_version(_session, _restaurant):
+        return 1
+
+    monkeypatch.setattr(events, "next_version", next_version)
     app.dependency_overrides[get_session] = lambda: _FakeSession()
     yield {"redis": fake_redis, "restaurant": restaurant, "calls": calls}
     app.dependency_overrides.clear()

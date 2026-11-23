@@ -1,0 +1,172 @@
+{
+  "$defs": {
+    "MenuItemUpsertedPayload": {
+      "additionalProperties": false,
+      "description": "Re-sent for every item of a restaurant when its name, cuisine or\nlocation changes, and for a category's items when it's renamed \u2014 they\nare part of the item's search text and filters. `in_stock`: unlimited\nstock or some left; re-sent when that flips, not on every sale.",
+      "properties": {
+        "calories": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Calories"
+        },
+        "category_id": {
+          "title": "Category Id",
+          "type": "string"
+        },
+        "category_name": {
+          "title": "Category Name",
+          "type": "string"
+        },
+        "city": {
+          "title": "City",
+          "type": "string"
+        },
+        "cuisine_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Cuisine Type"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "dietary_tags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Dietary Tags",
+          "type": "array"
+        },
+        "in_stock": {
+          "title": "In Stock",
+          "type": "boolean"
+        },
+        "is_available": {
+          "title": "Is Available",
+          "type": "boolean"
+        },
+        "lat": {
+          "title": "Lat",
+          "type": "number"
+        },
+        "lng": {
+          "title": "Lng",
+          "type": "number"
+        },
+        "menu_item_id": {
+          "title": "Menu Item Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "price": {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "title": "Price",
+          "type": "string"
+        },
+        "restaurant_id": {
+          "title": "Restaurant Id",
+          "type": "string"
+        },
+        "restaurant_name": {
+          "title": "Restaurant Name",
+          "type": "string"
+        },
+        "restaurant_status": {
+          "title": "Restaurant Status",
+          "type": "string"
+        },
+        "source_version": {
+          "title": "Source Version",
+          "type": "integer"
+        },
+        "spice_level": {
+          "title": "Spice Level",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "menu_item_id",
+        "restaurant_id",
+        "restaurant_name",
+        "restaurant_status",
+        "cuisine_type",
+        "city",
+        "lat",
+        "lng",
+        "category_id",
+        "category_name",
+        "name",
+        "description",
+        "price",
+        "dietary_tags",
+        "spice_level",
+        "calories",
+        "is_available",
+        "in_stock",
+        "source_version"
+      ],
+      "title": "MenuItemUpsertedPayload",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "aggregate_id": {
+      "title": "Aggregate Id",
+      "type": "string"
+    },
+    "correlation_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Correlation Id"
+    },
+    "event_id": {
+      "title": "Event Id",
+      "type": "string"
+    },
+    "event_type": {
+      "const": "MenuItemUpserted",
+      "title": "Event Type",
+      "type": "string"
+    },
+    "occurred_at": {
+      "format": "date-time",
+      "title": "Occurred At",
+      "type": "string"
+    },
+    "payload": {
+      "$ref": "#/$defs/MenuItemUpsertedPayload"
+    }
+  },
+  "required": [
+    "event_id",
+    "aggregate_id",
+    "occurred_at",
+    "event_type",
+    "payload"
+  ],
+  "title": "MenuItemUpserted",
+  "type": "object"
+}

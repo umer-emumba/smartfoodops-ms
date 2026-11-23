@@ -45,7 +45,8 @@ graph TD
 
     GW1 -->|REST| AS[analytics-service]
 
-    OrderDB -->|"outbox → order-worker (Celery beat relay)"| Kafka[(Kafka + Schema Registry: order/delivery/payment-events)]
+    OrderDB -->|"outbox → order-worker (Celery beat relay)"| Kafka[(Kafka + Schema Registry: order/delivery/payment/restaurant-events)]
+    RestDB -->|"outbox → restaurant-worker (catalog snapshots)"| Kafka
     DeliveryDB -->|"outbox → delivery-worker"| Kafka
     PaymentDB -->|"outbox → payment-worker"| Kafka
     Kafka -->|consumer group| NS
@@ -55,10 +56,18 @@ graph TD
     NS -->|"send tasks"| Rabbit[(RabbitMQ)]
     Rabbit --> NW[notification-worker]
     NW --> NotifDB
+
+    GW1 -->|"REST: /v1/ai/search"| AI[ai-service]
+    Kafka -->|"consumer group ai-indexer (restaurant-events, OrderDelivered)"| AI
+    AI -->|"hybrid search + conditional upserts"| Qdrant[(Qdrant: search index)]
+    AI --> AIDB[(ai_db)]
+    AI -.->|"reindex only: /internal exports"| RS
+    AI -.->|reindex only| OS
 ```
 
 Solid arrows are built; dotted arrows are the
-tracking-service fallbacks (`/internal/*` calls made only when a Redis state key is
+tracking-service fallbacks and ai-service's backfill (`python -m app.reindex`, run by
+hand) (`/internal/*` calls made only when a Redis state key is
 missing), or, for the `api-gateway` replica line, production-only (Kubernetes
 `Deployment`/`HPA` + `Service` — never built locally, see
 [technical-documentation.md](./technical-documentation.md#gateway-single-entry-point-not-a-spof)
@@ -596,6 +605,164 @@ sequenceDiagram
     RW->>OS: record_refund → orders.refunded_amount, history row
 ```
 
+## Search and retrieval (Part B, Week 4)
+
+The search index is a read model of restaurant-service and order-service, kept current
+by their events. Decisions B4-D1…D21: [week4-plan.md](./week4-plan.md); reasoning and
+measured results: [technical-documentation.md](./technical-documentation.md#search-retrieval-layer).
+The collections themselves: [Qdrant collections](#qdrant-collections-ai-service-search-index).
+
+### Components
+
+```mermaid
+flowchart LR
+    subgraph sources["Sources of truth"]
+        RS["restaurant-service<br/>catalog, reviews"] --> RDB[("restaurant_db<br/>+ outbox_events")]
+        OS["order-service<br/>OrderDelivered + items"] --> ODB[("order_db<br/>+ outbox_events")]
+    end
+    RDB -->|"restaurant-worker relay, 1s"| RE[("restaurant-events")]
+    ODB -->|"order-worker relay, 1s"| OE[("order-events")]
+
+    subgraph ai["ai-service"]
+        C["indexer consumer<br/>group ai-indexer"] --> D["documents.py<br/>template text + payload"]
+        D --> E["embedding.py<br/>bge-base 768-d + BM25<br/>(one worker thread)"]
+        E --> ST["store.py<br/>version check, payload-only or<br/>conditional upsert"]
+        RX["app.reindex<br/>(backfill, by hand)"] --> D
+        API["api/routes.py<br/>/v1/ai/search<br/>/v1/ai/search/history"] --> RT["retrieval.py<br/>filters + hybrid query + RRF"]
+        RT --> E
+    end
+    RE --> C
+    OE -->|"OrderDelivered only"| C
+    ST --> Q[("Qdrant<br/>menu_items, restaurants,<br/>reviews, order_history")]
+    RT --> Q
+    RX -.->|"GET /internal/catalog/export"| RS
+    RX -.->|"GET /internal/orders/delivered"| OS
+    GW["api-gateway"] -->|"public, history needs a customer JWT"| API
+    C -.->|"poison event after 3 tries"| DLQ[("topic.dlq")]
+```
+
+The same `Indexer` serves live events and the backfill, so both build identical
+documents. A Qdrant outage is a `ConnectionError`: the consumer rewinds and waits, never
+the DLQ. Embedding runs off the event loop in one thread, shared with query embedding.
+
+### Indexing one change (event → vectors)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Owner as Restaurant owner
+    participant RS as restaurant-service
+    participant DB as restaurant_db
+    participant RW as restaurant-worker (relay)
+    participant K as Kafka restaurant-events
+    participant IX as ai-service indexer
+    participant EM as embedder (bge-base + BM25)
+    participant Q as Qdrant
+
+    Owner->>RS: PATCH /v1/restaurants/{id}/menu/items/{item}
+    RS->>DB: UPDATE menu_items + catalog_version += 1 (row lock → version v)<br/>+ INSERT outbox MenuItemUpserted(full snapshot, source_version v)<br/>one transaction
+    RW->>DB: every 1s: undispatched rows
+    RW->>K: produce (key = restaurant ID, schema-validated)
+    K->>IX: poll
+    IX->>IX: documents.menu_item → text + payload
+    IX->>Q: retrieve stored source_version + text
+    alt stored version ≥ v (redelivery or older event)
+        IX->>IX: skip — nothing embedded (result "stale")
+    else text unchanged (stock, availability)
+        IX->>Q: overwrite payload where version < v AND text = same<br/>(vectors kept, result "payload_only")
+        Note over IX,Q: guard missed (text changed meanwhile) → falls through to embed
+    else new or text changed
+        IX->>EM: embed text (dense + sparse)
+        EM-->>IX: vectors
+        IX->>Q: upsert where source_version < v (result "written")
+    end
+    IX->>K: commit offset
+    Note over Owner,Q: edit → searchable in ~0.4–1.7 s, IndexLagging alert above 30 s
+```
+
+Other events take shorter paths: `RestaurantStatusChanged` and a review's new rating set
+fields on every older point of the restaurant (no embedding); `MenuItemDeleted` writes a
+tombstone (no vectors, `deleted: true`) so a late older upsert can't bring the item back;
+a rename of a restaurant or category re-sends its items.
+
+### Indexing a delivered order (order history)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant SG as order saga
+    participant ODB as order_db
+    participant OW as order-worker (relay)
+    participant K as Kafka order-events
+    participant IX as ai-service indexer
+    participant Q as Qdrant order_history
+
+    SG->>ODB: status delivered + outbox OrderDelivered (with items)
+    OW->>K: produce
+    K->>IX: poll (other order events ignored)
+    IX->>Q: restaurant's point (name, cuisine)
+    alt restaurant not indexed
+        IX->>IX: skip (ai_orders_skipped_total)
+    else
+        IX->>Q: insert order point if absent (insert-only, never changes)
+        IX->>Q: latest 50 orders of the customer (order_by delivered_at) + total count
+        IX->>Q: upsert customer_summary point (favourite cuisines, dishes, places, spend)
+    end
+```
+
+### Search (query → hits)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant GW as api-gateway
+    participant API as ai-service /v1/ai/search
+    participant EM as embedder
+    participant Q as Qdrant
+
+    C->>GW: GET /v1/ai/search?q=something spicy&kind=item&max_price=800&lat&lng
+    GW->>API: forward (rate limit 120/min per IP)
+    API->>API: validate (lat+lng together, price/dietary only for item and cuisine)
+    API->>EM: query vectors — dense with bge's search prefix, BM25 query form
+    EM-->>API: dense (768) + sparse
+    API->>API: filter = active restaurant, not deleted,<br/>available + in stock, price ≤, all dietary tags, within radius
+    alt kind = item / restaurant / review
+        API->>Q: query_points: prefetch dense (filter, 4×limit) + prefetch bm25 (filter, 4×limit)<br/>→ weighted RRF (dense 1.2, sparse 1.0)
+    else kind = cuisine
+        API->>Q: query_points_groups on menu_items, group_by cuisine, 3 dishes each
+    end
+    Q-->>API: ranked points + payloads
+    API-->>C: {query, kind, hits: [{kind, id, score, text, data}]}
+    Note over C,API: /v1/ai/search/history: customer JWT, filter customer_id = caller,<br/>doc_type = order — never anyone else's orders
+    Note over API,Q: Qdrant down → 503 "Search is unavailable" (5 s timeout)
+```
+
+`score` is a fused rank, only meaningful for ordering. Week 5's assistant calls the
+same `retrieve(query, filters)` directly instead of the HTTP API.
+
+### Reindex and model change (blue/green collections)
+
+```mermaid
+flowchart TB
+    EV["live events"] --> LIVE["running ai-service<br/>(current settings)"]
+    LIVE --> Q1[("live index<br/>*__bge_base_en_v1_5_r1")]
+    LIVE -->|searches| Q1
+
+    CFG["1. new DENSE_MODEL or INDEX_REVISION + 1"] --> RX["2. python -m app.reindex<br/>with the new settings"]
+    RX -->|"paged /internal exports,<br/>REPEATABLE READ snapshot per page,<br/>same Indexer"| Q2[("new index<br/>*__new_model_r1<br/>built beside the live one")]
+    Q2 --> SW["3. restart ai-service on the new settings:<br/>searches and live events move to the new index"]
+    SW --> RX2["4. reindex again: embeds only what changed<br/>between step 2 and step 3"]
+    RX2 --> DEL["5. delete the old collections"]
+    DEL -.-> Q1
+```
+
+Collection names carry the model and document revision, so two formats never mix in
+one collection. A backfill during live traffic is safe — catalog writes only land if
+newer, orders are insert-only — and re-running it on a current index embeds nothing,
+which is what makes step 4 cheap. `scripts/compare_models.sh` uses the same mechanism
+(revision 900) to score candidate models without touching the live index.
+
 ## Entity-relationship diagrams (one per service database)
 
 No cross-service foreign keys anywhere — a column referencing another service's entity is
@@ -1001,6 +1168,104 @@ erDiagram
 
 Non-authoritative: everything here is rebuilt by replaying the Kafka topics.
 
+### Qdrant collections (ai-service search index)
+
+Not a database of record: every point is rebuilt from restaurant-service and
+order-service by `python -m app.reindex`. Each collection has two named vectors on the
+same point — `dense` (bge-base-en-v1.5, 768-d, cosine) and `bm25` (sparse, IDF computed
+by Qdrant) — and a payload; ⚑ marks a payload index (used by filters).
+
+```mermaid
+erDiagram
+    MENU_ITEMS {
+        uuid id PK "uuid5(menu_item:ID)"
+        vector dense "768-d cosine"
+        sparse bm25 "IDF modifier"
+        string menu_item_id
+        string restaurant_id "⚑"
+        string restaurant_name
+        string restaurant_status "⚑ active only in search"
+        string cuisine "⚑ group_by for kind=cuisine"
+        string city "⚑"
+        geo location "⚑ radius filter"
+        string category
+        string name
+        string description
+        float price "⚑ PKR"
+        array dietary_tags "⚑"
+        int spice_level "⚑"
+        int calories
+        bool is_available "⚑"
+        bool in_stock "⚑"
+        bool deleted "⚑ tombstone: no vectors"
+        int source_version "⚑ catalog_version"
+        string text "what was embedded"
+    }
+    RESTAURANTS {
+        uuid id PK "uuid5(restaurant:ID)"
+        vector dense
+        sparse bm25
+        string restaurant_id "⚑"
+        string name
+        string restaurant_status "⚑"
+        string cuisine "⚑"
+        string city "⚑"
+        geo location "⚑"
+        string address
+        string description
+        bool is_accepting_orders
+        int avg_prep_time_minutes
+        float avg_rating "⚑ set without re-embedding"
+        int review_count
+        int source_version "⚑"
+        string text
+    }
+    REVIEWS {
+        uuid id PK "uuid5(review:order_id:chunk)"
+        vector dense
+        sparse bm25
+        string order_id "⚑ the reviewed order"
+        string restaurant_id "⚑"
+        string restaurant_name
+        string restaurant_status "⚑"
+        string city "⚑ from the restaurant point"
+        geo location "⚑"
+        int rating "⚑"
+        array item_ids
+        datetime created_at
+        int chunk "~220 words, 40 overlap"
+        int chunks
+        int source_version "⚑"
+        string text
+    }
+    ORDER_HISTORY {
+        uuid id PK "uuid5(order:ID) or uuid5(customer_summary:ID)"
+        vector dense
+        sparse bm25
+        string doc_type "⚑ order | customer_summary"
+        string customer_id "⚑ history search is filtered to the caller"
+        string order_id
+        string restaurant_id "⚑"
+        string restaurant_name
+        array items "order: names + quantities"
+        float total_amount
+        datetime delivered_at "⚑ order_by for the summary"
+        int order_count "summary: all orders"
+        int profile_orders "summary: built from ≤ 50 latest"
+        array top_cuisines "summary"
+        array top_dishes "summary"
+        float average_spend "summary"
+        string text
+    }
+    RESTAURANTS ||--o{ MENU_ITEMS : "restaurant_id (payload, not a FK)"
+    RESTAURANTS ||--o{ REVIEWS : "restaurant_id"
+    RESTAURANTS ||--o{ ORDER_HISTORY : "restaurant_id"
+```
+
+Collection names are `{kind}__{model}_r{revision}` (live: `menu_items__bge_base_en_v1_5_r1`).
+`ai_db` (Postgres) exists but has no tables yet: conversations, content drafts and the
+AI interaction log arrive with Week 5.
+
 ### `outbox_events` (shared shape, present in `restaurant_db`/`order_db`/`delivery_db`/`payment_db`)
 
 ```mermaid
@@ -1019,4 +1284,5 @@ erDiagram
     }
 ```
 
-restaurant-service has the table but writes no events.
+restaurant-service writes catalog events to it since Week 4 (relayed by
+`restaurant-worker` to `restaurant-events`).

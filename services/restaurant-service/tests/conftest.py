@@ -39,7 +39,7 @@ async def session_factory(
             text(
                 "TRUNCATE restaurants, menu_categories, menu_items, promotions,"
                 " stock_reservations, promotion_redemptions, restaurant_status_history,"
-                " outbox_events CASCADE"
+                " reviews, outbox_events CASCADE"
             )
         )
     monkeypatch.setattr(activities, "SessionFactory", factory)

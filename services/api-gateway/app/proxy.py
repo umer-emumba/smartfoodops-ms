@@ -41,6 +41,9 @@ _UPSTREAM_POLICIES: dict[str, _UpstreamPolicy] = {
     "notification-service": _UpstreamPolicy(max_connections=50, timeout_seconds=5.0),
     # Aggregations over a window can take longer than a CRUD read.
     "analytics-service": _UpstreamPolicy(max_connections=20, timeout_seconds=10.0),
+    # Search embeds the query on CPU before it asks Qdrant, so it's slower
+    # than a CRUD read; the pool is small because each call is CPU-bound.
+    "ai-service": _UpstreamPolicy(max_connections=30, timeout_seconds=15.0),
     # Long-lived SSE streams (stream_tracking below), in a pool of their own
     # so they can never take connections from regular API calls. The read
     # timeout is 3 missed heartbeats (tracking-service sends one every 15s):

@@ -17,6 +17,11 @@ Address = Annotated[str, Field(min_length=1, max_length=500)]
 City = Annotated[str, Field(min_length=1, max_length=100)]
 CuisineType = Annotated[str, Field(min_length=1, max_length=100)]
 Description = Annotated[str, Field(max_length=1000)]
+# Fixed vocabulary, so search filters match exactly (week4-plan step 1).
+DietaryTag = Literal["vegetarian", "vegan", "halal", "gluten_free", "dairy_free", "nut_free"]
+DietaryTags = Annotated[list[DietaryTag], Field(max_length=6)]
+SpiceLevel = Annotated[int, Field(ge=0, le=3)]  # 0 none … 3 very hot
+Calories = Annotated[int, Field(ge=0, le=10_000)]
 
 
 class _PatchModel(RequestModel):
@@ -46,6 +51,7 @@ class RestaurantCreate(RequestModel):
     lng: Longitude
     contact_phone: PhoneNumber
     cuisine_type: CuisineType | None = None
+    description: Description = ""
 
 
 class RestaurantUpdate(_PatchModel):
@@ -61,6 +67,7 @@ class RestaurantUpdate(_PatchModel):
     lng: Longitude | None = None
     contact_phone: PhoneNumber | None = None
     cuisine_type: CuisineType | None = None
+    description: Description | None = None
     is_accepting_orders: bool | None = None
     max_concurrent_orders: int | None = Field(default=None, ge=1, le=1000)
     avg_prep_time_minutes: int | None = Field(default=None, ge=1, le=240)
@@ -80,6 +87,9 @@ class RestaurantResponse(BaseModel):
     is_accepting_orders: bool
     max_concurrent_orders: int
     avg_prep_time_minutes: int
+    description: str
+    avg_rating: float | None
+    review_count: int
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -107,17 +117,24 @@ class MenuItemCreate(RequestModel):
     description: Description = ""
     price: Money
     stock_count: int | None = Field(default=None, ge=0, le=1_000_000)  # None = unlimited
+    dietary_tags: DietaryTags = []
+    spice_level: SpiceLevel = 0
+    calories: Calories | None = None
 
 
 class MenuItemUpdate(_PatchModel):
     # stock_count: explicit null is meaningful — it switches to unlimited stock.
-    nullable_fields = frozenset({"stock_count"})
+    # calories: null clears it (unknown).
+    nullable_fields = frozenset({"stock_count", "calories"})
 
     name: str | None = Field(default=None, min_length=1, max_length=200)
     description: Description | None = None
     price: Money | None = None
     is_available: bool | None = None
     stock_count: int | None = Field(default=None, ge=0, le=1_000_000)
+    dietary_tags: DietaryTags | None = None
+    spice_level: SpiceLevel | None = None
+    calories: Calories | None = None
 
 
 class MenuItemResponse(BaseModel):
@@ -129,6 +146,9 @@ class MenuItemResponse(BaseModel):
     price: MoneyAmount
     is_available: bool
     stock_count: int | None
+    dietary_tags: list[str]
+    spice_level: int
+    calories: int | None
     version: int
 
     model_config = {"from_attributes": True}
@@ -188,6 +208,25 @@ class PromotionResponse(BaseModel):
     max_uses: int | None
     times_used: int
     is_active: bool
+
+    model_config = {"from_attributes": True}
+
+
+class ReviewCreate(RequestModel):
+    # The order being reviewed; it fixes the restaurant, the reviewer and the
+    # items, all checked against order-service (app/order_client.py).
+    order_id: EntityId
+    rating: int = Field(ge=1, le=5)
+    text: str = Field(min_length=1, max_length=4000)
+
+
+class ReviewResponse(BaseModel):
+    order_id: str
+    restaurant_id: str
+    rating: int
+    text: str
+    item_ids: list[str]
+    created_at: datetime
 
     model_config = {"from_attributes": True}
 

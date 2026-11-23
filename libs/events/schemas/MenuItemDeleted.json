@@ -1,0 +1,73 @@
+{
+  "$defs": {
+    "MenuItemDeletedPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "menu_item_id": {
+          "title": "Menu Item Id",
+          "type": "string"
+        },
+        "restaurant_id": {
+          "title": "Restaurant Id",
+          "type": "string"
+        },
+        "source_version": {
+          "title": "Source Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "menu_item_id",
+        "restaurant_id",
+        "source_version"
+      ],
+      "title": "MenuItemDeletedPayload",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "aggregate_id": {
+      "title": "Aggregate Id",
+      "type": "string"
+    },
+    "correlation_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Correlation Id"
+    },
+    "event_id": {
+      "title": "Event Id",
+      "type": "string"
+    },
+    "event_type": {
+      "const": "MenuItemDeleted",
+      "title": "Event Type",
+      "type": "string"
+    },
+    "occurred_at": {
+      "format": "date-time",
+      "title": "Occurred At",
+      "type": "string"
+    },
+    "payload": {
+      "$ref": "#/$defs/MenuItemDeletedPayload"
+    }
+  },
+  "required": [
+    "event_id",
+    "aggregate_id",
+    "occurred_at",
+    "event_type",
+    "payload"
+  ],
+  "title": "MenuItemDeleted",
+  "type": "object"
+}

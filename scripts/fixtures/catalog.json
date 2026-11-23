@@ -1,0 +1,3809 @@
+{
+  "restaurants": [
+    {
+      "key": "desi-dastarkhwan-f7",
+      "owner": "partner",
+      "name": "Desi Dastarkhwan",
+      "city": "Islamabad",
+      "address": "Shop 14, Jinnah Super Market, F-7 Markaz, Islamabad",
+      "lat": 33.7208,
+      "lng": 73.0552,
+      "contact_phone": "+92512650114",
+      "cuisine_type": "Pakistani / Desi",
+      "description": "A family-run desi kitchen in Jinnah Super, F-7, best known for its dum-cooked chicken and mutton biryani made in a sealed degh every few hours. The menu sticks to home-style classics: overnight beef nihari, karahi, palak paneer and a light yellow daal for weekday lunches. Open late, with leak-proof packaging that keeps rice hot across Islamabad.",
+      "avg_prep_time_minutes": 30,
+      "menu": [
+        {
+          "category": "Mains",
+          "items": [
+            {
+              "name": "Chicken Biryani",
+              "description": "Long-grain sela basmati layered with bone-in chicken marinated in yoghurt, fried onions, mint, green chillies and dried plums, then dum-cooked in a sealed degh. Fragrant, moist and properly spiced; single portion served with salad.",
+              "price": 690,
+              "dietary_tags": [
+                "halal",
+                "gluten_free",
+                "nut_free"
+              ],
+              "spice_level": 2,
+              "calories": 820
+            },
+            {
+              "name": "Mutton Biryani",
+              "description": "Tender goat mutton on the bone slow-cooked in a whole-spice masala and layered with kewra-scented basmati and saffron. Four to five generous meat pieces per portion.",
+              "price": 1150,
+              "dietary_tags": [
+                "halal",
+                "gluten_free",
+                "nut_free"
+              ],
+              "spice_level": 2,
+              "calories": 950
+            },
+            {
+              "name": "Beef Nihari",
+              "description": "Beef shank simmered overnight in a thick, glossy, chilli-rich gravy thickened with toasted flour. Served with julienned ginger, green chillies, coriander and lemon; naan sold separately.",
+              "price": 850,
+              "dietary_tags": [
+                "halal",
+                "nut_free"
+              ],
+              "spice_level": 3,
+              "calories": 780
+            },
+            {
+              "name": "Chicken Karahi (Half)",
+              "description": "Half kilo of chicken cooked hard in an iron wok with tomatoes, ginger, garlic, green chillies and crushed black pepper. Rich, tomato-forward gravy that serves two.",
+              "price": 1450,
+              "dietary_tags": [
+                "halal",
+                "gluten_free",
+                "nut_free"
+              ],
+              "spice_level": 2,
+              "calories": 1100
+            },
+            {
+              "name": "Palak Paneer",
+              "description": "Soft cottage cheese cubes in a smooth puree of fresh spinach, garlic and mild spices. Homestyle and not oily.",
+              "price": 750,
+              "dietary_tags": [
+                "vegetarian",
+                "gluten_free",
+                "nut_free"
+              ],
+              "spice_level": 1,
+              "calories": 520
+            },
+            {
+              "name": "Paneer Makhani",
+              "description": "Paneer in a rich, velvety tomato gravy finished with butter, cream and cashew paste. Indulgent, heavy and mildly sweet.",
+              "price": 980,
+              "dietary_tags": [
+                "vegetarian",
+                "gluten_free"
+              ],
+              "spice_level": 1,
+              "calories": 760
+            },
+            {
+              "name": "Yellow Daal Tadka",
+              "description": "Light, soupy yellow moong and masoor lentils tempered with garlic, cumin and dried red chilli in oil. A healthy, comforting vegan lunch.",
+              "price": 450,
+              "dietary_tags": [
+                "vegetarian",
+                "vegan",
+                "gluten_free",
+                "dairy_free",
+                "nut_free"
+              ],
+              "spice_level": 1,
+              "calories": 340
+            }
+          ]
+        },
+        {
+          "category": "Breads",
+          "items": [
+            {
+              "name": "Roghni Naan (2 pcs)",
+              "description": "Two soft tandoor-baked naans brushed with butter and sprinkled with sesame seeds.",
+              "price": 180,
+              "dietary_tags": [
+                "vegetarian",
+                "nut_free"
+              ],
+              "spice_level": 0,
+              "calories": 520
+            },
+            {
+              "name": "Garlic Naan",
+              "description": "Tandoori naan topped with chopped garlic, coriander and a brush of butter.",
+              "price": 200,
+              "dietary_tags": [
+                "vegetarian",
+                "nut_free"
+              ],
+              "spice_level": 0,
+              "calories": 330
+            }
+          ]
+        },
+        {
+          "category": "Sides",
+          "items": [
+            {
+              "name": "Mint Raita",
+              "description": "Thick chilled yoghurt whisked with fresh mint, roasted cumin and a pinch of salt. Cooling partner for biryani.",
+              "price": 150,
+              "dietary_tags": [
+                "vegetarian",
+                "gluten_free",
+                "nut_free"
+              ],
+              "spice_level": 0,
+              "calories": null
+            },
+            {
+              "name": "Kachumber Salad",
+              "description": "Fresh, crunchy diced cucumber, tomato and onion tossed with lemon juice, green chilli and chaat masala.",
+              "price": 180,
+              "dietary_tags": [
+                "vegetarian",
+                "vegan",
+                "gluten_free",
+                "dairy_free",
+                "nut_free"
+              ],
+              "spice_level": 0,
+              "calories": 80
+            }
+          ]
+        },
+        {
+          "category": "Desserts",
+          "items": [
+            {
+              "name": "Shahi Kheer",
+              "description": "Slow-cooked rice pudding thickened with full-cream milk and cardamom, topped generously with pistachio and almond slivers. Served chilled.",
+              "price": 350,
+              "dietary_tags": [
+                "vegetarian",
+                "gluten_free"
+              ],
+              "spice_level": 0,
+              "calories": 420
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "kohsar-greens-f6",
+      "owner": "partner",
+      "name": "Kohsar Greens Cafe",
+      "city": "Islamabad",
+      "address": "Shop 6, Kohsar Market, F-6/3, Islamabad",
+      "lat": 33.7286,
+      "lng": 73.078,
+      "contact_phone": "+92518315206",
+      "cuisine_type": "Healthy Bowls, Salads & Cafe",
+      "description": "A bright little cafe in Kohsar Market built around fresh, light lunches: grain bowls, big salads, wraps and cold-pressed smoothies. Plenty of vegetarian, vegan and gluten-free choices, with dressings packed on the side so nothing goes soggy. Popular with F-6 and Blue Area office workers looking for a desk lunch that does not end in a food coma.",
+      "avg_prep_time_minutes": 15,
+      "menu": [
+        {
+          "category": "Bowls & Salads",
+          "items": [
+            {
+              "name": "Grilled Veg Quinoa Bowl",
+              "description": "Fluffy quinoa topped with chargrilled zucchini, bell peppers, aubergine, roasted chickpeas and baby spinach, with a lemon-tahini dressing on the side. Light, fresh and fully vegan.",
+              "price": 1150,
+              "dietary_tags": [
+                "vegetarian",
+                "vegan",
+                "gluten_free",
+                "dairy_free",
+                "nut_free"
+              ],
+              "spice_level": 0,
+              "calories": 480
+            },
+            {
+              "name": "Chicken Caesar Salad",
+              "description": "Crisp romaine, grilled chicken breast, shaved parmesan and garlic croutons with a lighter, yoghurt-based caesar dressing.",
+              "price": 1250,
+              "dietary_tags": [
+                "halal",
+                "nut_free"
+              ],
+              "spice_level": 0,
+              "calories": 540
+            },
+            {
+              "name": "Mediterranean Chickpea Salad",
+              "description": "Chickpeas, cucumber, cherry tomatoes, red onion, olives and parsley in a zesty lemon and olive oil dressing. Fresh, healthy and filling.",
+              "price": 950,
+              "dietary_tags": [
+                "vegetarian",
+                "vegan",
+                "gluten_free",
+                "dairy_free",
+                "nut_free"
+              ],
+              "spice_level": 0,
+              "calories": 390
+            },
+            {
+              "name": "Spicy Peri Peri Chicken Bowl",
+              "description": "Brown rice with peri peri grilled chicken thigh, charred corn, pickled red onions, lettuce and a smoky chipotle yoghurt drizzle. Properly hot.",
+              "price": 1350,
+              "dietary_tags": [
+                "halal",
+                "gluten_free",
+                "nut_free"
+              ],
+              "spice_level": 2,
+              "calories": 650
+            },
+            {
+              "name": "Thai Peanut Tofu Salad",
+              "description": "Shredded red cabbage, carrots, edamame and crispy baked tofu tossed in a peanut-lime dressing and topped with crushed roasted peanuts and coriander. Crunchy and vegan.",
+              "price": 1100,
+              "dietary_tags": [
+                "vegetarian",
+                "vegan",
+                "dairy_free"
+              ],
+              "spice_level": 1,
+              "calories": 520
+            }
+          ]
+        },
+        {
+          "category": "Wraps & Toasts",
+          "items": [
+            {
+              "name": "Hummus Veggie Wrap",
+              "description": "Whole-wheat tortilla filled with smooth hummus, cucumber, roasted red peppers, spinach and crumbled feta. A light, fresh vegetarian lunch.",
+              "price": 750,
+              "dietary_tags": [
+                "vegetarian",
+                "nut_free"
+              ],
+              "spice_level": 0,
+              "calories": 450
+            },
+            {
+              "name": "Avocado Toast with Poached Egg",
+              "description": "Toasted sourdough with smashed avocado, lime, chilli flakes and two poached eggs. Crunchy, creamy and dairy free.",
+              "price": 1150,
+              "dietary_tags": [
+                "vegetarian",
+                "dairy_free",
+                "nut_free"
+              ],
+              "spice_level": 1,
+              "calories": 480
+            },
+            {
+              "name": "Grilled Chicken Pesto Wrap",
+              "description": "Grilled chicken strips, basil and pine-nut pesto, sun-dried tomatoes and rocket rolled in a toasted tortilla.",
+              "price": 950,
+              "dietary_tags": [
+                "halal"
+              ],
+              "spice_level": 0,
+              "calories": 560
+            },
+            {
+              "name": "Paneer Tikka Wrap",
+              "description": "Chargrilled paneer tikka in a spicy yoghurt marinade with onions, lettuce and fresh mint chutney in a whole-wheat wrap.",
+              "price": 780,
+              "dietary_tags": [
+                "vegetarian",
+                "nut_free"
+              ],
+              "spice_level": 2,
+              "calories": 520
+            }
+          ]
+        },
+        {
+          "category": "Smoothies & Sweets",
+          "items": [
+            {
+              "name": "Green Detox Smoothie",
+              "description": "Cold-blended spinach, green apple, cucumber, ginger and lemon. Refreshing, low sugar and light.",
+              "price": 650,
+              "dietary_tags": [
+                "vegetarian",
+                "vegan",
+                "gluten_free",
+                "dairy_free",
+                "nut_free"
+              ],
+              "spice_level": 0,
+              "calories": 160
+            },
+            {
+              "name": "Carrot Walnut Cake",
+              "description": "Moist spiced carrot cake loaded with toasted walnuts, finished with a thin cream cheese frosting.",
+              "price": 550,
+              "dietary_tags": [
+                "vegetarian"
+              ],
+              "spice_level": 0,
+              "calories": 430
+            },
+            {
+              "name": "Date & Almond Energy Balls (3 pcs)",
+              "description": "Three no-bake bites of medjool dates, roasted almonds, cocoa and desiccated coconut. Dense, chewy and naturally sweet.",
+              "price": 450,
+              "dietary_tags": [
+                "vegetarian",
+                "vegan",
+                "gluten_free",
+                "dairy_free"
+              ],
+              "spice_level": 0,
+              "calories": 260
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "cedar-charcoal-f8",
+      "owner": "partner",
+      "name": "Cedar & Charcoal",
+      "city": "Islamabad",
+      "address": "Plot 3-C, Kaghan Road, F-8 Markaz, Islamabad",
+      "lat": 33.7098,
+      "lng": 73.0381,
+      "contact_phone": "+92512287340",
+      "cuisine_type": "Lebanese / Middle Eastern",
+      "description": "Lebanese grill house in F-8 Markaz serving charcoal-grilled shish tawook, lamb kofta and shawarma alongside a full mezze spread. The smoky moutabal, silky hummus and pistachio baklava have a loyal following, and the mixed grill platter is built for sharing at family dinners. Mostly mild and garlicky, with a fiery harra wrap for chilli lovers.",
+      "avg_prep_time_minutes": 25,
+      "menu": [
+        {
+          "category": "Mezze",
+          "items": [
+            {
+              "name": "Classic Hummus",
+              "description": "Silky chickpea and tahini puree with lemon, garlic and a pool of extra virgin olive oil, served with warm pita.",
+              "price": 650,
+              "dietary_tags": [
+                "vegetarian",
+                "vegan",
+                "dairy_free",
+                "nut_free"
+              ],
+              "spice_level": 0,
+              "calories": 420
+            },
+            {
+              "name": "Moutabal",
+              "description": "Smoky flame-charred aubergine blended with tahini, garlic and lemon, topped with pomegranate seeds. Served with pita.",
+              "price": 700,
+              "dietary_tags": [
+                "vegetarian",
+                "vegan",
+                "dairy_free",
+                "nut_free"
+              ],
+              "spice_level": 0,
+              "calories": 300
+            },
+            {
+              "name": "Fattoush Salad",
+              "description": "Crisp lettuce, tomato, cucumber, radish and mint with sumac and pomegranate molasses dressing and toasted pita chips packed separately. Light and tangy.",
+              "price": 750,
+              "dietary_tags": [
+                "vegetarian",
+                "vegan",
+                "dairy_free",
+                "nut_free"
+              ],
+              "spice_level": 0,
+              "calories": 260
+            },
+            {
+              "name": "Falafel Plate (6 pcs)",
+              "description": "Six crispy chickpea and herb fritters with tahini sauce, pickled turnips and fresh vegetables.",
+              "price": 850,
+              "dietary_tags": [
+                "vegetarian",
+                "vegan",
+                "dairy_free",
+                "nut_free"
+              ],
+              "spice_level": 0,
+              "calories": 540
+            },
+            {
+              "name": "Batata Harra",
+              "description": "Crispy fried potato cubes tossed with garlic, red chilli, lemon and plenty of fresh coriander.",
+              "price": 600,
+              "dietary_tags": [
+                "vegetarian",
+                "vegan",
+                "gluten_free",
+                "dairy_free",
+                "nut_free"
+              ],
+              "spice_level": 2,
+              "calories": 410
+            }
+          ]
+        },
+        {
+          "category": "Grills",
+          "items": [
+            {
+              "name": "Shish Tawook",
+              "description": "Chicken cubes marinated in yoghurt, lemon and garlic, grilled over charcoal and served with vermicelli rice, garlic toum and grilled tomato.",
+              "price": 1450,
+              "dietary_tags": [
+                "halal",
+                "nut_free"
+              ],
+              "spice_level": 1,
+              "calories": 640
+            },
+            {
+              "name": "Lamb Kofta Kebab",
+              "description": "Minced lamb with parsley, onion and Lebanese seven-spice, charcoal-grilled on skewers and served with grilled vegetables.",
+              "price": 1750,
+              "dietary_tags": [
+                "halal",
+                "gluten_free",
+                "nut_free"
+              ],
+              "spice_level": 1,
+              "calories": 720
+            },
+            {
+              "name": "Mixed Grill Platter for Sharing",
+              "description": "Shish tawook, lamb kofta, lamb tikka, grilled tomatoes and onions on a bed of vermicelli rice with hummus, pita and garlic toum. Serves 3-4.",
+              "price": 4200,
+              "dietary_tags": [
+                "halal",
+                "nut_free"
+              ],
+              "spice_level": 1,
+              "calories": null
+            },
+            {
+              "name": "Chicken Shawarma Plate",
+              "description": "Shaved spit-roasted chicken shawarma with fries, garlic sauce, pickles and pita.",
+              "price": 1250,
+              "dietary_tags": [
+                "halal",
+                "nut_free"
+              ],
+              "spice_level": 1,
+              "calories": 820
+            }
+          ]
+        },
+        {
+          "category": "Wraps",
+          "items": [
+            {
+              "name": "Chicken Shawarma Wrap",
+              "description": "Chicken shawarma tightly rolled in thin saj bread with garlic sauce, pickles and a few fries, toasted on the grill.",
+              "price": 690,
+              "dietary_tags": [
+                "halal",
+                "nut_free"
+              ],
+              "spice_level": 1,
+              "calories": 560
+            },
+            {
+              "name": "Spicy Harra Chicken Wrap",
+              "description": "Grilled chicken tossed in a fiery harra paste of red chilli, garlic and coriander, wrapped with pickles and toum. Very hot.",
+              "price": 750,
+              "dietary_tags": [
+                "halal",
+                "nut_free"
+              ],
+              "spice_level": 3,
+              "calories": 610
+            },
+            {
+              "name": "Halloumi Wrap",
+              "description": "Grilled squeaky halloumi with tomato, fresh mint, cucumber and olives in a toasted wrap.",
+              "price": 820,
+              "dietary_tags": [
+                "vegetarian",
+                "nut_free"
+              ],
+              "spice_level": 0,
+              "calories": 590
+            }
+          ]
+        },
+        {
+          "category": "Desserts",
+          "items": [
+            {
+              "name": "Pistachio Baklava (4 pcs)",
+              "description": "Four pieces of flaky buttered filo layered with crushed pistachios and soaked in orange blossom syrup.",
+              "price": 650,
+              "dietary_tags": [
+                "vegetarian"
+              ],
+              "spice_level": 0,
+              "calories": 480
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "markaz-tikka-g9",
+      "owner": "partner",
+      "name": "Al-Markaz Tikka House",
+      "city": "Islamabad",
+      "address": "Shop 21, Karachi Company, G-9 Markaz, Islamabad",
+      "lat": 33.6937,
+      "lng": 73.0295,
+      "contact_phone": "+92512256781",
+      "cuisine_type": "Pakistani BBQ & Biryani",
+      "description": "Busy charcoal BBQ joint in Karachi Company, G-9 Markaz, famous for its huge portions and value-for-money platters. Chicken tikka, seekh kebabs, malai boti and mutton champ come straight off the coals, and the karahi and pulao are cooked in big batches. A meat-first menu with only a couple of vegetarian sides.",
+      "avg_prep_time_minutes": 35,
+      "menu": [
+        {
+          "category": "BBQ",
+          "items": [
+            {
+              "name": "Chicken Tikka (Leg Piece)",
+              "description": "A large chicken leg quarter marinated in yoghurt, red chilli and lemon, roasted over charcoal until charred and juicy.",
+              "price": 450,
+              "dietary_tags": [
+                "halal",
+                "gluten_free",
+                "nut_free"
+              ],
+              "spice_level": 2,
+              "calories": 380
+            },
+            {
+              "name": "Beef Seekh Kebab (4 pcs)",
+              "description": "Four thick skewers of spiced minced beef with green chilli, onion and coriander, grilled over coals. Smoky and juicy.",
+              "price": 780,
+              "dietary_tags": [
+                "halal",
+                "gluten_free",
+                "nut_free"
+              ],
+              "spice_level": 2,
+              "calories": 620
+            },
+            {
+              "name": "Malai Boti",
+              "description": "Boneless chicken in a creamy marinade of cream, cheese and cardamom, grilled until tender. Mild and melt-in-the-mouth.",
+              "price": 1050,
+              "dietary_tags": [
+                "halal",
+                "gluten_free",
+                "nut_free"
+              ],
+              "spice_level": 0,
+              "calories": 700
+            },
+            {
+              "name": "Mutton Champ (Chops)",
+              "description": "Thick mutton chops marinated in raw papaya, spices and chilli, char-grilled with crispy edges.",
+              "price": 1850,
+              "dietary_tags": [
+                "halal",
+                "gluten_free",
+                "nut_free"
+              ],
+              "spice_level": 2,
+              "calories": 980
+            },
+            {
+              "name": "Bihari Boti",
+              "description": "Thin beef strips tenderised with papaya and mustard oil, grilled and smoked with hot coal (dhuanr). Smoky and very spicy.",
+              "price": 950,
+              "dietary_tags": [
+                "halal",
+                "gluten_free",
+                "nut_free"
+              ],
+              "spice_level": 3,
+              "calories": 640
+            },
+            {
+              "name": "Grand BBQ Platter",
+              "description": "Chicken tikka, seekh kebabs, malai boti, reshmi kebab and chicken wings with four naans, raita and green chutney. Feeds 4-5 easily.",
+              "price": 4400,
+              "dietary_tags": [
+                "halal",
+                "nut_free"
+              ],
+              "spice_level": 2,
+              "calories": null
+            }
+          ]
+        },
+        {
+          "category": "Rice & Karahi",
+          "items": [
+            {
+              "name": "Chicken Biryani",
+              "description": "Double-portion chicken biryani with big chicken pieces, fried onions and whole spices, served with raita.",
+              "price": 650,
+              "dietary_tags": [
+                "halal",
+                "gluten_free",
+                "nut_free"
+              ],
+              "spice_level": 2,
+              "calories": 900
+            },
+            {
+              "name": "Chicken Pulao",
+              "description": "Basmati cooked in a rich chicken yakhni with whole spices, black pepper and fried onions. Aromatic and mildly spiced, huge portion.",
+              "price": 600,
+              "dietary_tags": [
+                "halal",
+                "gluten_free",
+                "nut_free"
+              ],
+              "spice_level": 1,
+              "calories": 850
+            },
+            {
+              "name": "Mutton Karahi (Full)",
+              "description": "A full kilo of mutton cooked in a karahi with tomatoes, ginger, green chilli and black pepper. Serves 4.",
+              "price": 3600,
+              "dietary_tags": [
+                "halal",
+                "gluten_free",
+                "nut_free"
+              ],
+              "spice_level": 2,
+              "calories": null
+            }
+          ]
+        },
+        {
+          "category": "Veg & Breads",
+          "items": [
+            {
+              "name": "Daal Makhani",
+              "description": "Black lentils and kidney beans simmered overnight and finished with butter and cream. Heavy, rich comfort food.",
+              "price": 650,
+              "dietary_tags": [
+                "vegetarian",
+                "gluten_free",
+                "nut_free"
+              ],
+              "spice_level": 1,
+              "calories": 620
+            },
+            {
+              "name": "Aloo Palak",
+              "description": "Potatoes and spinach cooked down with garlic, tomato and cumin in oil.",
+              "price": 500,
+              "dietary_tags": [
+                "vegetarian",
+                "vegan",
+                "gluten_free",
+                "dairy_free",
+                "nut_free"
+              ],
+              "spice_level": 1,
+              "calories": 330
+            },
+            {
+              "name": "Tandoori Paratha",
+              "description": "Layered flaky paratha cooked in the tandoor with ghee.",
+              "price": 180,
+              "dietary_tags": [
+                "vegetarian",
+                "nut_free"
+              ],
+              "spice_level": 0,
+              "calories": 300
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "wok-basil-blue-area",
+      "owner": "partner",
+      "name": "Wok & Basil",
+      "city": "Islamabad",
+      "address": "Ground Floor, Al-Rehman Plaza, Jinnah Avenue, Blue Area, Islamabad",
+      "lat": 33.7128,
+      "lng": 73.0627,
+      "contact_phone": "+92512811455",
+      "cuisine_type": "Thai / Pan-Asian",
+      "description": "Small Thai and pan-Asian kitchen on Jinnah Avenue cooking everything fresh to order: green and red curries, tom yum, pad thai and fiery basil noodles. Spice levels are authentic and there are real vegan options made with coconut milk and tofu. The kitchen is tiny, so expect longer waits at peak hours.",
+      "avg_prep_time_minutes": 45,
+      "menu": [
+        {
+          "category": "Starters & Soups",
+          "items": [
+            {
+              "name": "Chicken Satay Skewers",
+              "description": "Four lemongrass and turmeric chicken skewers grilled and served with a rich peanut dipping sauce and cucumber relish.",
+              "price": 950,
+              "dietary_tags": [
+                "halal",
+                "gluten_free",
+                "dairy_free"
+              ],
+              "spice_level": 1,
+              "calories": 480
+            },
+            {
+              "name": "Vegetable Spring Rolls (4 pcs)",
+              "description": "Crispy fried rolls stuffed with cabbage, carrot, glass noodles and mushroom, with sweet chilli dip.",
+              "price": 550,
+              "dietary_tags": [
+                "vegetarian",
+                "vegan",
+                "dairy_free",
+                "nut_free"
+              ],
+              "spice_level": 1,
+              "calories": 360
+            },
+            {
+              "name": "Tom Yum Soup (Prawn)",
+              "description": "Hot and sour broth of lemongrass, galangal, kaffir lime and bird's eye chilli with plump prawns and mushrooms. Fiery and light.",
+              "price": 990,
+              "dietary_tags": [
+                "halal",
+                "gluten_free",
+                "dairy_free",
+                "nut_free"
+              ],
+              "spice_level": 3,
+              "calories": 220
+            },
+            {
+              "name": "Tom Kha Gai",
+              "description": "Creamy coconut milk soup with chicken, galangal, lemongrass and lime. Mild and soothing.",
+              "price": 890,
+              "dietary_tags": [
+                "halal",
+                "gluten_free",
+                "dairy_free",
+                "nut_free"
+              ],
+              "spice_level": 1,
+              "calories": 340
+            }
+          ]
+        },
+        {
+          "category": "Mains",
+          "items": [
+            {
+              "name": "Thai Green Curry with Chicken",
+              "description": "Chicken thigh, Thai aubergine and bamboo shoots simmered in a creamy coconut green curry with Thai basil and kaffir lime leaves.",
+              "price": 1550,
+              "dietary_tags": [
+                "halal",
+                "gluten_free",
+                "dairy_free",
+                "nut_free"
+              ],
+              "spice_level": 2,
+              "calories": 780
+            },
+            {
+              "name": "Red Curry Tofu & Vegetables",
+              "description": "Firm tofu, baby corn, bell peppers and snow peas in a spicy, creamy coconut red curry made without fish sauce. Vegan.",
+              "price": 1290,
+              "dietary_tags": [
+                "vegetarian",
+                "vegan",
+                "gluten_free",
+                "dairy_free",
+                "nut_free"
+              ],
+              "spice_level": 2,
+              "calories": 620
+            },
+            {
+              "name": "Pad Thai with Prawns",
+              "description": "Wok-fried rice noodles with prawns, egg, bean sprouts and tamarind sauce, served with crushed peanuts and lime.",
+              "price": 1650,
+              "dietary_tags": [
+                "halal",
+                "dairy_free"
+              ],
+              "spice_level": 1,
+              "calories": 820
+            },
+            {
+              "name": "Spicy Basil Noodles",
+              "description": "Wide rice noodles wok-tossed with chicken, holy basil, garlic, soy and plenty of bird's eye chilli. Smoky and very hot.",
+              "price": 1350,
+              "dietary_tags": [
+                "halal",
+                "dairy_free",
+                "nut_free"
+              ],
+              "spice_level": 3,
+              "calories": 760
+            },
+            {
+              "name": "Beef Massaman Curry",
+              "description": "Beef braised for hours in a mild, rich massaman curry with potatoes, roasted peanuts, cinnamon and tamarind.",
+              "price": 1750,
+              "dietary_tags": [
+                "halal",
+                "gluten_free",
+                "dairy_free"
+              ],
+              "spice_level": 1,
+              "calories": 890
+            },
+            {
+              "name": "Thai Basil Chicken Rice Bowl (Pad Krapow)",
+              "description": "Minced chicken stir-fried with holy basil, garlic and chilli over jasmine rice, topped with a crispy-edged fried egg.",
+              "price": 1150,
+              "dietary_tags": [
+                "halal",
+                "dairy_free",
+                "nut_free"
+              ],
+              "spice_level": 3,
+              "calories": 720
+            }
+          ]
+        },
+        {
+          "category": "Rice & Desserts",
+          "items": [
+            {
+              "name": "Steamed Jasmine Rice",
+              "description": "A bowl of fragrant steamed Thai jasmine rice.",
+              "price": 250,
+              "dietary_tags": [
+                "vegetarian",
+                "vegan",
+                "gluten_free",
+                "dairy_free",
+                "nut_free"
+              ],
+              "spice_level": 0,
+              "calories": null
+            },
+            {
+              "name": "Mango Sticky Rice",
+              "description": "Sweet glutinous rice with ripe mango slices and salted coconut cream. Seasonal.",
+              "price": 750,
+              "dietary_tags": [
+                "vegetarian",
+                "vegan",
+                "gluten_free",
+                "dairy_free",
+                "nut_free"
+              ],
+              "spice_level": 0,
+              "calories": 450
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "demo-bistro",
+      "owner": "demo",
+      "name": "Demo Bistro",
+      "city": "Karachi",
+      "address": "123 Main St",
+      "lat": 24.86,
+      "lng": 67.01,
+      "contact_phone": "+92210000000",
+      "cuisine_type": "Pakistani",
+      "description": "Homestyle Pakistani kitchen serving Karachi-style favourites: spicy aloo biryani, chicken karahi, haleem and chapli kebabs, plus BBQ rolls for late nights. Light options like daal chawal and a fresh veggie wrap sit alongside the heavier curries. Fast delivery across central Karachi and Clifton.",
+      "avg_prep_time_minutes": 25,
+      "menu": [
+        {
+          "category": "Mains",
+          "items": [
+            {
+              "name": "Chicken Biryani",
+              "description": "Karachi-style chicken biryani with potatoes, aloo bukhara, fried onions, mint and a fiery red masala layered through basmati rice. Spicy and aromatic.",
+              "price": 550,
+              "dietary_tags": [
+                "halal",
+                "gluten_free",
+                "nut_free"
+              ],
+              "spice_level": 3,
+              "calories": 880
+            },
+            {
+              "name": "Veggie Wrap",
+              "description": "Light wheat tortilla filled with grilled peppers, onions and cabbage slaw with mint-yoghurt chutney. A fresh, healthy lunch.",
+              "price": 520,
+              "dietary_tags": [
+                "vegetarian",
+                "nut_free"
+              ],
+              "spice_level": 1,
+              "calories": 410
+            },
+            {
+              "name": "Chicken Karahi (Half)",
+              "description": "Half kilo chicken cooked in a wok with tomatoes, green chillies, ginger and coriander. Serves two.",
+              "price": 1400,
+              "dietary_tags": [
+                "halal",
+                "gluten_free",
+                "nut_free"
+              ],
+              "spice_level": 2,
+              "calories": 1050
+            },
+            {
+              "name": "Beef Haleem",
+              "description": "Wheat, barley and lentils slow-cooked with shredded beef until thick and stringy; topped with fried onions, ginger, lemon and chaat masala.",
+              "price": 650,
+              "dietary_tags": [
+                "halal",
+                "nut_free"
+              ],
+              "spice_level": 2,
+              "calories": 690
+            },
+            {
+              "name": "Chicken Qorma",
+              "description": "Chicken in a fragrant, mildly spiced yoghurt and fried-onion gravy enriched with almond paste and kewra.",
+              "price": 850,
+              "dietary_tags": [
+                "halal",
+                "gluten_free"
+              ],
+              "spice_level": 1,
+              "calories": 760
+            },
+            {
+              "name": "Chapli Kebab (2 pcs)",
+              "description": "Two large Peshawari-style minced beef patties with tomato, pomegranate seeds and crushed coriander, shallow fried till crisp at the edges.",
+              "price": 700,
+              "dietary_tags": [
+                "halal",
+                "nut_free"
+              ],
+              "spice_level": 2,
+              "calories": 640
+            }
+          ]
+        },
+        {
+          "category": "Grills & Rolls",
+          "items": [
+            {
+              "name": "Seekh Kebab Paratha Roll",
+              "description": "Beef seekh kebab rolled in a flaky paratha with onions, green chutney and garlic mayo.",
+              "price": 450,
+              "dietary_tags": [
+                "halal",
+                "nut_free"
+              ],
+              "spice_level": 2,
+              "calories": 590
+            },
+            {
+              "name": "Chicken Tikka Boti (8 pcs)",
+              "description": "Eight boneless chicken tikka pieces marinated in red chilli and yoghurt, charcoal grilled.",
+              "price": 750,
+              "dietary_tags": [
+                "halal",
+                "gluten_free",
+                "nut_free"
+              ],
+              "spice_level": 2,
+              "calories": 420
+            }
+          ]
+        },
+        {
+          "category": "Sides",
+          "items": [
+            {
+              "name": "Daal Chawal",
+              "description": "Light, homely masoor daal with garlic tarka served over plain boiled rice with achaar. Simple vegan comfort food.",
+              "price": 480,
+              "dietary_tags": [
+                "vegetarian",
+                "vegan",
+                "gluten_free",
+                "dairy_free",
+                "nut_free"
+              ],
+              "spice_level": 1,
+              "calories": 520
+            },
+            {
+              "name": "Cucumber Raita",
+              "description": "Cool yoghurt with grated cucumber, cumin and mint.",
+              "price": 150,
+              "dietary_tags": [
+                "vegetarian",
+                "gluten_free",
+                "nut_free"
+              ],
+              "spice_level": 0,
+              "calories": null
+            }
+          ]
+        },
+        {
+          "category": "Desserts",
+          "items": [
+            {
+              "name": "Gulab Jamun (2 pcs)",
+              "description": "Two warm, soft milk dumplings soaked in cardamom syrup and topped with pistachio.",
+              "price": 250,
+              "dietary_tags": [
+                "vegetarian"
+              ],
+              "spice_level": 0,
+              "calories": 380
+            },
+            {
+              "name": "Gajar ka Halwa",
+              "description": "Slow-cooked grated carrots with milk, khoya, ghee and sugar, garnished with almonds. Winter special.",
+              "price": 400,
+              "dietary_tags": [
+                "vegetarian",
+                "gluten_free"
+              ],
+              "spice_level": 0,
+              "calories": 450
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "boat-basin-street-kitchen",
+      "owner": "partner",
+      "name": "Boat Basin Street Kitchen",
+      "city": "Karachi",
+      "address": "Stall 8, Boat Basin Food Street, Khayaban-e-Saadi, Clifton Block 5, Karachi",
+      "lat": 24.8213,
+      "lng": 67.0336,
+      "contact_phone": "+922135871209",
+      "cuisine_type": "Karachi Street Food",
+      "description": "Classic Karachi street food from the Boat Basin strip: anda shami bun kebabs, chutney rolls, smoky gola kebabs and wok-fired chicken karahi. Cheap, spicy and open past midnight, with chaat and dahi baray for iftar crowds. Expect bold chilli heat and plenty of oil on the karahis.",
+      "avg_prep_time_minutes": 20,
+      "menu": [
+        {
+          "category": "Street Classics",
+          "items": [
+            {
+              "name": "Anda Shami Bun Kebab",
+              "description": "Beef and chana daal shami patty dipped in egg and fried, in a butter-toasted bun with green and imli chutney, onion rings and cabbage.",
+              "price": 280,
+              "dietary_tags": [
+                "halal",
+                "nut_free"
+              ],
+              "spice_level": 2,
+              "calories": 450
+            },
+            {
+              "name": "Double Shami Bun Kebab with Cheese",
+              "description": "Two egg-fried shami patties with a slice of cheese, chutneys and onions in a toasted bun. Filling late-night snack.",
+              "price": 420,
+              "dietary_tags": [
+                "halal",
+                "nut_free"
+              ],
+              "spice_level": 2,
+              "calories": 620
+            },
+            {
+              "name": "Chicken Chatni Roll",
+              "description": "Spicy chicken boti rolled in a crisp paratha with fiery green chutney, onions and garlic mayo.",
+              "price": 380,
+              "dietary_tags": [
+                "halal",
+                "nut_free"
+              ],
+              "spice_level": 3,
+              "calories": 520
+            },
+            {
+              "name": "Beef Bihari Kebab Roll",
+              "description": "Smoky, tender Bihari beef strips with onions and mint chutney in a crispy paratha. Very spicy.",
+              "price": 450,
+              "dietary_tags": [
+                "halal",
+                "nut_free"
+              ],
+              "spice_level": 3,
+              "calories": 580
+            },
+            {
+              "name": "Gola Kebab Plate",
+              "description": "Soft, smoky minced beef gola kebabs spiced with red chilli, served with onion rings, lemon and mint chutney.",
+              "price": 750,
+              "dietary_tags": [
+                "halal",
+                "nut_free"
+              ],
+              "spice_level": 3,
+              "calories": 620
+            },
+            {
+              "name": "Dahi Baray (Plate)",
+              "description": "Soft lentil dumplings soaked in chilled sweet yoghurt with imli chutney and chaat masala.",
+              "price": 300,
+              "dietary_tags": [
+                "vegetarian",
+                "gluten_free",
+                "nut_free"
+              ],
+              "spice_level": 1,
+              "calories": 340
+            },
+            {
+              "name": "Chana Chaat",
+              "description": "Chickpeas, boiled potato, onion and tomato tossed with tamarind chutney, green chilli and chaat masala. Tangy and light.",
+              "price": 280,
+              "dietary_tags": [
+                "vegetarian",
+                "vegan",
+                "gluten_free",
+                "dairy_free",
+                "nut_free"
+              ],
+              "spice_level": 2,
+              "calories": 290
+            },
+            {
+              "name": "Aloo Samosa (3 pcs)",
+              "description": "Three crispy fried pastries filled with spicy potato, peas and coriander, with green chutney.",
+              "price": 200,
+              "dietary_tags": [
+                "vegetarian",
+                "vegan",
+                "dairy_free",
+                "nut_free"
+              ],
+              "spice_level": 2,
+              "calories": 390
+            }
+          ]
+        },
+        {
+          "category": "Karahi",
+          "items": [
+            {
+              "name": "Chicken Karahi (Full)",
+              "description": "One kilo of chicken cooked street-style in a wok with tomatoes, loads of green chillies, ginger and crushed black pepper. Serves 3-4; oily and fiery.",
+              "price": 2400,
+              "dietary_tags": [
+                "halal",
+                "gluten_free",
+                "nut_free"
+              ],
+              "spice_level": 3,
+              "calories": null
+            },
+            {
+              "name": "Chicken White Karahi (Half)",
+              "description": "Creamy white karahi of chicken in yoghurt and cream with crushed black pepper and ginger. Mild and rich.",
+              "price": 1550,
+              "dietary_tags": [
+                "halal",
+                "gluten_free",
+                "nut_free"
+              ],
+              "spice_level": 1,
+              "calories": 980
+            },
+            {
+              "name": "Peshawari Mutton Karahi (Half)",
+              "description": "Half kilo mutton cooked simply in its own fat with tomatoes, salt and black pepper, Peshawar-style.",
+              "price": 2200,
+              "dietary_tags": [
+                "halal",
+                "gluten_free",
+                "nut_free"
+              ],
+              "spice_level": 1,
+              "calories": 1100
+            }
+          ]
+        },
+        {
+          "category": "Drinks",
+          "items": [
+            {
+              "name": "Doodh Patti Chai",
+              "description": "Strong kadak tea boiled in milk, served in a sealed cup.",
+              "price": 150,
+              "dietary_tags": [
+                "vegetarian",
+                "gluten_free",
+                "nut_free"
+              ],
+              "spice_level": 0,
+              "calories": null
+            },
+            {
+              "name": "Sweet Lassi",
+              "description": "Thick chilled yoghurt lassi topped with cream and crushed pistachio.",
+              "price": 250,
+              "dietary_tags": [
+                "vegetarian",
+                "gluten_free"
+              ],
+              "spice_level": 0,
+              "calories": 320
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "forno-rosso-dha6",
+      "owner": "partner",
+      "name": "Forno Rosso",
+      "city": "Karachi",
+      "address": "14-C, Lane 4, Bukhari Commercial, DHA Phase 6, Karachi",
+      "lat": 24.8068,
+      "lng": 67.0655,
+      "contact_phone": "+922135342780",
+      "cuisine_type": "Italian / Wood-fired Pizza",
+      "description": "Wood-fired pizzeria in Bukhari Commercial with long-fermented Neapolitan-style dough and a short menu of fresh pastas. Known for its margherita, spicy diavola and a desi chicken tikka pizza, plus cheesy baked mac and creamy alfredo for comfort cravings. Offers a dedicated gluten-free pasta cooked separately.",
+      "avg_prep_time_minutes": 30,
+      "menu": [
+        {
+          "category": "Pizza",
+          "items": [
+            {
+              "name": "Margherita",
+              "description": "12-inch wood-fired pizza with San Marzano tomato, fior di latte and fresh basil on a thin, blistered, airy crust.",
+              "price": 1450,
+              "dietary_tags": [
+                "vegetarian",
+                "nut_free"
+              ],
+              "spice_level": 0,
+              "calories": 1050
+            },
+            {
+              "name": "Spicy Chicken Tikka Pizza",
+              "description": "Wood-fired base with chicken tikka chunks, onions, green chillies, mozzarella and a drizzle of spicy mint mayo.",
+              "price": 1850,
+              "dietary_tags": [
+                "halal",
+                "nut_free"
+              ],
+              "spice_level": 2,
+              "calories": 1300
+            },
+            {
+              "name": "Diavola with Beef Pepperoni",
+              "description": "Tomato, mozzarella, crispy beef pepperoni cups, Calabrian chilli and chilli oil. Very spicy.",
+              "price": 1950,
+              "dietary_tags": [
+                "halal",
+                "nut_free"
+              ],
+              "spice_level": 3,
+              "calories": 1400
+            },
+            {
+              "name": "Four Cheese Pizza",
+              "description": "Rich, heavy white pizza with mozzarella, gorgonzola, parmesan and aged cheddar.",
+              "price": 1950,
+              "dietary_tags": [
+                "vegetarian",
+                "nut_free"
+              ],
+              "spice_level": 0,
+              "calories": 1450
+            },
+            {
+              "name": "Pesto Veggie Pizza",
+              "description": "Basil and pine-nut pesto base with roasted peppers, mushrooms, zucchini, olives and mozzarella.",
+              "price": 1650,
+              "dietary_tags": [
+                "vegetarian"
+              ],
+              "spice_level": 0,
+              "calories": 1150
+            }
+          ]
+        },
+        {
+          "category": "Pasta",
+          "items": [
+            {
+              "name": "Penne Arrabbiata",
+              "description": "Penne in a slow-cooked tomato sauce with garlic, olive oil and dried chilli flakes. Spicy and vegan.",
+              "price": 1150,
+              "dietary_tags": [
+                "vegetarian",
+                "vegan",
+                "dairy_free",
+                "nut_free"
+              ],
+              "spice_level": 2,
+              "calories": 680
+            },
+            {
+              "name": "Fettuccine Alfredo with Grilled Chicken",
+              "description": "Fresh fettuccine in a creamy parmesan and butter sauce with sliced grilled chicken breast. Rich and heavy.",
+              "price": 1550,
+              "dietary_tags": [
+                "halal",
+                "nut_free"
+              ],
+              "spice_level": 0,
+              "calories": 1250
+            },
+            {
+              "name": "Baked Mac & Cheese",
+              "description": "Macaroni baked in a three-cheese sauce under a crispy breadcrumb crust. Gooey, cheesy comfort food.",
+              "price": 1250,
+              "dietary_tags": [
+                "vegetarian",
+                "nut_free"
+              ],
+              "spice_level": 0,
+              "calories": 1150
+            },
+            {
+              "name": "Spaghetti Bolognese (Beef)",
+              "description": "Spaghetti with a slow-cooked minced beef and tomato ragu, herbs and garlic.",
+              "price": 1450,
+              "dietary_tags": [
+                "halal",
+                "dairy_free",
+                "nut_free"
+              ],
+              "spice_level": 1,
+              "calories": 920
+            },
+            {
+              "name": "Gluten-Free Penne Primavera",
+              "description": "Rice-flour penne cooked separately and tossed with seasonal vegetables, garlic, cherry tomatoes and olive oil. Light and fresh.",
+              "price": 1350,
+              "dietary_tags": [
+                "vegetarian",
+                "vegan",
+                "gluten_free",
+                "dairy_free",
+                "nut_free"
+              ],
+              "spice_level": 0,
+              "calories": 590
+            }
+          ]
+        },
+        {
+          "category": "Starters & Salads",
+          "items": [
+            {
+              "name": "Garlic Bread with Cheese",
+              "description": "Wood-fired garlic butter bread topped with melted mozzarella.",
+              "price": 550,
+              "dietary_tags": [
+                "vegetarian",
+                "nut_free"
+              ],
+              "spice_level": 0,
+              "calories": 480
+            },
+            {
+              "name": "Rocket & Pear Salad",
+              "description": "Peppery rocket, sliced pear, parmesan shavings and candied walnuts with a balsamic dressing. Light starter.",
+              "price": 950,
+              "dietary_tags": [
+                "vegetarian",
+                "gluten_free"
+              ],
+              "spice_level": 0,
+              "calories": 320
+            }
+          ]
+        },
+        {
+          "category": "Desserts",
+          "items": [
+            {
+              "name": "Tiramisu",
+              "description": "Espresso-soaked ladyfingers layered with whipped mascarpone and cocoa, served in a glass jar.",
+              "price": 850,
+              "dietary_tags": [
+                "vegetarian",
+                "nut_free"
+              ],
+              "spice_level": 0,
+              "calories": 450
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "golden-dragon-gulshan",
+      "owner": "partner",
+      "name": "Golden Dragon",
+      "city": "Karachi",
+      "address": "Shop 5, Rashid Minhas Road, Block 10-A, Gulshan-e-Iqbal, Karachi",
+      "lat": 24.9196,
+      "lng": 67.0947,
+      "contact_phone": "+922134981652",
+      "cuisine_type": "Chinese-Pakistani",
+      "description": "Old-school Pakistani-Chinese restaurant in Gulshan-e-Iqbal serving thick chicken corn soup, chilli chicken dry, manchurian and chowmein the way Karachi families remember. The family combo is a local favourite for big, cheap dinners. Wok dishes lean spicy, with a couple of vegan tofu options.",
+      "avg_prep_time_minutes": 25,
+      "menu": [
+        {
+          "category": "Soups & Starters",
+          "items": [
+            {
+              "name": "Chicken Corn Soup (Bowl)",
+              "description": "Thick, comforting chicken broth with sweet corn, shredded chicken and egg ribbons. Served with chilli vinegar and soy.",
+              "price": 450,
+              "dietary_tags": [
+                "halal",
+                "dairy_free",
+                "nut_free"
+              ],
+              "spice_level": 0,
+              "calories": 280
+            },
+            {
+              "name": "Hot and Sour Soup",
+              "description": "Peppery, tangy soup with chicken, tofu, mushroom and egg, sharpened with vinegar and chilli.",
+              "price": 480,
+              "dietary_tags": [
+                "halal",
+                "dairy_free",
+                "nut_free"
+              ],
+              "spice_level": 2,
+              "calories": 260
+            },
+            {
+              "name": "Chicken Spring Rolls (6 pcs)",
+              "description": "Six crispy rolls filled with shredded chicken, cabbage and carrots.",
+              "price": 550,
+              "dietary_tags": [
+                "halal",
+                "nut_free"
+              ],
+              "spice_level": 1,
+              "calories": null
+            },
+            {
+              "name": "Dynamite Chicken",
+              "description": "Crispy fried chicken bites tossed in spicy sriracha mayo, topped with spring onions.",
+              "price": 890,
+              "dietary_tags": [
+                "halal",
+                "nut_free"
+              ],
+              "spice_level": 2,
+              "calories": 720
+            }
+          ]
+        },
+        {
+          "category": "Mains",
+          "items": [
+            {
+              "name": "Chicken Manchurian",
+              "description": "Fried chicken cubes in a tangy, sweet tomato-soy gravy with capsicum and onion.",
+              "price": 950,
+              "dietary_tags": [
+                "halal",
+                "dairy_free",
+                "nut_free"
+              ],
+              "spice_level": 1,
+              "calories": 680
+            },
+            {
+              "name": "Chilli Chicken Dry",
+              "description": "Chicken strips wok-tossed with sliced green chillies, onions, capsicum and soy. Smoky, dry and very spicy.",
+              "price": 980,
+              "dietary_tags": [
+                "halal",
+                "dairy_free",
+                "nut_free"
+              ],
+              "spice_level": 3,
+              "calories": 640
+            },
+            {
+              "name": "Kung Pao Chicken",
+              "description": "Diced chicken stir-fried with roasted peanuts, dried red chillies, capsicum and a sweet-sour sauce.",
+              "price": 1050,
+              "dietary_tags": [
+                "halal",
+                "dairy_free"
+              ],
+              "spice_level": 2,
+              "calories": 710
+            },
+            {
+              "name": "Beef Chilli Dry",
+              "description": "Thin beef strips wok-fried with green chillies, garlic and soy. Fiery.",
+              "price": 1150,
+              "dietary_tags": [
+                "halal",
+                "dairy_free",
+                "nut_free"
+              ],
+              "spice_level": 3,
+              "calories": 690
+            },
+            {
+              "name": "Szechuan Vegetables with Tofu",
+              "description": "Firm tofu and mixed vegetables in a fiery Szechuan pepper and chilli sauce. Vegan and numbing-hot.",
+              "price": 790,
+              "dietary_tags": [
+                "vegetarian",
+                "vegan",
+                "dairy_free",
+                "nut_free"
+              ],
+              "spice_level": 3,
+              "calories": 380
+            },
+            {
+              "name": "Vegetable Chow Mein",
+              "description": "Stir-fried egg-free noodles with cabbage, carrots, capsicum and spring onion.",
+              "price": 750,
+              "dietary_tags": [
+                "vegetarian",
+                "vegan",
+                "dairy_free",
+                "nut_free"
+              ],
+              "spice_level": 1,
+              "calories": 560
+            },
+            {
+              "name": "Chicken Chowmein",
+              "description": "Wok-fried noodles with chicken, vegetables and soy.",
+              "price": 850,
+              "dietary_tags": [
+                "halal",
+                "dairy_free",
+                "nut_free"
+              ],
+              "spice_level": 1,
+              "calories": 720
+            },
+            {
+              "name": "Egg Fried Rice",
+              "description": "Fluffy rice wok-fried with egg, spring onions and a touch of soy.",
+              "price": 550,
+              "dietary_tags": [
+                "vegetarian",
+                "dairy_free",
+                "nut_free"
+              ],
+              "spice_level": 0,
+              "calories": 610
+            },
+            {
+              "name": "Family Combo for Four",
+              "description": "Four chicken corn soups, chicken manchurian, chilli chicken, egg fried rice and chicken chowmein. Feeds 4-5 for sharing.",
+              "price": 3900,
+              "dietary_tags": [
+                "halal",
+                "nut_free"
+              ],
+              "spice_level": 2,
+              "calories": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "lahori-nashta-tariq-road",
+      "owner": "partner",
+      "name": "Lahori Nashta House",
+      "city": "Karachi",
+      "address": "Shop 3, Tariq Road, near Rehmania Masjid, PECHS Block 2, Karachi",
+      "lat": 24.8728,
+      "lng": 67.0616,
+      "contact_phone": "+922134551870",
+      "cuisine_type": "Breakfast, Halwa Puri & Desserts",
+      "description": "Breakfast specialist on Tariq Road serving Lahori-style halwa puri, chanay, nihari and siri paye from 7am. Fresh parathas, kadak doodh patti and Kashmiri chai keep the morning crowd coming, and the mithai counter does rabri falooda, suji halwa and clay-pot kheer. Weekend family breakfast orders are its speciality.",
+      "avg_prep_time_minutes": 15,
+      "menu": [
+        {
+          "category": "Breakfast",
+          "items": [
+            {
+              "name": "Halwa Puri Platter",
+              "description": "Two puffed puris with sweet suji halwa, spicy chanay, aloo bhujia and achaar.",
+              "price": 450,
+              "dietary_tags": [
+                "vegetarian",
+                "nut_free"
+              ],
+              "spice_level": 1,
+              "calories": 980
+            },
+            {
+              "name": "Extra Puri (2 pcs)",
+              "description": "Two crispy deep-fried puris.",
+              "price": 150,
+              "dietary_tags": [
+                "vegetarian",
+                "vegan",
+                "dairy_free",
+                "nut_free"
+              ],
+              "spice_level": 0,
+              "calories": null
+            },
+            {
+              "name": "Chana Cholay Plate",
+              "description": "Chickpeas slow-cooked in a spicy, tangy masala with onions and coriander.",
+              "price": 300,
+              "dietary_tags": [
+                "vegetarian",
+                "vegan",
+                "gluten_free",
+                "dairy_free",
+                "nut_free"
+              ],
+              "spice_level": 2,
+              "calories": 360
+            },
+            {
+              "name": "Anda Paratha (Masala Omelette with Paratha)",
+              "description": "Fluffy masala omelette with onion, tomato and green chilli served with a flaky layered paratha.",
+              "price": 350,
+              "dietary_tags": [
+                "vegetarian",
+                "nut_free"
+              ],
+              "spice_level": 1,
+              "calories": 620
+            },
+            {
+              "name": "Aloo Paratha with Dahi",
+              "description": "Paratha stuffed with spiced mashed potato, cooked with ghee and served with fresh dahi.",
+              "price": 380,
+              "dietary_tags": [
+                "vegetarian",
+                "nut_free"
+              ],
+              "spice_level": 1,
+              "calories": 560
+            },
+            {
+              "name": "Siri Paye (Bowl)",
+              "description": "Beef trotters slow-cooked overnight into a sticky, gelatinous spiced broth with ginger and lemon.",
+              "price": 750,
+              "dietary_tags": [
+                "halal",
+                "gluten_free",
+                "nut_free"
+              ],
+              "spice_level": 2,
+              "calories": 720
+            },
+            {
+              "name": "Beef Nihari with Khameeri Roti",
+              "description": "Spicy beef nihari with tender shank and bone marrow served with a soft, slightly sweet khameeri roti.",
+              "price": 790,
+              "dietary_tags": [
+                "halal",
+                "nut_free"
+              ],
+              "spice_level": 3,
+              "calories": 840
+            }
+          ]
+        },
+        {
+          "category": "Chai",
+          "items": [
+            {
+              "name": "Kashmiri Chai",
+              "description": "Creamy pink tea with cardamom, topped with crushed pistachios and almonds.",
+              "price": 250,
+              "dietary_tags": [
+                "vegetarian",
+                "gluten_free"
+              ],
+              "spice_level": 0,
+              "calories": 260
+            },
+            {
+              "name": "Doodh Patti",
+              "description": "Strong milky tea brewed the Lahori way.",
+              "price": 180,
+              "dietary_tags": [
+                "vegetarian",
+                "gluten_free",
+                "nut_free"
+              ],
+              "spice_level": 0,
+              "calories": 130
+            }
+          ]
+        },
+        {
+          "category": "Mithai & Desserts",
+          "items": [
+            {
+              "name": "Rabri Falooda",
+              "description": "Thick reduced-milk rabri with vermicelli, basil seeds, rose syrup and crushed pistachios.",
+              "price": 450,
+              "dietary_tags": [
+                "vegetarian"
+              ],
+              "spice_level": 0,
+              "calories": 520
+            },
+            {
+              "name": "Suji Halwa (250g)",
+              "description": "Semolina halwa roasted in ghee with cardamom, almonds and raisins.",
+              "price": 400,
+              "dietary_tags": [
+                "vegetarian"
+              ],
+              "spice_level": 0,
+              "calories": 610
+            },
+            {
+              "name": "Kheer Clay Pot",
+              "description": "Rice pudding set in an earthen pot for an earthy flavour, topped with pistachio.",
+              "price": 300,
+              "dietary_tags": [
+                "vegetarian",
+                "gluten_free"
+              ],
+              "spice_level": 0,
+              "calories": 380
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "reviews": [
+    {
+      "restaurant": "desi-dastarkhwan-f7",
+      "items": [
+        "Chicken Biryani"
+      ],
+      "rating": 5,
+      "text": "Best chicken biryani in F-7, no contest. Rice was separate and fluffy, chicken fell off the bone and the aloo bukhara gave that little tang. Ordered for office lunch and everyone asked where it was from.",
+      "days_ago": 73
+    },
+    {
+      "restaurant": "desi-dastarkhwan-f7",
+      "items": [
+        "Mutton Biryani",
+        "Mint Raita"
+      ],
+      "rating": 5,
+      "text": "Mutton was tender with no smell at all, and the masala had depth without burning your mouth. Raita was thick and cold. Came in a sealed foil tray so it was still steaming when it reached G-6.",
+      "days_ago": 9
+    },
+    {
+      "restaurant": "desi-dastarkhwan-f7",
+      "items": [
+        "Beef Nihari",
+        "Roghni Naan (2 pcs)"
+      ],
+      "rating": 4,
+      "text": "Nihari was rich and the shank meat was melting, but it needed more ginger and lemon on the side. Naan was soft. Solid Sunday breakfast.",
+      "days_ago": 49
+    },
+    {
+      "restaurant": "desi-dastarkhwan-f7",
+      "items": [
+        "Chicken Biryani"
+      ],
+      "rating": 5,
+      "text": "Zabardast biryani yaar. Proper dum flavour, not that food-colour orange stuff. Portion is enough for one hungry person or two light eaters.",
+      "days_ago": 81
+    },
+    {
+      "restaurant": "desi-dastarkhwan-f7",
+      "items": [
+        "Yellow Daal Tadka",
+        "Kachumber Salad"
+      ],
+      "rating": 4,
+      "text": "Wanted something light for a weekday lunch and this hit the spot. The daal is thin and homely with a nice garlic tarka, salad was crunchy and fresh. Would be 5 stars if they sent a roti with it.",
+      "days_ago": 83
+    },
+    {
+      "restaurant": "desi-dastarkhwan-f7",
+      "items": [
+        "Paneer Makhani",
+        "Garlic Naan"
+      ],
+      "rating": 4,
+      "text": "Paneer makhani is very rich, lots of butter and cream, definitely not a diet meal. Paneer cubes were soft. Garlic naan was a bit chewy by the time it arrived.",
+      "days_ago": 21
+    },
+    {
+      "restaurant": "desi-dastarkhwan-f7",
+      "items": [
+        "Chicken Karahi (Half)"
+      ],
+      "rating": 3,
+      "text": "Karahi was okay, slightly too much oil floating on top and the tomatoes weren't fully cooked down. The biryani here is much better, stick to that.",
+      "days_ago": 16
+    },
+    {
+      "restaurant": "desi-dastarkhwan-f7",
+      "items": [
+        "Chicken Biryani",
+        "Mint Raita",
+        "Shahi Kheer"
+      ],
+      "rating": 5,
+      "text": "I have been meaning to write this for a while because Desi Dastarkhwan has quietly become the place my whole family orders from whenever there is anything to celebrate, and the reason is simple: the chicken biryani. Let me explain why it is different from the dozen other biryanis we have tried across Islamabad.\n\nFirst, the rice. Every grain is long, separate and properly cooked through, never mushy at the bottom and never hard at the top, which tells you it is genuinely dum-cooked rather than mixed together at the last minute. The layers are visible when you open the tray: white rice, saffron-yellow rice and then the masala-coated chicken sitting underneath. Second, the masala itself. It is spicy, but in a warm, rounded way; you get the green chilli and black pepper, then the fried onions and a little sourness from the dried plums. It is not the fluorescent orange, food-colour biryani that some places sell. Third, the chicken. Bone-in pieces, marinated long enough that the yoghurt has actually tenderised them, so the meat slides off the bone. On our last order for my father's retirement dinner we got twelve portions and I genuinely could not find a dry piece in any of them.\n\nThe mint raita deserves a mention too. Fresh mint, thick yoghurt, a bit of cumin, and they pack it in a separate sealed tub so it does not leak onto the rice. We also took the shahi kheer for dessert and it was a hit with the elders: creamy, not overly sweet, and generously topped with pistachio and almond slivers. If anyone in your family has a nut allergy, do note that the kheer is loaded with nuts.\n\nDelivery to our house in F-10 took about forty minutes on a Saturday night, which is reasonable given the order size, and everything arrived hot because they use foil trays inside a thick paper bag. The rider called ahead and was polite. Pricing is fair: 690 for a single portion that easily satisfies one hungry adult.\n\nSmall suggestions: I would love an option for extra raita in the order form, and maybe a family-size biryani tray so we do not have to order twelve separate boxes. But honestly these are minor. If you live anywhere near F-7 and want reliable, flavourful, properly made biryani, this is the one to order. Highly recommended.",
+      "days_ago": 54
+    },
+    {
+      "restaurant": "desi-dastarkhwan-f7",
+      "items": [
+        "Shahi Kheer"
+      ],
+      "rating": 5,
+      "text": "The kheer is thick, not too sweet, with plenty of crushed pistachio and almond. Perfect after iftar.",
+      "days_ago": 6
+    },
+    {
+      "restaurant": "desi-dastarkhwan-f7",
+      "items": [
+        "Chicken Biryani",
+        "Shahi Kheer"
+      ],
+      "rating": 5,
+      "text": "Ordered for iftar for 6 people. Biryani was consistent across all boxes, every piece had masala and the rice wasn't mushy. Kheer was the perfect finish. Delivery was on time even in the maghrib rush.",
+      "days_ago": 84
+    },
+    {
+      "restaurant": "desi-dastarkhwan-f7",
+      "items": [
+        "Palak Paneer"
+      ],
+      "rating": 4,
+      "text": "Palak paneer tasted homemade: smooth spinach, mild spice, not oily. Good for my vegetarian colleague who usually gets nothing at desi places.",
+      "days_ago": 26
+    },
+    {
+      "restaurant": "desi-dastarkhwan-f7",
+      "items": [
+        "Beef Nihari"
+      ],
+      "rating": 2,
+      "text": "Nihari arrived lukewarm and the oil had set on top. Flavour was fine once reheated but for 850 I expect it to arrive hot. Took 55 minutes.",
+      "days_ago": 52
+    },
+    {
+      "restaurant": "desi-dastarkhwan-f7",
+      "items": [
+        "Mutton Biryani"
+      ],
+      "rating": 5,
+      "text": "Mutton biryani on a Friday is now a ritual in our house. Generous meat, about 4-5 pieces, and the rice is fragrant with kewra. Bohat acha.",
+      "days_ago": 67
+    },
+    {
+      "restaurant": "desi-dastarkhwan-f7",
+      "items": [
+        "Chicken Biryani",
+        "Mint Raita"
+      ],
+      "rating": 5,
+      "text": "I have tried most biryani places in Islamabad and this is the closest to proper Karachi-style without being overly spicy. The raita has fresh mint, not dried. Packaging is leak-proof.",
+      "days_ago": 79
+    },
+    {
+      "restaurant": "desi-dastarkhwan-f7",
+      "items": [
+        "Garlic Naan",
+        "Chicken Karahi (Half)"
+      ],
+      "rating": 4,
+      "text": "Karahi had a nice ginger kick and lots of green chillies; the half portion fed two of us easily with three naans. Slightly salty but overall tasty.",
+      "days_ago": 60
+    },
+    {
+      "restaurant": "desi-dastarkhwan-f7",
+      "items": [
+        "Paneer Makhani"
+      ],
+      "rating": 1,
+      "text": "Got chicken handi instead of paneer makhani, and I'm vegetarian. Called them and they offered a refund but the evening was wasted.",
+      "days_ago": 25
+    },
+    {
+      "restaurant": "desi-dastarkhwan-f7",
+      "items": [
+        "Yellow Daal Tadka"
+      ],
+      "rating": 5,
+      "text": "Honestly the most underrated thing here. Light, comforting, not greasy and very cheap. My go-to when I'm sick of heavy food.",
+      "days_ago": 77
+    },
+    {
+      "restaurant": "desi-dastarkhwan-f7",
+      "items": [
+        "Chicken Biryani"
+      ],
+      "rating": 4,
+      "text": "Great biryani as always but they forgot the raita this time. Still the best rice in F-7.",
+      "days_ago": 24
+    },
+    {
+      "restaurant": "desi-dastarkhwan-f7",
+      "items": [
+        "Kachumber Salad",
+        "Mutton Biryani"
+      ],
+      "rating": 3,
+      "text": "Mutton biryani was good but the portion felt smaller than last time, maybe 3 pieces. Salad was fine. Price has gone up too.",
+      "days_ago": 72
+    },
+    {
+      "restaurant": "desi-dastarkhwan-f7",
+      "items": [
+        "Roghni Naan (2 pcs)",
+        "Palak Paneer"
+      ],
+      "rating": 5,
+      "text": "Late night order at 11pm and it still came in 30 minutes. Palak paneer creamy and naan soft and buttery. Love that they're open late.",
+      "days_ago": 53
+    },
+    {
+      "restaurant": "kohsar-greens-f6",
+      "items": [
+        "Grilled Veg Quinoa Bowl"
+      ],
+      "rating": 5,
+      "text": "Finally a proper healthy lunch option in F-6. The quinoa bowl is light but filling, veggies were nicely charred and the lemon-tahini dressing came on the side so nothing got soggy.",
+      "days_ago": 73
+    },
+    {
+      "restaurant": "kohsar-greens-f6",
+      "items": [
+        "Chicken Caesar Salad"
+      ],
+      "rating": 4,
+      "text": "Good caesar, the chicken was juicy rather than dry rubbery breast. Dressing is lighter than usual which I liked. Croutons got a bit soft in transit.",
+      "days_ago": 57
+    },
+    {
+      "restaurant": "kohsar-greens-f6",
+      "items": [
+        "Spicy Peri Peri Chicken Bowl"
+      ],
+      "rating": 5,
+      "text": "The peri peri bowl actually has heat, which is rare for a 'healthy' place. Brown rice, charred corn, pickled onions, great balance. I get this three times a week for office lunch.",
+      "days_ago": 76
+    },
+    {
+      "restaurant": "kohsar-greens-f6",
+      "items": [
+        "Thai Peanut Tofu Salad"
+      ],
+      "rating": 4,
+      "text": "Crunchy, fresh and the peanut dressing is addictive. Tofu could be crispier. Note for allergy folks: lots of peanuts in it.",
+      "days_ago": 42
+    },
+    {
+      "restaurant": "kohsar-greens-f6",
+      "items": [
+        "Hummus Veggie Wrap"
+      ],
+      "rating": 5,
+      "text": "Light, fresh and only 750. Hummus is smooth and the roasted peppers add sweetness. Perfect desk lunch that doesn't make you sleepy at 3pm.",
+      "days_ago": 26
+    },
+    {
+      "restaurant": "kohsar-greens-f6",
+      "items": [
+        "Avocado Toast with Poached Egg"
+      ],
+      "rating": 3,
+      "text": "Avocado toast tasted good but the poached eggs were overcooked, no runny yolk. Also 1150 is steep for two slices of toast.",
+      "days_ago": 70
+    },
+    {
+      "restaurant": "kohsar-greens-f6",
+      "items": [
+        "Green Detox Smoothie"
+      ],
+      "rating": 4,
+      "text": "Not too sweet and you can really taste the ginger. Came cold with ice packed separately. Nice touch.",
+      "days_ago": 86
+    },
+    {
+      "restaurant": "kohsar-greens-f6",
+      "items": [
+        "Carrot Walnut Cake"
+      ],
+      "rating": 5,
+      "text": "Moist carrot cake loaded with walnuts and a thin cream cheese frosting. My guilty pleasure after the gym, ironically.",
+      "days_ago": 65
+    },
+    {
+      "restaurant": "kohsar-greens-f6",
+      "items": [
+        "Paneer Tikka Wrap"
+      ],
+      "rating": 4,
+      "text": "Paneer tikka wrap has a decent chilli kick and the mint chutney is fresh. Good spicy vegetarian option under 800.",
+      "days_ago": 8
+    },
+    {
+      "restaurant": "kohsar-greens-f6",
+      "items": [
+        "Grilled Chicken Pesto Wrap"
+      ],
+      "rating": 2,
+      "text": "Wrap was soggy by the time it arrived and the pesto was mostly oil. Chicken was fine. Expected better for the price.",
+      "days_ago": 82
+    },
+    {
+      "restaurant": "kohsar-greens-f6",
+      "items": [
+        "Mediterranean Chickpea Salad",
+        "Green Detox Smoothie"
+      ],
+      "rating": 5,
+      "text": "Vegan and actually tasty. Chickpea salad with cucumber, olives, red onion and lemon is fresh and zingy, and it pairs well with the green smoothie.",
+      "days_ago": 12
+    },
+    {
+      "restaurant": "kohsar-greens-f6",
+      "items": [
+        "Date & Almond Energy Balls (3 pcs)"
+      ],
+      "rating": 4,
+      "text": "Good pre-workout snack, dense and not overly sweet. A bit small for 450 though.",
+      "days_ago": 14
+    },
+    {
+      "restaurant": "kohsar-greens-f6",
+      "items": [
+        "Grilled Veg Quinoa Bowl",
+        "Date & Almond Energy Balls (3 pcs)"
+      ],
+      "rating": 5,
+      "text": "I'm vegan and this place is a lifesaver in Islamabad. Quinoa bowl is clean and well-seasoned. Staff even confirmed there's no dairy in the dressing when I called.",
+      "days_ago": 82
+    },
+    {
+      "restaurant": "kohsar-greens-f6",
+      "items": [
+        "Chicken Caesar Salad"
+      ],
+      "rating": 1,
+      "text": "Lettuce was wilted and brown at the edges and the chicken had a sour smell. Threw it away. Very disappointing for a place that sells itself on fresh food.",
+      "days_ago": 10
+    },
+    {
+      "restaurant": "kohsar-greens-f6",
+      "items": [
+        "Spicy Peri Peri Chicken Bowl"
+      ],
+      "rating": 4,
+      "text": "Tasty and filling, the peri peri is properly hot. Portion of rice is small though, mostly chicken and veg.",
+      "days_ago": 68
+    },
+    {
+      "restaurant": "kohsar-greens-f6",
+      "items": [
+        "Hummus Veggie Wrap",
+        "Carrot Walnut Cake"
+      ],
+      "rating": 5,
+      "text": "Ordered for a team meeting. Wraps were neatly cut in halves and labelled. Everyone loved the carrot cake.",
+      "days_ago": 88
+    },
+    {
+      "restaurant": "kohsar-greens-f6",
+      "items": [
+        "Avocado Toast with Poached Egg"
+      ],
+      "rating": 5,
+      "text": "Sourdough was crusty, avocado seasoned with chilli flakes and lime, and the eggs were perfect this time. Weekend brunch sorted.",
+      "days_ago": 70
+    },
+    {
+      "restaurant": "kohsar-greens-f6",
+      "items": [
+        "Thai Peanut Tofu Salad"
+      ],
+      "rating": 3,
+      "text": "Flavour is nice but the dressing is very heavy on peanut, which kind of defeats the 'light salad' idea. Cabbage was crunchy at least.",
+      "days_ago": 1
+    },
+    {
+      "restaurant": "kohsar-greens-f6",
+      "items": [
+        "Mediterranean Chickpea Salad"
+      ],
+      "rating": 5,
+      "text": "Light, fresh, and keeps me full till evening. Bohat acha option for anyone on a diet.",
+      "days_ago": 3
+    },
+    {
+      "restaurant": "kohsar-greens-f6",
+      "items": [
+        "Paneer Tikka Wrap",
+        "Green Detox Smoothie"
+      ],
+      "rating": 4,
+      "text": "Quick delivery, 20 minutes to F-7. Wrap was warm, smoothie cold. Good value lunch combo.",
+      "days_ago": 59
+    },
+    {
+      "restaurant": "cedar-charcoal-f8",
+      "items": [
+        "Classic Hummus",
+        "Moutabal"
+      ],
+      "rating": 5,
+      "text": "Hummus is silky smooth with good olive oil, and the moutabal is properly smoky; you can tell the aubergine was charred over flame. Pita came warm.",
+      "days_ago": 46
+    },
+    {
+      "restaurant": "cedar-charcoal-f8",
+      "items": [
+        "Shish Tawook"
+      ],
+      "rating": 5,
+      "text": "Tawook is juicy and garlicky, with the toum on the side. Best in F-8 hands down.",
+      "days_ago": 73
+    },
+    {
+      "restaurant": "cedar-charcoal-f8",
+      "items": [
+        "Mixed Grill Platter for Sharing"
+      ],
+      "rating": 5,
+      "text": "Ordered the mixed grill for a family dinner of four and there were leftovers. Kofta, tawook and lamb tikka all well grilled, rice fragrant. Worth the 4200.",
+      "days_ago": 70
+    },
+    {
+      "restaurant": "cedar-charcoal-f8",
+      "items": [
+        "Chicken Shawarma Wrap"
+      ],
+      "rating": 4,
+      "text": "Solid shawarma wrap, tightly rolled with nice pickles inside. Wish it had a bit more garlic sauce.",
+      "days_ago": 9
+    },
+    {
+      "restaurant": "cedar-charcoal-f8",
+      "items": [
+        "Spicy Harra Chicken Wrap"
+      ],
+      "rating": 5,
+      "text": "The harra wrap is genuinely spicy, all chilli, garlic and coriander, and it's under 800. My new late night order.",
+      "days_ago": 56
+    },
+    {
+      "restaurant": "cedar-charcoal-f8",
+      "items": [
+        "Fattoush Salad"
+      ],
+      "rating": 4,
+      "text": "Fresh, crunchy and tangy from the sumac and pomegranate molasses. Pita chips stayed crisp because they packed them separately. Great light lunch.",
+      "days_ago": 81
+    },
+    {
+      "restaurant": "cedar-charcoal-f8",
+      "items": [
+        "Falafel Plate (6 pcs)"
+      ],
+      "rating": 3,
+      "text": "Falafel were crispy outside but a bit dry and dense inside. Tahini sauce helped. The hummus here is better.",
+      "days_ago": 77
+    },
+    {
+      "restaurant": "cedar-charcoal-f8",
+      "items": [
+        "Lamb Kofta Kebab"
+      ],
+      "rating": 4,
+      "text": "Kofta is well spiced with that seven-spice warmth, not chilli hot. A little greasy but tasty.",
+      "days_ago": 16
+    },
+    {
+      "restaurant": "cedar-charcoal-f8",
+      "items": [
+        "Pistachio Baklava (4 pcs)"
+      ],
+      "rating": 5,
+      "text": "Flaky, syrupy and packed with pistachio. Better than what I had in Dubai, honestly.",
+      "days_ago": 85
+    },
+    {
+      "restaurant": "cedar-charcoal-f8",
+      "items": [
+        "Mixed Grill Platter for Sharing",
+        "Moutabal",
+        "Pistachio Baklava (4 pcs)"
+      ],
+      "rating": 5,
+      "text": "We hosted a small office celebration at home for eight people last week and decided to go Lebanese instead of the usual BBQ, so I ordered two mixed grill platters, a couple of mezze and a box of baklava from Cedar & Charcoal in F-8. I was nervous because Middle Eastern food in Islamabad is often just shawarma with a different name, but this turned out to be the highlight of the evening.\n\nThe mixed grill platter is genuinely built for sharing. Each one had shish tawook, lamb kofta, lamb tikka, grilled tomatoes and onions, a big bed of vermicelli rice, hummus and two tubs of garlic toum. The tawook was marinated in yoghurt and lemon and stayed juicy, the kofta had that warm seven-spice flavour with plenty of parsley, and the lamb tikka was tender with a light char. Nothing was chilli-hot, which made it easy for everyone, including the kids. For people who want heat, they included a small pot of chilli paste when I asked in the order notes.\n\nThe moutabal was the surprise. It is properly smoky, the aubergine has clearly been charred over an open flame, and it is blended with tahini, garlic and a squeeze of lemon, finished with pomegranate seeds. Scooped up with the warm pita, it disappeared before the grills were even opened. We also had fattoush, which stayed crisp because the pita chips and dressing were packed separately.\n\nDessert was the pistachio baklava: flaky layers, not soggy, sweet syrup and an honest amount of pistachio. A guest who has lived in Amman said it reminded her of the real thing.\n\nDelivery took about 45 minutes for a big order, the food arrived hot, and the platters came in sturdy compartment trays with nothing leaking. Two platters at 4200 each plus mezze came to just over 11,000 rupees for eight adults, which I thought was very fair given the quality and the amount left over.\n\nMy only wish is that they offered a vegetarian platter version, since we had one vegetarian guest who survived on mezze and falafel. Otherwise, a perfect evening and I will be ordering the platter again for Eid.",
+      "days_ago": 29
+    },
+    {
+      "restaurant": "cedar-charcoal-f8",
+      "items": [
+        "Halloumi Wrap"
+      ],
+      "rating": 4,
+      "text": "Halloumi was squeaky and salty in the good way; mint and tomato balance it. Great vegetarian wrap.",
+      "days_ago": 87
+    },
+    {
+      "restaurant": "cedar-charcoal-f8",
+      "items": [
+        "Chicken Shawarma Plate"
+      ],
+      "rating": 2,
+      "text": "Shawarma plate arrived cold and the fries were soggy. Chicken was fine but overall disappointing for 1250.",
+      "days_ago": 65
+    },
+    {
+      "restaurant": "cedar-charcoal-f8",
+      "items": [
+        "Batata Harra"
+      ],
+      "rating": 5,
+      "text": "Batata harra is dangerously addictive: crispy potato cubes, garlic, chilli and lots of coriander. Good spicy snack and vegan too.",
+      "days_ago": 77
+    },
+    {
+      "restaurant": "cedar-charcoal-f8",
+      "items": [
+        "Moutabal",
+        "Fattoush Salad"
+      ],
+      "rating": 5,
+      "text": "My vegan friend and I shared moutabal and fattoush. Fresh, light and full of flavour; the moutabal had a lovely smoky depth.",
+      "days_ago": 13
+    },
+    {
+      "restaurant": "cedar-charcoal-f8",
+      "items": [
+        "Shish Tawook",
+        "Classic Hummus"
+      ],
+      "rating": 4,
+      "text": "Consistent every time. Tawook could use a bit more char but the hummus is perfect.",
+      "days_ago": 38
+    },
+    {
+      "restaurant": "cedar-charcoal-f8",
+      "items": [
+        "Mixed Grill Platter for Sharing"
+      ],
+      "rating": 1,
+      "text": "Platter was missing the kofta and the rice was undercooked and hard. Called them and they said they'd fix it next time. Not acceptable at 4200.",
+      "days_ago": 73
+    },
+    {
+      "restaurant": "cedar-charcoal-f8",
+      "items": [
+        "Chicken Shawarma Wrap",
+        "Batata Harra"
+      ],
+      "rating": 5,
+      "text": "Cheap and cheerful combo. Wrap was hot, potatoes crispy. Delivered to E-11 in 30 mins.",
+      "days_ago": 67
+    },
+    {
+      "restaurant": "cedar-charcoal-f8",
+      "items": [
+        "Spicy Harra Chicken Wrap"
+      ],
+      "rating": 3,
+      "text": "Too spicy for me honestly, I couldn't taste anything but chilli. If you love heat you'll enjoy it.",
+      "days_ago": 69
+    },
+    {
+      "restaurant": "cedar-charcoal-f8",
+      "items": [
+        "Pistachio Baklava (4 pcs)",
+        "Classic Hummus"
+      ],
+      "rating": 4,
+      "text": "Baklava a bit too sweet for my taste but fresh. Hummus great as always.",
+      "days_ago": 56
+    },
+    {
+      "restaurant": "cedar-charcoal-f8",
+      "items": [
+        "Lamb Kofta Kebab",
+        "Fattoush Salad"
+      ],
+      "rating": 5,
+      "text": "Kofta and fattoush made a perfect balanced dinner. Meat juicy, salad bright. Zabardast.",
+      "days_ago": 16
+    },
+    {
+      "restaurant": "markaz-tikka-g9",
+      "items": [
+        "Chicken Biryani"
+      ],
+      "rating": 2,
+      "text": "Biryani was dry as sawdust, the rice at the bottom was hard and there was barely any masala. Huge portion though, which just means more dry rice.",
+      "days_ago": 37
+    },
+    {
+      "restaurant": "markaz-tikka-g9",
+      "items": [
+        "Grand BBQ Platter"
+      ],
+      "rating": 5,
+      "text": "Grand BBQ platter could feed six people, not four. Tikka, seekh and malai boti all smoky and fresh off the coals. Unbeatable for a family dinner.",
+      "days_ago": 83
+    },
+    {
+      "restaurant": "markaz-tikka-g9",
+      "items": [
+        "Beef Seekh Kebab (4 pcs)"
+      ],
+      "rating": 5,
+      "text": "Seekh kebabs are juicy and spicy with that charcoal smoke. Four huge kebabs for under 800 is a steal.",
+      "days_ago": 82
+    },
+    {
+      "restaurant": "markaz-tikka-g9",
+      "items": [
+        "Malai Boti"
+      ],
+      "rating": 5,
+      "text": "Malai boti melts in the mouth, creamy and mild. Perfect for kids who can't handle spice.",
+      "days_ago": 73
+    },
+    {
+      "restaurant": "markaz-tikka-g9",
+      "items": [
+        "Chicken Biryani",
+        "Chicken Tikka (Leg Piece)"
+      ],
+      "rating": 3,
+      "text": "Tikka was great, smoky and well marinated. Biryani was dry again and under-spiced, needed a whole tub of raita. Stick to BBQ here.",
+      "days_ago": 21
+    },
+    {
+      "restaurant": "markaz-tikka-g9",
+      "items": [
+        "Grand BBQ Platter",
+        "Chicken Biryani",
+        "Chicken Pulao"
+      ],
+      "rating": 4,
+      "text": "Writing a detailed review because Al-Markaz Tikka House is both one of my favourite and most frustrating places in G-9, and new customers should know what to order and what to skip.\n\nFirst, the portions. They are enormous. The Grand BBQ Platter says it feeds four to five, but we were six adults and still packed leftovers for the next day. You get chicken tikka, beef seekh kebabs, malai boti, reshmi kebab, wings, four naans, raita and a sharp green chutney. Everything comes straight off the coals and you can taste the smoke. The seekh kebabs are especially good, juicy and well-spiced with a proper chilli kick, and the malai boti is creamy and mild, which kept the kids happy. At 4400 rupees it is some of the best value-for-money BBQ in Islamabad.\n\nNow the problem: the chicken biryani. I have ordered it four times over the last few months hoping it would improve, and every time the rice has been dry. Not slightly dry, the kind of dry where the bottom layer is almost crunchy and there is no masala clinging to the grains. The chicken pieces are large, which is consistent with their huge-portion style, but they sit on top of plain-looking rice instead of being layered through it. It feels like the biryani is made early in the day and reheated. If you want rice from here, order the chicken pulao instead. The pulao is moist, cooked in a proper yakhni, fragrant with whole spices and black pepper, and the portion again is massive, honestly enough for two.\n\nDelivery is usually 40 to 50 minutes on weekends, a bit slower on Friday nights, but everything arrives hot in foil trays with the naan wrapped separately so it does not sweat. The riders know the sectors well and have never got lost finding our street in G-10.\n\nSo, my advice: come here for the BBQ, the pulao, the mutton champ and the karahi, and you will be very happy with the quantity and the taste. Skip the biryani unless they fix it; for biryani in this part of town, the places in F-7 are much better. Four stars because the grill section alone earns it.",
+      "days_ago": 35
+    },
+    {
+      "restaurant": "markaz-tikka-g9",
+      "items": [
+        "Mutton Karahi (Full)"
+      ],
+      "rating": 5,
+      "text": "Full mutton karahi served four of us with plenty left over. Meat was tender, gravy thick with tomato and ginger.",
+      "days_ago": 42
+    },
+    {
+      "restaurant": "markaz-tikka-g9",
+      "items": [
+        "Bihari Boti"
+      ],
+      "rating": 4,
+      "text": "Bihari boti has proper coal smoke and heat. A bit chewy in places but the flavour is excellent.",
+      "days_ago": 16
+    },
+    {
+      "restaurant": "markaz-tikka-g9",
+      "items": [
+        "Chicken Pulao"
+      ],
+      "rating": 4,
+      "text": "Pulao is much better than their biryani: moist, aromatic, with real yakhni flavour. Portion is massive.",
+      "days_ago": 62
+    },
+    {
+      "restaurant": "markaz-tikka-g9",
+      "items": [
+        "Mutton Champ (Chops)"
+      ],
+      "rating": 5,
+      "text": "The champ is the star here. Thick chops, charred edges, spicy marinade. Bohat zabardast.",
+      "days_ago": 3
+    },
+    {
+      "restaurant": "markaz-tikka-g9",
+      "items": [
+        "Daal Makhani",
+        "Tandoori Paratha"
+      ],
+      "rating": 4,
+      "text": "Daal makhani is heavy and buttery, real comfort food and not light at all. Paratha flaky. One portion was enough for two.",
+      "days_ago": 63
+    },
+    {
+      "restaurant": "markaz-tikka-g9",
+      "items": [
+        "Chicken Biryani"
+      ],
+      "rating": 1,
+      "text": "Dry, bland biryani and the chicken piece was tiny despite the 'double portion' claim. Also arrived 50 minutes late. Never again.",
+      "days_ago": 21
+    },
+    {
+      "restaurant": "markaz-tikka-g9",
+      "items": [
+        "Chicken Tikka (Leg Piece)",
+        "Tandoori Paratha"
+      ],
+      "rating": 5,
+      "text": "Late night tikka paratha craving solved. Tikka was juicy and still hot. Huge leg piece.",
+      "days_ago": 87
+    },
+    {
+      "restaurant": "markaz-tikka-g9",
+      "items": [
+        "Grand BBQ Platter"
+      ],
+      "rating": 4,
+      "text": "Massive amount of food for the price. Reshmi kebabs were a bit salty but everything else was spot on.",
+      "days_ago": 45
+    },
+    {
+      "restaurant": "markaz-tikka-g9",
+      "items": [
+        "Aloo Palak"
+      ],
+      "rating": 3,
+      "text": "Aloo palak was okay but very oily. Not many vegetarian choices here, it's really a meat place.",
+      "days_ago": 44
+    },
+    {
+      "restaurant": "markaz-tikka-g9",
+      "items": [
+        "Beef Seekh Kebab (4 pcs)",
+        "Malai Boti"
+      ],
+      "rating": 5,
+      "text": "Ordered for a cricket match get-together; the seekh and malai boti disappeared in minutes. Packaging kept everything hot.",
+      "days_ago": 68
+    },
+    {
+      "restaurant": "markaz-tikka-g9",
+      "items": [
+        "Chicken Biryani"
+      ],
+      "rating": 2,
+      "text": "Rice was dry and clumpy, like it had been reheated. Their BBQ is great but whoever makes the biryani needs to try again.",
+      "days_ago": 56
+    },
+    {
+      "restaurant": "markaz-tikka-g9",
+      "items": [
+        "Mutton Champ (Chops)",
+        "Daal Makhani"
+      ],
+      "rating": 5,
+      "text": "Champ and daal makhani with naan: heaviest meal of my life and I regret nothing. Portions are huge.",
+      "days_ago": 18
+    },
+    {
+      "restaurant": "markaz-tikka-g9",
+      "items": [
+        "Bihari Boti",
+        "Chicken Pulao"
+      ],
+      "rating": 4,
+      "text": "Good food, big portions. Bihari boti was smoky and hot, pulao fragrant. Delivery a bit slow on a Friday night.",
+      "days_ago": 52
+    },
+    {
+      "restaurant": "markaz-tikka-g9",
+      "items": [
+        "Chicken Tikka (Leg Piece)"
+      ],
+      "rating": 5,
+      "text": "450 for a tikka this size is unreal value. Charred, juicy, spicy. My regular.",
+      "days_ago": 12
+    },
+    {
+      "restaurant": "wok-basil-blue-area",
+      "items": [
+        "Thai Green Curry with Chicken"
+      ],
+      "rating": 4,
+      "text": "Green curry was creamy and fragrant with real Thai basil. But it took 75 minutes to arrive. Food great, delivery painfully slow.",
+      "days_ago": 30
+    },
+    {
+      "restaurant": "wok-basil-blue-area",
+      "items": [
+        "Tom Yum Soup (Prawn)"
+      ],
+      "rating": 5,
+      "text": "Tom yum is fiery and sour, exactly like Bangkok. Prawns were plump. Worth the wait, and there is always a wait.",
+      "days_ago": 57
+    },
+    {
+      "restaurant": "wok-basil-blue-area",
+      "items": [
+        "Pad Thai with Prawns"
+      ],
+      "rating": 3,
+      "text": "Tasty pad thai with good tamarind balance, but it took over an hour and the noodles had clumped together.",
+      "days_ago": 54
+    },
+    {
+      "restaurant": "wok-basil-blue-area",
+      "items": [
+        "Spicy Basil Noodles"
+      ],
+      "rating": 5,
+      "text": "Spicy basil noodles are seriously hot, bird's eye chillies everywhere. Loved it. Ordered at 7, ate at 8:10 though.",
+      "days_ago": 35
+    },
+    {
+      "restaurant": "wok-basil-blue-area",
+      "items": [
+        "Vegetable Spring Rolls (4 pcs)"
+      ],
+      "rating": 2,
+      "text": "Spring rolls were soggy and limp after a 70 minute delivery. Probably great fresh from the fryer.",
+      "days_ago": 34
+    },
+    {
+      "restaurant": "wok-basil-blue-area",
+      "items": [
+        "Thai Green Curry with Chicken",
+        "Tom Yum Soup (Prawn)",
+        "Pad Thai with Prawns"
+      ],
+      "rating": 3,
+      "text": "I really want to love Wok & Basil, and on the food alone I would give it five stars, but after more than a dozen orders I have to be honest about the delivery times, because they are consistently the slowest of any restaurant I order from in Islamabad.\n\nLet me start with the good. The Thai green curry is excellent: creamy coconut base, real Thai basil and kaffir lime leaves, tender chicken thigh, aubergine and bamboo shoots, and a heat level that builds slowly rather than hitting you all at once. The tom yum soup with prawns is the most authentic I have found in Pakistan, sour and fiery and full of lemongrass and galangal, with properly plump prawns. The pad thai has a good balance of tamarind sweetness and sourness, with crushed peanuts and lime on the side. The kitchen clearly knows what it is doing.\n\nNow the bad. Out of my last twelve orders, only two arrived within an hour. Most land between 65 and 80 minutes, and once it took one hour and forty minutes. It does not seem to matter whether I order at lunch from my office in Blue Area, which is practically next door, or at dinner from home in G-11. The app estimate always says 35 minutes and the actual time is double. When I called once, the person said they cook everything fresh to order and the kitchen is small, which I respect, but then the estimate should be honest.\n\nThe long wait affects the food. The pad thai noodles clump together after an hour in a box, and spring rolls that are crispy in the restaurant become limp. Curries and soups survive better, though once the tom yum lid was not sealed properly and a third of it was in the bag.\n\nMy workaround now is to place the order 90 minutes before I actually want to eat, or to pick it up myself, which takes about 25 minutes from ordering. If you plan ahead, the food is worth it. If you are hungry right now, order somewhere else.\n\nThree stars: five for the cooking, one for the delivery experience. Please fix the timing, Wok & Basil, because you could easily be the best Asian place in the city.",
+      "days_ago": 1
+    },
+    {
+      "restaurant": "wok-basil-blue-area",
+      "items": [
+        "Beef Massaman Curry",
+        "Steamed Jasmine Rice"
+      ],
+      "rating": 5,
+      "text": "Massaman is mild, rich and the beef falls apart. Peanuts and potato make it hearty. Great for people who don't like heat.",
+      "days_ago": 35
+    },
+    {
+      "restaurant": "wok-basil-blue-area",
+      "items": [
+        "Thai Basil Chicken Rice Bowl (Pad Krapow)"
+      ],
+      "rating": 4,
+      "text": "Pad krapow with the fried egg on top is my favourite comfort food. Very spicy. Delivery slow as usual, 60 minutes.",
+      "days_ago": 39
+    },
+    {
+      "restaurant": "wok-basil-blue-area",
+      "items": [
+        "Chicken Satay Skewers"
+      ],
+      "rating": 4,
+      "text": "Satay was tender and the peanut sauce rich. Bit pricey for 4 skewers.",
+      "days_ago": 12
+    },
+    {
+      "restaurant": "wok-basil-blue-area",
+      "items": [
+        "Red Curry Tofu & Vegetables"
+      ],
+      "rating": 5,
+      "text": "One of the few proper vegan curries in Islamabad. Red curry is spicy and creamy from the coconut, and the tofu soaks it up. Order early because they are slow.",
+      "days_ago": 21
+    },
+    {
+      "restaurant": "wok-basil-blue-area",
+      "items": [
+        "Tom Kha Gai"
+      ],
+      "rating": 5,
+      "text": "Tom kha is soothing, coconutty and only mildly spicy. Perfect for a rainy evening.",
+      "days_ago": 34
+    },
+    {
+      "restaurant": "wok-basil-blue-area",
+      "items": [
+        "Thai Green Curry with Chicken",
+        "Steamed Jasmine Rice"
+      ],
+      "rating": 1,
+      "text": "Order took 1 hour 40 minutes and arrived cold. Rice was hard. Called twice, nobody picked up. Food might be good but the service is terrible.",
+      "days_ago": 19
+    },
+    {
+      "restaurant": "wok-basil-blue-area",
+      "items": [
+        "Mango Sticky Rice"
+      ],
+      "rating": 5,
+      "text": "Mango sticky rice is heavenly: sweet ripe mango, salty coconut cream, chewy rice. Only available in mango season so grab it.",
+      "days_ago": 33
+    },
+    {
+      "restaurant": "wok-basil-blue-area",
+      "items": [
+        "Pad Thai with Prawns",
+        "Chicken Satay Skewers"
+      ],
+      "rating": 4,
+      "text": "Ordered for an office lunch in Blue Area; placed the order at 12 to get it by 1:15. Food was excellent, especially the satay.",
+      "days_ago": 59
+    },
+    {
+      "restaurant": "wok-basil-blue-area",
+      "items": [
+        "Spicy Basil Noodles"
+      ],
+      "rating": 3,
+      "text": "Way too oily this time and the noodles were broken. Spice level still good though.",
+      "days_ago": 64
+    },
+    {
+      "restaurant": "wok-basil-blue-area",
+      "items": [
+        "Tom Yum Soup (Prawn)",
+        "Vegetable Spring Rolls (4 pcs)"
+      ],
+      "rating": 2,
+      "text": "Soup spilled in the bag because the lid wasn't sealed, and the delivery took forever. Half a soup for 990.",
+      "days_ago": 65
+    },
+    {
+      "restaurant": "wok-basil-blue-area",
+      "items": [
+        "Beef Massaman Curry"
+      ],
+      "rating": 5,
+      "text": "Best massaman in town. Slow cooked, deep flavour.",
+      "days_ago": 64
+    },
+    {
+      "restaurant": "wok-basil-blue-area",
+      "items": [
+        "Red Curry Tofu & Vegetables",
+        "Mango Sticky Rice"
+      ],
+      "rating": 4,
+      "text": "Lovely vegan dinner. Only complaint is the wait, 65 minutes to F-10.",
+      "days_ago": 9
+    },
+    {
+      "restaurant": "wok-basil-blue-area",
+      "items": [
+        "Thai Basil Chicken Rice Bowl (Pad Krapow)"
+      ],
+      "rating": 5,
+      "text": "Pad krapow zabardast, proper heat and crispy egg edges. Picked it up myself to skip the delivery wait, which is the only way to go with this place.",
+      "days_ago": 12
+    },
+    {
+      "restaurant": "wok-basil-blue-area",
+      "items": [
+        "Thai Green Curry with Chicken"
+      ],
+      "rating": 2,
+      "text": "Curry was watery and too sweet compared to before. Plus the usual 70 min delivery.",
+      "days_ago": 14
+    },
+    {
+      "restaurant": "demo-bistro",
+      "items": [
+        "Chicken Biryani"
+      ],
+      "rating": 5,
+      "text": "Proper Karachi biryani with aloo and lots of masala. Spicy enough to make my nose run. Chicken was tender.",
+      "days_ago": 78
+    },
+    {
+      "restaurant": "demo-bistro",
+      "items": [
+        "Veggie Wrap"
+      ],
+      "rating": 4,
+      "text": "Light and fresh veggie wrap, grilled peppers and crunchy slaw with mint chutney. Good quick lunch.",
+      "days_ago": 18
+    },
+    {
+      "restaurant": "demo-bistro",
+      "items": [
+        "Beef Haleem"
+      ],
+      "rating": 5,
+      "text": "Haleem is thick and stringy, just how it should be. Came with fried onions, ginger, lemon and chaat masala on the side.",
+      "days_ago": 29
+    },
+    {
+      "restaurant": "demo-bistro",
+      "items": [
+        "Chicken Karahi (Half)"
+      ],
+      "rating": 4,
+      "text": "Karahi was tasty, tomatoey and full of green chilli. Half portion was enough for two. A bit oily.",
+      "days_ago": 24
+    },
+    {
+      "restaurant": "demo-bistro",
+      "items": [
+        "Chicken Qorma"
+      ],
+      "rating": 3,
+      "text": "Qorma was decent but very oily and the almond flavour was faint. Average.",
+      "days_ago": 23
+    },
+    {
+      "restaurant": "demo-bistro",
+      "items": [
+        "Chapli Kebab (2 pcs)"
+      ],
+      "rating": 5,
+      "text": "Chapli kebabs are huge with crispy edges, studded with tomato and pomegranate seeds. Spicy and juicy.",
+      "days_ago": 43
+    },
+    {
+      "restaurant": "demo-bistro",
+      "items": [
+        "Seekh Kebab Paratha Roll"
+      ],
+      "rating": 4,
+      "text": "Good roll for 450; paratha was flaky and the chutney had a kick. Bit small.",
+      "days_ago": 24
+    },
+    {
+      "restaurant": "demo-bistro",
+      "items": [
+        "Daal Chawal"
+      ],
+      "rating": 5,
+      "text": "Daal chawal like ghar ka khana. Light, comforting, with achaar on the side. Under 500 too.",
+      "days_ago": 21
+    },
+    {
+      "restaurant": "demo-bistro",
+      "items": [
+        "Gulab Jamun (2 pcs)"
+      ],
+      "rating": 4,
+      "text": "Soft, warm gulab jamun, not too syrupy. Nice end to the meal.",
+      "days_ago": 57
+    },
+    {
+      "restaurant": "demo-bistro",
+      "items": [
+        "Chicken Biryani",
+        "Cucumber Raita"
+      ],
+      "rating": 2,
+      "text": "Biryani was too salty this time and the raita was missing. Usually it's good, so hoping it was a one-off.",
+      "days_ago": 49
+    },
+    {
+      "restaurant": "demo-bistro",
+      "items": [
+        "Gajar ka Halwa"
+      ],
+      "rating": 5,
+      "text": "Winter special gajar ka halwa with khoya and almonds. Rich and comforting.",
+      "days_ago": 6
+    },
+    {
+      "restaurant": "demo-bistro",
+      "items": [
+        "Chicken Tikka Boti (8 pcs)"
+      ],
+      "rating": 4,
+      "text": "Boti was smoky and well marinated. Good with naan and chutney.",
+      "days_ago": 48
+    },
+    {
+      "restaurant": "demo-bistro",
+      "items": [
+        "Veggie Wrap",
+        "Daal Chawal"
+      ],
+      "rating": 5,
+      "text": "Two light vegetarian lunches that don't feel like a compromise. Wrap was fresh, daal well tempered.",
+      "days_ago": 43
+    },
+    {
+      "restaurant": "demo-bistro",
+      "items": [
+        "Chicken Biryani"
+      ],
+      "rating": 5,
+      "text": "Office ordered 15 biryanis for a farewell lunch and all arrived hot in 35 minutes. Consistent spice level across boxes. Zabardast.",
+      "days_ago": 88
+    },
+    {
+      "restaurant": "demo-bistro",
+      "items": [
+        "Beef Haleem",
+        "Chapli Kebab (2 pcs)"
+      ],
+      "rating": 4,
+      "text": "Good food, slightly late delivery to Clifton, about 50 mins.",
+      "days_ago": 17
+    },
+    {
+      "restaurant": "demo-bistro",
+      "items": [
+        "Chicken Karahi (Half)"
+      ],
+      "rating": 1,
+      "text": "Karahi was mostly oil and bones. Very little meat. Not worth 1400.",
+      "days_ago": 38
+    },
+    {
+      "restaurant": "demo-bistro",
+      "items": [
+        "Chicken Tikka Boti (8 pcs)",
+        "Seekh Kebab Paratha Roll"
+      ],
+      "rating": 5,
+      "text": "Late night BBQ fix. Everything hot and smoky. Fast delivery even at 1am.",
+      "days_ago": 70
+    },
+    {
+      "restaurant": "demo-bistro",
+      "items": [
+        "Veggie Wrap"
+      ],
+      "rating": 3,
+      "text": "Wrap was a bit bland and needed more chutney. Healthy though.",
+      "days_ago": 54
+    },
+    {
+      "restaurant": "demo-bistro",
+      "items": [
+        "Chicken Qorma",
+        "Cucumber Raita"
+      ],
+      "rating": 5,
+      "text": "Qorma this time was excellent: rich, aromatic, mild spice. Family dinner hit.",
+      "days_ago": 68
+    },
+    {
+      "restaurant": "demo-bistro",
+      "items": [
+        "Chicken Biryani"
+      ],
+      "rating": 4,
+      "text": "Spicy, flavourful biryani with a good amount of aloo. Rice a little broken, but the taste is great.",
+      "days_ago": 37
+    },
+    {
+      "restaurant": "boat-basin-street-kitchen",
+      "items": [
+        "Anda Shami Bun Kebab"
+      ],
+      "rating": 5,
+      "text": "Classic Karachi bun kebab: egg-dipped shami, chutney, onions, soft bun. Tastes like Boat Basin at midnight. Only 280!",
+      "days_ago": 61
+    },
+    {
+      "restaurant": "boat-basin-street-kitchen",
+      "items": [
+        "Chicken Chatni Roll"
+      ],
+      "rating": 5,
+      "text": "Chatni roll is fire, literally. Green chutney and chilli boti with garlic mayo to calm it down. Best cheap spicy food in Clifton.",
+      "days_ago": 79
+    },
+    {
+      "restaurant": "boat-basin-street-kitchen",
+      "items": [
+        "Chicken Karahi (Full)"
+      ],
+      "rating": 4,
+      "text": "Full karahi was huge and very spicy, lots of green chilli and black pepper. Oil heavy, but that's street karahi for you.",
+      "days_ago": 85
+    },
+    {
+      "restaurant": "boat-basin-street-kitchen",
+      "items": [
+        "Gola Kebab Plate"
+      ],
+      "rating": 5,
+      "text": "Gola kebabs are soft, smoky and melt in your mouth. Spicy, under 800, and the onion rings with lemon are perfect.",
+      "days_ago": 56
+    },
+    {
+      "restaurant": "boat-basin-street-kitchen",
+      "items": [
+        "Dahi Baray (Plate)"
+      ],
+      "rating": 4,
+      "text": "Dahi baray were soft and the yoghurt cold and sweet-tangy. Great iftar item.",
+      "days_ago": 45
+    },
+    {
+      "restaurant": "boat-basin-street-kitchen",
+      "items": [
+        "Chana Chaat",
+        "Aloo Samosa (3 pcs)"
+      ],
+      "rating": 5,
+      "text": "Iftar sorted. Chana chaat tangy and fresh, samosas crispy with spicy potato filling.",
+      "days_ago": 90
+    },
+    {
+      "restaurant": "boat-basin-street-kitchen",
+      "items": [
+        "Anda Shami Bun Kebab",
+        "Gola Kebab Plate",
+        "Chicken Karahi (Full)"
+      ],
+      "rating": 5,
+      "text": "Every Karachiite has a list of street food spots they swear by, and since moving back to Clifton this kitchen has gone to the top of mine. It captures the feel of eating at Boat Basin at midnight, but delivered to your door, which with a newborn at home is exactly what we needed.\n\nStart with the anda shami bun kebab. It is the real thing: a soft, slightly sweet bun toasted on the tawa with butter, a shami patty made with beef and chana daal, dipped in beaten egg and fried until the edges are lacy, then layered with green chutney, imli chutney, raw onion rings and shredded cabbage. It is spicy, tangy, messy and costs 280 rupees. They wrap each one in butter paper and foil so it holds together. I have ordered these at least ten times and they have never been cold.\n\nThe gola kebab plate is the dish I would send anyone to try first. The kebabs are so soft they barely hold their shape, heavily spiced with red chilli and smoky from the coal, served with onion rings, lemon wedges and mint chutney. At 750 rupees it is one of the best spicy dishes under 800 in Clifton. Be warned that the heat level is genuinely high; my brother-in-law from Lahore needed a glass of lassi to recover.\n\nFor a weekend family dinner we ordered the full chicken karahi, which served four of us with parathas from home. It is a proper street-style karahi: chicken cooked hard in a wok with tomatoes, loads of green chillies, ginger julienne and crushed black pepper. It is oily, I won't pretend otherwise, but the flavour is excellent and the chicken was tender. If you want something gentler, the white karahi is creamy and much milder.\n\nDelivery is fast, usually 25 to 35 minutes to Block 4, and the riders are friendly. Packaging is better than most street places: sealed karahi containers, chutneys in separate pots, no leaks.\n\nOnly gripe is that late at night they sometimes run out of gola kebabs, so order before 11. Otherwise, zabardast in every sense. Five stars.",
+      "days_ago": 56
+    },
+    {
+      "restaurant": "boat-basin-street-kitchen",
+      "items": [
+        "Double Shami Bun Kebab with Cheese"
+      ],
+      "rating": 3,
+      "text": "Cheese felt unnecessary and the bun was soggy from the chutney. Stick with the original anda shami.",
+      "days_ago": 71
+    },
+    {
+      "restaurant": "boat-basin-street-kitchen",
+      "items": [
+        "Chicken White Karahi (Half)"
+      ],
+      "rating": 5,
+      "text": "White karahi is creamy with crushed black pepper and very mild. Great for people who can't handle the regular karahi heat.",
+      "days_ago": 63
+    },
+    {
+      "restaurant": "boat-basin-street-kitchen",
+      "items": [
+        "Beef Bihari Kebab Roll"
+      ],
+      "rating": 5,
+      "text": "Bihari roll is smoky, tender and very spicy. Paratha crispy. Late night favourite after a Do Darya drive.",
+      "days_ago": 57
+    },
+    {
+      "restaurant": "boat-basin-street-kitchen",
+      "items": [
+        "Peshawari Mutton Karahi (Half)"
+      ],
+      "rating": 4,
+      "text": "Peshawari karahi is simple, just mutton, salt, tomato and black pepper, and that's the beauty of it. Meat was tender.",
+      "days_ago": 59
+    },
+    {
+      "restaurant": "boat-basin-street-kitchen",
+      "items": [
+        "Doodh Patti Chai"
+      ],
+      "rating": 5,
+      "text": "Proper kadak doodh patti, came in a sealed cup still hot. 150 rupees of happiness.",
+      "days_ago": 5
+    },
+    {
+      "restaurant": "boat-basin-street-kitchen",
+      "items": [
+        "Chicken Chatni Roll",
+        "Sweet Lassi"
+      ],
+      "rating": 4,
+      "text": "Roll was very spicy and the lassi saved me. Lassi was thick with pistachio on top.",
+      "days_ago": 65
+    },
+    {
+      "restaurant": "boat-basin-street-kitchen",
+      "items": [
+        "Anda Shami Bun Kebab"
+      ],
+      "rating": 2,
+      "text": "Bun kebab arrived squashed and cold, and the chutney had soaked through the bun. Not the same as eating it at the stall.",
+      "days_ago": 7
+    },
+    {
+      "restaurant": "boat-basin-street-kitchen",
+      "items": [
+        "Aloo Samosa (3 pcs)"
+      ],
+      "rating": 3,
+      "text": "Samosas were okay but greasy. Chutney was good.",
+      "days_ago": 34
+    },
+    {
+      "restaurant": "boat-basin-street-kitchen",
+      "items": [
+        "Chicken Karahi (Full)"
+      ],
+      "rating": 1,
+      "text": "Wrong order: they sent white karahi instead of the regular one and it took 70 minutes. Too oily as well.",
+      "days_ago": 52
+    },
+    {
+      "restaurant": "boat-basin-street-kitchen",
+      "items": [
+        "Gola Kebab Plate",
+        "Beef Bihari Kebab Roll"
+      ],
+      "rating": 5,
+      "text": "Smoky meat heaven. Gola kebabs were incredibly soft. Bohat acha.",
+      "days_ago": 9
+    },
+    {
+      "restaurant": "boat-basin-street-kitchen",
+      "items": [
+        "Chana Chaat"
+      ],
+      "rating": 4,
+      "text": "Light and tangy snack, good for a quick evening bite. Could use more imli.",
+      "days_ago": 10
+    },
+    {
+      "restaurant": "boat-basin-street-kitchen",
+      "items": [
+        "Dahi Baray (Plate)",
+        "Chana Chaat"
+      ],
+      "rating": 5,
+      "text": "Vegetarian street food done right. Fresh cold yoghurt, crisp onions, tangy chutneys.",
+      "days_ago": 73
+    },
+    {
+      "restaurant": "boat-basin-street-kitchen",
+      "items": [
+        "Double Shami Bun Kebab with Cheese",
+        "Doodh Patti Chai"
+      ],
+      "rating": 4,
+      "text": "Good midnight snack combo. Bun kebab was filling and the chai was kadak.",
+      "days_ago": 3
+    },
+    {
+      "restaurant": "forno-rosso-dha6",
+      "items": [
+        "Margherita"
+      ],
+      "rating": 5,
+      "text": "Real Neapolitan-style margherita: leopard-spotted crust, fresh basil, milky fior di latte. Best pizza in DHA.",
+      "days_ago": 61
+    },
+    {
+      "restaurant": "forno-rosso-dha6",
+      "items": [
+        "Diavola with Beef Pepperoni"
+      ],
+      "rating": 5,
+      "text": "Diavola has proper chilli oil heat and crispy pepperoni cups. Spicy pizza lovers, this is it.",
+      "days_ago": 26
+    },
+    {
+      "restaurant": "forno-rosso-dha6",
+      "items": [
+        "Spicy Chicken Tikka Pizza"
+      ],
+      "rating": 4,
+      "text": "Desi tikka on a wood-fired base works surprisingly well. Spicy but not overwhelming.",
+      "days_ago": 40
+    },
+    {
+      "restaurant": "forno-rosso-dha6",
+      "items": [
+        "Fettuccine Alfredo with Grilled Chicken"
+      ],
+      "rating": 4,
+      "text": "Alfredo is very creamy and heavy with generous parmesan. Chicken grilled nicely. Not a light lunch.",
+      "days_ago": 44
+    },
+    {
+      "restaurant": "forno-rosso-dha6",
+      "items": [
+        "Baked Mac & Cheese"
+      ],
+      "rating": 5,
+      "text": "Cheesiest mac and cheese in Karachi, crispy breadcrumb top and gooey inside. Pure comfort.",
+      "days_ago": 76
+    },
+    {
+      "restaurant": "forno-rosso-dha6",
+      "items": [
+        "Penne Arrabbiata"
+      ],
+      "rating": 4,
+      "text": "Arrabbiata has a good chilli kick and plenty of garlic. Nice that it's vegan.",
+      "days_ago": 85
+    },
+    {
+      "restaurant": "forno-rosso-dha6",
+      "items": [
+        "Gluten-Free Penne Primavera"
+      ],
+      "rating": 5,
+      "text": "As a coeliac I rarely trust restaurants, but they confirmed separate cooking. The primavera is light and fresh with olive oil and seasonal veg.",
+      "days_ago": 49
+    },
+    {
+      "restaurant": "forno-rosso-dha6",
+      "items": [
+        "Four Cheese Pizza"
+      ],
+      "rating": 3,
+      "text": "Very rich, and the gorgonzola overpowered everything. Crust was soggy in the middle by the time it arrived.",
+      "days_ago": 16
+    },
+    {
+      "restaurant": "forno-rosso-dha6",
+      "items": [
+        "Margherita",
+        "Four Cheese Pizza",
+        "Penne Arrabbiata"
+      ],
+      "rating": 4,
+      "text": "Forno Rosso is the pizza place we keep returning to in DHA Phase 6, and after maybe twenty orders across a year I think I can give a fair picture of what is great and what is just fine.\n\nThe margherita is the benchmark and it is excellent. The dough is clearly fermented for a long time; the crust is airy, chewy and blistered with those little charred leopard spots you only get from a very hot wood-fired oven. The tomato sauce is bright and simple, the fior di latte melts into creamy pools, and the basil is fresh rather than dried. It is a light pizza by Karachi standards, which I love, and a 12-inch is enough for one hungry person or two with a salad.\n\nThe four cheese pizza is the opposite: rich, heavy and very indulgent, with mozzarella, gorgonzola, parmesan and cheddar. When it arrives quickly it is a treat, but it does not travel well. Twice the centre has become soggy because the oil from all that cheese pools in the middle, and the gorgonzola can overpower everything if you are not a blue cheese fan. I would recommend it for dining in more than delivery.\n\nThe penne arrabbiata is my weeknight favourite. It is vegan, which surprised me, and has a real chilli kick from dried chilli flakes and garlic sauteed in olive oil, with a slow-cooked tomato sauce. It reheats well the next day too. For those who need it, the gluten-free penne primavera is a genuinely good option and they do take cross-contamination seriously.\n\nOn service: delivery to Clifton usually takes 35 to 45 minutes. Pizzas come in an insulated bag and are usually hot, though on busy Friday and Saturday nights I have had waits of over an hour. Prices are on the higher side, 1450 for a margherita and nearly 2000 for the specialty pizzas, but the quality justifies it compared to the chains.\n\nFour stars overall. Five for the margherita and arrabbiata, three for the heavier pizzas on delivery, and a small deduction for weekend delays. If you only order one thing, make it the margherita.",
+      "days_ago": 49
+    },
+    {
+      "restaurant": "forno-rosso-dha6",
+      "items": [
+        "Rocket & Pear Salad"
+      ],
+      "rating": 4,
+      "text": "Peppery rocket, sweet pear and candied walnuts. Fresh and light starter.",
+      "days_ago": 81
+    },
+    {
+      "restaurant": "forno-rosso-dha6",
+      "items": [
+        "Tiramisu"
+      ],
+      "rating": 5,
+      "text": "Tiramisu is light, coffee-soaked and not too sweet. Came in a neat glass jar.",
+      "days_ago": 49
+    },
+    {
+      "restaurant": "forno-rosso-dha6",
+      "items": [
+        "Spaghetti Bolognese (Beef)"
+      ],
+      "rating": 2,
+      "text": "Bolognese sauce was watery and the spaghetti overcooked. Not worth 1450.",
+      "days_ago": 89
+    },
+    {
+      "restaurant": "forno-rosso-dha6",
+      "items": [
+        "Garlic Bread with Cheese",
+        "Penne Arrabbiata"
+      ],
+      "rating": 5,
+      "text": "Garlic bread cheesy and crisp, arrabbiata spicy. Great value dinner for two.",
+      "days_ago": 29
+    },
+    {
+      "restaurant": "forno-rosso-dha6",
+      "items": [
+        "Pesto Veggie Pizza"
+      ],
+      "rating": 4,
+      "text": "Nice pesto base with roasted veg. Heads up: the pesto has pine nuts, careful if you're allergic.",
+      "days_ago": 4
+    },
+    {
+      "restaurant": "forno-rosso-dha6",
+      "items": [
+        "Margherita",
+        "Tiramisu"
+      ],
+      "rating": 5,
+      "text": "Birthday dinner at home: pizza arrived hot in an insulated bag and the tiramisu cold. Thoughtful packaging.",
+      "days_ago": 11
+    },
+    {
+      "restaurant": "forno-rosso-dha6",
+      "items": [
+        "Diavola with Beef Pepperoni"
+      ],
+      "rating": 1,
+      "text": "Pizza arrived 80 minutes late, cold and stuck to the box. Refund took a week.",
+      "days_ago": 23
+    },
+    {
+      "restaurant": "forno-rosso-dha6",
+      "items": [
+        "Fettuccine Alfredo with Grilled Chicken",
+        "Garlic Bread with Cheese"
+      ],
+      "rating": 4,
+      "text": "Heavy carb overload but delicious. Alfredo sauce was silky.",
+      "days_ago": 1
+    },
+    {
+      "restaurant": "forno-rosso-dha6",
+      "items": [
+        "Spicy Chicken Tikka Pizza"
+      ],
+      "rating": 5,
+      "text": "Ordered for a Friday night with friends and it disappeared instantly. Spicy and loaded with toppings.",
+      "days_ago": 73
+    },
+    {
+      "restaurant": "forno-rosso-dha6",
+      "items": [
+        "Baked Mac & Cheese"
+      ],
+      "rating": 2,
+      "text": "Mac and cheese was too salty and the sauce had split, with an oily layer on top.",
+      "days_ago": 41
+    },
+    {
+      "restaurant": "forno-rosso-dha6",
+      "items": [
+        "Gluten-Free Penne Primavera",
+        "Rocket & Pear Salad"
+      ],
+      "rating": 5,
+      "text": "Light, healthy Italian meal that left me feeling good. Vegetables tasted fresh.",
+      "days_ago": 80
+    },
+    {
+      "restaurant": "golden-dragon-gulshan",
+      "items": [
+        "Chicken Corn Soup (Bowl)"
+      ],
+      "rating": 5,
+      "text": "Thick, eggy chicken corn soup like the old Chinese places. Perfect for a winter evening with chilli vinegar.",
+      "days_ago": 45
+    },
+    {
+      "restaurant": "golden-dragon-gulshan",
+      "items": [
+        "Chilli Chicken Dry"
+      ],
+      "rating": 5,
+      "text": "Chilli chicken dry is fiery and wok-smoky with crunchy capsicum. Ask for extra green chillies.",
+      "days_ago": 75
+    },
+    {
+      "restaurant": "golden-dragon-gulshan",
+      "items": [
+        "Chicken Manchurian",
+        "Egg Fried Rice"
+      ],
+      "rating": 4,
+      "text": "Classic Pakistani-Chinese combo; manchurian tangy and sweet. Rice a bit greasy.",
+      "days_ago": 83
+    },
+    {
+      "restaurant": "golden-dragon-gulshan",
+      "items": [
+        "Dynamite Chicken"
+      ],
+      "rating": 4,
+      "text": "Crispy chicken in spicy mayo, addictive. Gets soggy if you don't eat it fast.",
+      "days_ago": 58
+    },
+    {
+      "restaurant": "golden-dragon-gulshan",
+      "items": [
+        "Hot and Sour Soup"
+      ],
+      "rating": 3,
+      "text": "Hot and sour was more sour than hot, and too much cornflour. Just okay.",
+      "days_ago": 46
+    },
+    {
+      "restaurant": "golden-dragon-gulshan",
+      "items": [
+        "Family Combo for Four"
+      ],
+      "rating": 5,
+      "text": "Family combo is great value. Soup for four, manchurian, chilli chicken, rice and chowmein fed five of us.",
+      "days_ago": 35
+    },
+    {
+      "restaurant": "golden-dragon-gulshan",
+      "items": [
+        "Family Combo for Four",
+        "Chilli Chicken Dry",
+        "Chicken Corn Soup (Bowl)"
+      ],
+      "rating": 4,
+      "text": "Golden Dragon is the kind of Pakistani-Chinese restaurant that every neighbourhood in Karachi used to have in the nineties, and it has kept that style alive in Gulshan-e-Iqbal. If you are looking for authentic Cantonese or Sichuan food, this is not it. If you want the comforting, saucy, chilli-loaded Chinese that Pakistani families grew up with, it is one of the best around.\n\nWe order the Family Combo for Four almost every month for family dinner. You get four bowls of chicken corn soup, chicken manchurian, chilli chicken, egg fried rice and chicken chowmein. For 3900 rupees it fed five of us with leftovers, which makes it some of the best value in the area. The chicken corn soup is thick, eggy and mild, exactly like it should be, and they send chilli vinegar, soy sauce and chilli sauce sachets so everyone can adjust it. My kids drink it like a milkshake.\n\nThe chilli chicken dry is the dish that keeps me coming back on my own. Strips of chicken are coated, fried and then wok-tossed with sliced green chillies, onions, capsicum and soy, with real smoky wok flavour. It is properly hot, a solid three out of three on spice, and the capsicum stays crunchy. Paired with the egg fried rice it is a perfect late-night meal.\n\nNot everything is consistent. The manchurian is sometimes very sweet and ketchup-heavy, and once the chowmein arrived soggy and lukewarm. On one combo order the chilli chicken was missing most of its green chillies, which made it oddly bland. Delivery to our block in Gulshan normally takes 30 to 40 minutes, but on rainy days or on Sunday nights it can stretch to an hour.\n\nPackaging is decent: soups are in sealed containers inside a separate bag, and the dry dishes come in foil boxes so they don't sweat too much. Vegetarians have limited choices, but the Szechuan vegetables with tofu are genuinely spicy and well made, and they are vegan.\n\nOverall four stars. Order the soup, the chilli chicken dry and the kung pao, ask for extra green chillies, and you will be happy.",
+      "days_ago": 50
+    },
+    {
+      "restaurant": "golden-dragon-gulshan",
+      "items": [
+        "Kung Pao Chicken"
+      ],
+      "rating": 4,
+      "text": "Kung pao with roasted peanuts and dried red chillies. Good heat and crunch.",
+      "days_ago": 66
+    },
+    {
+      "restaurant": "golden-dragon-gulshan",
+      "items": [
+        "Beef Chilli Dry"
+      ],
+      "rating": 5,
+      "text": "Beef chilli dry is super spicy and tender. My go-to.",
+      "days_ago": 27
+    },
+    {
+      "restaurant": "golden-dragon-gulshan",
+      "items": [
+        "Vegetable Chow Mein"
+      ],
+      "rating": 3,
+      "text": "Veg chowmein was bland and oily. Needed soy and chilli sauce to make it edible.",
+      "days_ago": 90
+    },
+    {
+      "restaurant": "golden-dragon-gulshan",
+      "items": [
+        "Szechuan Vegetables with Tofu"
+      ],
+      "rating": 5,
+      "text": "A rare vegan option in Gulshan that's actually spicy. The Szechuan peppercorns tingle and the tofu is firm.",
+      "days_ago": 83
+    },
+    {
+      "restaurant": "golden-dragon-gulshan",
+      "items": [
+        "Chicken Chowmein"
+      ],
+      "rating": 2,
+      "text": "Chowmein was soggy and cold on arrival. Took 60 minutes for a 3 km distance.",
+      "days_ago": 44
+    },
+    {
+      "restaurant": "golden-dragon-gulshan",
+      "items": [
+        "Chicken Spring Rolls (6 pcs)"
+      ],
+      "rating": 4,
+      "text": "Crispy spring rolls with a good chicken and cabbage filling.",
+      "days_ago": 64
+    },
+    {
+      "restaurant": "golden-dragon-gulshan",
+      "items": [
+        "Chilli Chicken Dry",
+        "Egg Fried Rice"
+      ],
+      "rating": 5,
+      "text": "Order this every Friday. Consistent taste for years.",
+      "days_ago": 13
+    },
+    {
+      "restaurant": "golden-dragon-gulshan",
+      "items": [
+        "Chicken Manchurian"
+      ],
+      "rating": 1,
+      "text": "Manchurian was swimming in a sweet, ketchup-like sauce with too much food colour. Disappointing.",
+      "days_ago": 88
+    },
+    {
+      "restaurant": "golden-dragon-gulshan",
+      "items": [
+        "Dynamite Chicken",
+        "Chicken Corn Soup (Bowl)"
+      ],
+      "rating": 5,
+      "text": "Office lunch for 8: all good, came in 30 minutes, packaging neat.",
+      "days_ago": 56
+    },
+    {
+      "restaurant": "golden-dragon-gulshan",
+      "items": [
+        "Family Combo for Four"
+      ],
+      "rating": 4,
+      "text": "Good combo but the chilli chicken was missing green chillies. Still a huge amount of food.",
+      "days_ago": 66
+    },
+    {
+      "restaurant": "golden-dragon-gulshan",
+      "items": [
+        "Kung Pao Chicken",
+        "Egg Fried Rice"
+      ],
+      "rating": 5,
+      "text": "Spicy, nutty kung pao and fluffy egg fried rice. Zabardast combo.",
+      "days_ago": 40
+    },
+    {
+      "restaurant": "golden-dragon-gulshan",
+      "items": [
+        "Beef Chilli Dry"
+      ],
+      "rating": 2,
+      "text": "Beef was chewy and way too salty this time.",
+      "days_ago": 90
+    },
+    {
+      "restaurant": "golden-dragon-gulshan",
+      "items": [
+        "Hot and Sour Soup",
+        "Chicken Spring Rolls (6 pcs)"
+      ],
+      "rating": 4,
+      "text": "Good comfort soup and rolls on a rainy Karachi day.",
+      "days_ago": 27
+    },
+    {
+      "restaurant": "lahori-nashta-tariq-road",
+      "items": [
+        "Halwa Puri Platter"
+      ],
+      "rating": 5,
+      "text": "Sunday halwa puri done right. Puris crispy and puffed, halwa soft and not too sweet, chanay spicy.",
+      "days_ago": 26
+    },
+    {
+      "restaurant": "lahori-nashta-tariq-road",
+      "items": [
+        "Beef Nihari with Khameeri Roti"
+      ],
+      "rating": 5,
+      "text": "Nihari is spicy and thick, and the khameeri roti soft and slightly sweet. Breakfast of champions.",
+      "days_ago": 75
+    },
+    {
+      "restaurant": "lahori-nashta-tariq-road",
+      "items": [
+        "Siri Paye (Bowl)"
+      ],
+      "rating": 4,
+      "text": "Paye was sticky and rich, perfect with naan. Bit too much oil for my taste.",
+      "days_ago": 89
+    },
+    {
+      "restaurant": "lahori-nashta-tariq-road",
+      "items": [
+        "Kashmiri Chai"
+      ],
+      "rating": 5,
+      "text": "Pink chai with crushed pistachios and almonds, creamy and fragrant. Lovely.",
+      "days_ago": 52
+    },
+    {
+      "restaurant": "lahori-nashta-tariq-road",
+      "items": [
+        "Anda Paratha (Masala Omelette with Paratha)"
+      ],
+      "rating": 4,
+      "text": "Masala omelette with onion, tomato and green chilli, and the paratha was flaky. Simple and filling.",
+      "days_ago": 67
+    },
+    {
+      "restaurant": "lahori-nashta-tariq-road",
+      "items": [
+        "Aloo Paratha with Dahi"
+      ],
+      "rating": 3,
+      "text": "Aloo paratha was heavy and greasy, though filling. Dahi was fresh.",
+      "days_ago": 36
+    },
+    {
+      "restaurant": "lahori-nashta-tariq-road",
+      "items": [
+        "Halwa Puri Platter"
+      ],
+      "rating": 2,
+      "text": "Puris arrived soggy and cold and the halwa had become a lump. Halwa puri doesn't travel well, better to eat in.",
+      "days_ago": 48
+    },
+    {
+      "restaurant": "lahori-nashta-tariq-road",
+      "items": [
+        "Rabri Falooda"
+      ],
+      "rating": 5,
+      "text": "Rabri falooda is thick and creamy with vermicelli, basil seeds and crushed pistachios. A summer must.",
+      "days_ago": 89
+    },
+    {
+      "restaurant": "lahori-nashta-tariq-road",
+      "items": [
+        "Chana Cholay Plate"
+      ],
+      "rating": 4,
+      "text": "Spicy chickpeas, good with puri. Vegan friendly too.",
+      "days_ago": 82
+    },
+    {
+      "restaurant": "lahori-nashta-tariq-road",
+      "items": [
+        "Doodh Patti"
+      ],
+      "rating": 4,
+      "text": "Strong doodh patti, just right.",
+      "days_ago": 40
+    },
+    {
+      "restaurant": "lahori-nashta-tariq-road",
+      "items": [
+        "Suji Halwa (250g)"
+      ],
+      "rating": 5,
+      "text": "Suji halwa with almonds and cardamom, rich in ghee. Better than my nani's (don't tell her).",
+      "days_ago": 39
+    },
+    {
+      "restaurant": "lahori-nashta-tariq-road",
+      "items": [
+        "Kheer Clay Pot"
+      ],
+      "rating": 5,
+      "text": "Kheer in a clay pot has that earthy flavour, pistachio on top. Lovely.",
+      "days_ago": 14
+    },
+    {
+      "restaurant": "lahori-nashta-tariq-road",
+      "items": [
+        "Beef Nihari with Khameeri Roti"
+      ],
+      "rating": 3,
+      "text": "Nihari was too salty and oily this time.",
+      "days_ago": 37
+    },
+    {
+      "restaurant": "lahori-nashta-tariq-road",
+      "items": [
+        "Halwa Puri Platter",
+        "Kashmiri Chai"
+      ],
+      "rating": 5,
+      "text": "Family breakfast for 6, everything hot and delivered by 9am. Bohat acha.",
+      "days_ago": 20
+    },
+    {
+      "restaurant": "lahori-nashta-tariq-road",
+      "items": [
+        "Extra Puri (2 pcs)",
+        "Chana Cholay Plate"
+      ],
+      "rating": 4,
+      "text": "Good cheap breakfast. Puris a bit oily.",
+      "days_ago": 82
+    },
+    {
+      "restaurant": "lahori-nashta-tariq-road",
+      "items": [
+        "Siri Paye (Bowl)"
+      ],
+      "rating": 1,
+      "text": "Paye had a strong smell and wasn't cleaned properly. Couldn't eat it.",
+      "days_ago": 43
+    },
+    {
+      "restaurant": "lahori-nashta-tariq-road",
+      "items": [
+        "Anda Paratha (Masala Omelette with Paratha)",
+        "Doodh Patti"
+      ],
+      "rating": 5,
+      "text": "Perfect quick breakfast before office. Fast delivery in the Tariq Road area.",
+      "days_ago": 30
+    },
+    {
+      "restaurant": "lahori-nashta-tariq-road",
+      "items": [
+        "Aloo Paratha with Dahi",
+        "Kashmiri Chai"
+      ],
+      "rating": 4,
+      "text": "Hearty breakfast with a generous paratha. Chai a bit too sweet.",
+      "days_ago": 85
+    },
+    {
+      "restaurant": "lahori-nashta-tariq-road",
+      "items": [
+        "Beef Nihari with Khameeri Roti"
+      ],
+      "rating": 5,
+      "text": "Nihari has a good spicy kick and tender beef, under 800 for a full bowl. Great value.",
+      "days_ago": 85
+    },
+    {
+      "restaurant": "lahori-nashta-tariq-road",
+      "items": [
+        "Rabri Falooda",
+        "Kheer Clay Pot"
+      ],
+      "rating": 2,
+      "text": "Falooda had melted and leaked in the bag. Kheer was fine.",
+      "days_ago": 26
+    }
+  ],
+  "demo_customer_orders": [
+    {
+      "restaurant": "demo-bistro",
+      "items": [
+        {
+          "name": "Chicken Biryani",
+          "quantity": 2
+        },
+        {
+          "name": "Chicken Tikka Boti (8 pcs)",
+          "quantity": 1
+        }
+      ],
+      "days_ago": 5,
+      "review": {
+        "rating": 5,
+        "text": "Biryani spicy exactly how I like it, aloo perfectly soft, and the tikka boti had great char. Reached Clifton hot in 35 minutes."
+      }
+    },
+    {
+      "restaurant": "boat-basin-street-kitchen",
+      "items": [
+        {
+          "name": "Chicken Karahi (Full)",
+          "quantity": 1
+        },
+        {
+          "name": "Gola Kebab Plate",
+          "quantity": 1
+        }
+      ],
+      "days_ago": 12,
+      "review": {
+        "rating": 4,
+        "text": "Karahi had serious heat and the gola kebabs were smoky and soft. A bit oily, but exactly the desi fix I wanted."
+      }
+    },
+    {
+      "restaurant": "forno-rosso-dha6",
+      "items": [
+        {
+          "name": "Diavola with Beef Pepperoni",
+          "quantity": 1
+        },
+        {
+          "name": "Penne Arrabbiata",
+          "quantity": 1
+        }
+      ],
+      "days_ago": 19,
+      "review": null
+    },
+    {
+      "restaurant": "golden-dragon-gulshan",
+      "items": [
+        {
+          "name": "Chilli Chicken Dry",
+          "quantity": 2
+        },
+        {
+          "name": "Egg Fried Rice",
+          "quantity": 1
+        }
+      ],
+      "days_ago": 26,
+      "review": {
+        "rating": 4,
+        "text": "Chilli chicken dry with extra green chillies was perfect. Rice slightly greasy, and it took 50 minutes from Gulshan to Clifton."
+      }
+    },
+    {
+      "restaurant": "demo-bistro",
+      "items": [
+        {
+          "name": "Chapli Kebab (2 pcs)",
+          "quantity": 2
+        },
+        {
+          "name": "Beef Haleem",
+          "quantity": 1
+        }
+      ],
+      "days_ago": 33,
+      "review": null
+    },
+    {
+      "restaurant": "boat-basin-street-kitchen",
+      "items": [
+        {
+          "name": "Beef Bihari Kebab Roll",
+          "quantity": 3
+        },
+        {
+          "name": "Chicken Chatni Roll",
+          "quantity": 2
+        }
+      ],
+      "days_ago": 40,
+      "review": {
+        "rating": 5,
+        "text": "Rolls for a late night match with friends. Bihari roll smoky and fiery, chatni roll properly spicy. Zabardast."
+      }
+    },
+    {
+      "restaurant": "lahori-nashta-tariq-road",
+      "items": [
+        {
+          "name": "Beef Nihari with Khameeri Roti",
+          "quantity": 2
+        },
+        {
+          "name": "Siri Paye (Bowl)",
+          "quantity": 1
+        }
+      ],
+      "days_ago": 47,
+      "review": null
+    },
+    {
+      "restaurant": "forno-rosso-dha6",
+      "items": [
+        {
+          "name": "Spicy Chicken Tikka Pizza",
+          "quantity": 1
+        },
+        {
+          "name": "Spaghetti Bolognese (Beef)",
+          "quantity": 1
+        }
+      ],
+      "days_ago": 54,
+      "review": {
+        "rating": 3,
+        "text": "Tikka pizza was good and spicy, but the bolognese was bland and watery."
+      }
+    },
+    {
+      "restaurant": "demo-bistro",
+      "items": [
+        {
+          "name": "Chicken Karahi (Half)",
+          "quantity": 1
+        },
+        {
+          "name": "Seekh Kebab Paratha Roll",
+          "quantity": 2
+        }
+      ],
+      "days_ago": 60,
+      "review": null
+    }
+  ]
+}

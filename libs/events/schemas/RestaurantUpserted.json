@@ -1,0 +1,142 @@
+{
+  "$defs": {
+    "RestaurantUpsertedPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "address": {
+          "title": "Address",
+          "type": "string"
+        },
+        "avg_prep_time_minutes": {
+          "title": "Avg Prep Time Minutes",
+          "type": "integer"
+        },
+        "avg_rating": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Avg Rating"
+        },
+        "city": {
+          "title": "City",
+          "type": "string"
+        },
+        "cuisine_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Cuisine Type"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "is_accepting_orders": {
+          "title": "Is Accepting Orders",
+          "type": "boolean"
+        },
+        "lat": {
+          "title": "Lat",
+          "type": "number"
+        },
+        "lng": {
+          "title": "Lng",
+          "type": "number"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "restaurant_id": {
+          "title": "Restaurant Id",
+          "type": "string"
+        },
+        "review_count": {
+          "title": "Review Count",
+          "type": "integer"
+        },
+        "source_version": {
+          "title": "Source Version",
+          "type": "integer"
+        },
+        "status": {
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "restaurant_id",
+        "name",
+        "description",
+        "city",
+        "address",
+        "lat",
+        "lng",
+        "cuisine_type",
+        "status",
+        "is_accepting_orders",
+        "avg_prep_time_minutes",
+        "avg_rating",
+        "review_count",
+        "source_version"
+      ],
+      "title": "RestaurantUpsertedPayload",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "aggregate_id": {
+      "title": "Aggregate Id",
+      "type": "string"
+    },
+    "correlation_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Correlation Id"
+    },
+    "event_id": {
+      "title": "Event Id",
+      "type": "string"
+    },
+    "event_type": {
+      "const": "RestaurantUpserted",
+      "title": "Event Type",
+      "type": "string"
+    },
+    "occurred_at": {
+      "format": "date-time",
+      "title": "Occurred At",
+      "type": "string"
+    },
+    "payload": {
+      "$ref": "#/$defs/RestaurantUpsertedPayload"
+    }
+  },
+  "required": [
+    "event_id",
+    "aggregate_id",
+    "occurred_at",
+    "event_type",
+    "payload"
+  ],
+  "title": "RestaurantUpserted",
+  "type": "object"
+}

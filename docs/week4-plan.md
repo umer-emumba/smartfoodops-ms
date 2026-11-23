@@ -1,0 +1,151 @@
+# Week 4 Plan — Data Preparation + Retrieval (Part B)
+
+## Context
+
+Part A (Weeks 1–3) is done and merged to `main`. Part B adds the GenAI layer that
+`SmartFoodOps - Part B.pdf` asks for: semantic search + RAG over menus, restaurants, reviews and
+order history (Week 4), and a streaming AI assistant with recommendations, order explanations and
+restaurant content generation (Week 5). The work is split into two weeks so each one can be
+reviewed by the mentor on its own (Guidelines §2).
+
+Decided with the user: **Qdrant** as the vector DB, **Anthropic Claude** as the LLM (Sonnet 5.5
+for answers, Haiku 5.5 for cheap steps — used from Week 5), **local fastembed** for embeddings
+(bge-small, 384-dim, no key needed), and a **real review feature** in restaurant-service.
+
+Working rule: build step by step, verify each step in Docker, and ask before committing. All
+steps go on `week4/retrieval-layer`, cut from `main`. `week5/ai-assistant` is cut from it later.
+
+### What exists today, and what's missing
+
+- Have: restaurant `city/lat/lng/cuisine_type/avg_prep_time_minutes/active_order_count`, menu item
+  `description/price/is_available/stock_count/version`, the outbox → relay → Kafka path with Schema
+  Registry (`libs/events`), the consumer framework with DLQ and idempotency (`sfo_events/consumer.py`,
+  `idempotency.py`), SSE through the gateway (`api-gateway/app/proxy.py::stream_tracking`,
+  `tracking-service/app/sse.py`), the order tracking internal API
+  (`order-service/app/api/internal.py`), delivery by-order with ETAs and deadline flags, reason
+  codes (`sfo_events/reasons.py`), the Mongo-backed analytics-service, and the OTel/Prometheus/Loki/Grafana stack.
+- Missing: restaurant-service has an `OutboxEvent` table but **publishes nothing**, so there's no
+  `restaurant-events` topic and nothing to trigger re-indexing. There are **no reviews or ratings**,
+  no dietary or spice attributes, and the seed creates only **1 restaurant** (too little data for
+  semantic search to be meaningful).
+
+## 1. Design decisions
+
+| # | Decision | Why |
+|---|---|---|
+| B4-D1 | **New `ai-service`** (FastAPI, same layout as the other services: `config.py`, `db.py`, `auth_deps.py`, `api/`, `consumer.py`, `celery_app.py`) with its own **Postgres `ai-db`** (conversations, content drafts, AI interaction log, outbox) | Keeps database-per-service |
+| B4-D2 | **Qdrant** container. Collections: `menu_items`, `restaurants`, `reviews`, `order_history`. Payload fields: `restaurant_id, city, geo (lat/lon), cuisine, price, is_available, dietary_tags, spice_level, source_version` | Payload filters (geo radius, availability, price, dietary) run inside the vector query |
+| B4-D3 | **Hybrid search**: dense bge-small vectors (fastembed, local ONNX) plus a sparse BM25 vector, fused with RRF through Qdrant's query API. Embedding runs in a thread pool | No API key or per-call cost. BM25 catches exact dish names ("biryani") that dense vectors blur |
+| B4-D4 | **Indexing is event-driven**: restaurant-service outbox → `restaurant-events` → ai-service indexer consumer → chunk → embed → upsert. Order history is indexed from `order-events` (`OrderDelivered`) | Reuses the Week 3 outbox/relay/consumer path; the index follows the source of truth without polling |
+| B4-D5 | **Idempotent indexer**: point IDs are deterministic (uuid5 of entity id); an upsert is skipped if the stored `source_version` is ≥ the incoming one; deletes are tombstones; Qdrant outages are retried and rewound, never sent to the DLQ (same rule as W3-D5) | Replays and out-of-order events can't regress the index. An infrastructure outage isn't a poison message |
+| B4-D6 | **Collection name includes the embedding model version**; `python -m app.reindex` backfills from a restaurant-service internal export endpoint and order-service history | Swapping models is a clean cut-over, and the first deploy has a full index |
+| B4-D7 | **Search uses `qdrant-client` + `fastembed` directly**, not LangChain's vector-store wrapper | Full control of filters and repeat-safe indexing |
+| B4-D8 | **The gateway routes `/v1/ai/*` to ai-service** (added to `_UPSTREAM_POLICIES`). `ANTHROPIC_API_KEY` goes in `env.example` only; the user adds it to `.env` | Same entry point and auth as every other service; no secret in the repo |
+| B4-D9 | **Rating aggregate stored as `rating_sum` + `review_count`**, bumped by one relative `UPDATE` in the review's transaction; `avg_rating` is derived in the response | Two reviews committing at once both count. Storing the average itself would need a read-modify-write that loses one of them |
+| B4-D10 | **Seed history goes in through dev-only import commands** (`order-service app.import_history`, `restaurant-service app.import_reviews`, run by `seed.py` via `docker compose exec`, like `create_admin`). Orders are written delivered with normal pricing and a backdated status trail; fixed uuid5 IDs make re-runs skip them | Search needs ~200 reviews on delivered orders over past months. The real saga takes minutes per order and stamps everything "now". These orders have no payments, deliveries or events, so analytics doesn't count them; the step-3 backfill indexes them |
+| B4-D11 | **`source_version` = `restaurants.catalog_version`**, bumped by one `UPDATE … RETURNING` at the start of every transaction that writes restaurant-events (`app/events.py`); all events of that transaction carry it. Payloads are full snapshots; menu items are re-sent when the restaurant's name, cuisine or location changes or their category is renamed; the saga only emits when an item's `in_stock` flips | The UPDATE locks the restaurant row, so the version rises in commit order — the indexer can drop anything not newer than what it stored, including backfill/live races. Taking it first also fixes lock order (restaurant → items, as the saga does) and queues concurrent item edits that used to fail with `StaleDataError` |
+| B4-D12 | **Order history = one point per delivered order + one rolling summary point per customer** (same `order_history` collection, `doc_type` order/customer_summary). `OrderDelivered` now carries its `items` (optional field, BACKWARD-compatible); the summary is rebuilt from the customer's order points; orders whose restaurant isn't indexed are skipped | Per-order points make "that spicy thing I ordered last month" searchable (step 4); the summary is Week 5's profile. Items on the event keep W3-D8 (no consumer calls back). Skipping covers deleted restaurants' orders (52 in dev) |
+| B4-D13 | **Writes: conditional upsert (`update_filter: source_version < v`) for catalog points, insert-only for orders, tombstones without vectors for deleted items**; stored versions are read first so stale or unchanged docs are never re-embedded. Qdrant 5xx/unreachable → `QdrantUnavailable` (a ConnectionError) → consumer rewinds, never the DLQ | Atomic "only if newer" without a read-modify-write race, so backfill and live events interleave safely. Re-running the backfill costs ~5 s instead of ~30 s |
+| B4-D14 | **Models baked into the ai-service image** (download layer before the code layer, `HF_HUB_OFFLINE=1`); bge's search instruction is prefixed to queries by us (`DENSE_QUERY_PREFIX`) — fastembed doesn't | No network at container start; a code change doesn't re-download. The image is ~814 MB (ONNX Runtime + numpy), more than the ~350 MB estimated. The prefix is measured on/off in step 5's eval |
+| B4-D15 | **One Qdrant query per search**: dense and BM25 prefetches, each with the full filter, fused by RRF; `kind=cuisine` groups menu items by cuisine (best dish scores the group). Visibility (active restaurant, available, in stock, not deleted) is applied inside `retrieve()`, not by callers. `GET /v1/ai/search` is public like the menus; `/search/history` is customer-only and always filtered to the caller | RRF needs no score calibration between the two vector types; filtering inside the prefetch never returns short pages. Week 5 calls the same `retrieve()`, so it can't see anything a customer couldn't |
+| B4-D16 | **Retrieval settings from the eval, not by eye**: 32 golden queries (`scripts/fixtures/retrieval_golden.json`), recall@5 + MRR. Six settings (BGE query instruction on/off × RRF weights 1:1, 1.2:1, 1:1.2) were all within one query (recall@5 0.896–0.902, MRR 0.922–0.938) — noise, so: instruction on (BGE's recommended use), dense weight 1.2 only to break RRF ties that made results flip between runs. Bar for `check.sh --with-ai`: recall@5 ≥ 0.85, MRR ≥ 0.88 (baseline 0.902 / 0.938, 0.902 / 0.953 after a Docker restart — see technical-documentation.md) | Tuning to a 32-query set would overfit it. Two review golden entries were corrected (they named one restaurant; the queries don't) — recorded in technical-documentation.md |
+| B4-D17 | **Golden set grown to 106 queries** (follow-up, 2026-11-11): the original 32 become the `dev` split (the fusion weights were tuned on them); 74 new `test` queries are held out for comparing models and settings. Every query is tagged — exact, vague, attribute, roman_urdu, typo, negation, multi — and the eval reports each tag and split. Answers are judged from the catalog text, never copied from search output. New bar over all 106: recall@5 ≥ 0.70, MRR ≥ 0.79 (baseline 0.748 / 0.843) | 32 queries couldn't tell settings apart (B4-D16) and only covered tidy English. The new tags surface where search actually fails (negation 0.05, Roman Urdu 0.64), which is what a model comparison and later improvements need to measure against |
+| B4-D18 | **Embedding model chosen by measurement** (follow-up, 2026-11-11): `scripts/compare_models.sh` rebuilds a fresh index per model (revision 900, beside the live one) and runs the eval. On the test split: bge-small 0.681 / 0.794, **bge-base-en-v1.5 0.741 / 0.854**, arctic-embed-s 0.695 / 0.838, multilingual MiniLM 0.633 / 0.726, embeddinggemma-300m 0.752 / 0.877. Switch to bge-base: live index `*__bge_base_en_v1_5_r1` scores 0.792 / 0.889 overall; bar raised to recall@5 ≥ 0.74, MRR ≥ 0.84 | bge-base takes most of the gain (typos 0.75 → 0.94) for +20 ms per query and +180 MB. Gemma's extra ~1 query is within noise on 74 queries and costs 3× the memory under Gemma's own licence. No model fixes Roman Urdu (0.57–0.66, the multilingual ones included) or negation (≤ 0.23): both are left to Week 5's query rewriting |
+| B4-D19 | **Index updates scale with what changed** (follow-up, 2026-11-13): a newer doc whose text is unchanged (stock, availability — fields outside the text) gets its payload overwritten and keeps its vectors, guarded on `source_version < v` and the same `text` (a miss falls back to embedding); the customer summary is built from the latest `SUMMARY_MAX_ORDERS` (50) orders, with the full count from Qdrant | Stock flips are the most frequent catalog event and needed no embedding; the summary rebuild had cost that grew with every order. Measured live: 2 availability toggles → 2 `payload_only` writes, 0 texts embedded. Next steps at scale (not built): micro-batching events in the consumer, the indexer as its own worker, GPU or hosted embeddings |
+| B4-D20 | **Eval gaps closed** (follow-up, 2026-11-16): +28 test queries — 12 order-history (`kind: order`, the demo customer logged in), 10 filtered (tag `filter`), 6 not on the menu (`unanswerable`, printed not scored). Every hit is checked against its filters (and history hits against the caller); scores carry a 95% bootstrap range; `--compare` runs a paired bootstrap against an earlier run; p50/p95 latency reported. Baseline recall@5 0.823 (0.769–0.874), MRR 0.904 over 128 scored; bar 0.77 / 0.85 plus zero violations | History search and filters had no eval at all; a filter bug is a correctness failure that ranking scores would hide. Ranges and `--compare` make "better" mean better (needed before tuning RRF `k`). Search can't say "no match" (RRF scores are rank-based) — recorded for Week 5, not faked here |
+| B4-D21 | **RRF k made explicit and measured** (follow-up, 2026-11-16): `FUSION_K` setting, default 2 (Qdrant's own default, which was in use unstated). Eval at k = 2, 5, 10, 30, 60: recall@5 0.823–0.831, MRR 0.904–0.920; paired bootstrap vs k = 2 — every 95% range includes zero (k = 30: recall +0.008, −0.005…+0.020; MRR +0.016, −0.006…+0.041), wins and losses balance (8 vs 5 queries). Kept 2 | Changing it on these numbers would tune to noise. The value is now visible in config instead of a server default, and re-testable with one environment variable after a model, data or reranker change |
+
+New resource use is roughly Qdrant ~200 MB plus ai-service with the ONNX model ~350 MB, on top
+of today's ~4 GiB stack.
+
+## 2. Build order
+
+### Step 0 — Foundations
+- Add `qdrant` and `ai-db` services to `docker-compose.yml`, plus an `ai-service` skeleton
+  (health/readiness checks covering Qdrant + DB, OTel through `libs/observability`, JWT through `libs/auth`).
+- Gateway: add `ai-service` to `_UPSTREAM_POLICIES` and the routes.
+- Write `docs/week4-plan.md`. `ANTHROPIC_API_KEY` goes in `env.example` only; you add it to
+  `.env` yourself.
+
+### Step 1 — Richer domain data (restaurant-service)
+- Migration: add `menu_items.dietary_tags` (JSON list: vegetarian, vegan, halal, gluten_free…),
+  `spice_level` (0–3) and `calories` (nullable), plus a `restaurants.description` column.
+  Expose them on the create/update schemas.
+- **Reviews:** a `reviews` table with `(order_id PK, customer_id, restaurant_id, rating 1–5,
+  text, item_ids, created_at)`.
+  - `POST /v1/restaurants/{id}/reviews` is customer-only. It's allowed only for an order that is
+    delivered and belongs to that customer, checked through order-service's internal API, with one
+    review per order.
+  - `GET /v1/restaurants/{id}/reviews` is paginated.
+  - Store rating aggregates (`avg_rating`, `review_count`) on the restaurant.
+- `scripts/seed.py`: add a fixture file (`scripts/fixtures/catalog.json`) with ~10 restaurants
+  across 2 cities, ~120 items with realistic descriptions, tags and prices, ~200 reviews, and a
+  past-order history for the demo customer. Keep the seed re-runnable.
+
+### Step 2 — `restaurant-events` topic
+- Add `Topic.RESTAURANT` and these events: `RestaurantUpserted`, `RestaurantStatusChanged`,
+  `MenuItemUpserted`, `MenuItemDeleted`, `ReviewSubmitted`. Payloads go in `sfo_events/payloads.py`,
+  JSON schemas are generated from Pydantic, keyed by restaurant_id.
+- Write to the outbox in the same transaction as each repository write in
+  `restaurant-service/app/repository.py`, including stock/availability flips (`is_available`).
+- Restaurant-service needs a **relay worker** (Celery worker+beat, the same as the order, payment
+  and delivery workers) and a compose entry.
+
+### Step 3 — Chunking + embedding pipeline (ai-service)
+- `app/documents.py` builds one text document per entity, prefixed with its context:
+  - menu item: restaurant name, cuisine, category, name, description, tags, spice level, price
+  - restaurant profile: description plus top cuisines
+  - review: split into ~300-token pieces with an overlap if long
+  - customer order history: a rolling summary per customer of recent items, cuisines and spend
+- `app/embedding.py` wraps fastembed (dense + BM25 sparse) and runs it in a thread pool.
+- `app/indexer.py` is a Kafka consumer on `restaurant-events` + `order-events` that reuses the
+  `sfo_events` consumer. It's idempotent:
+  - point IDs are deterministic (uuid5 of entity id)
+  - an upsert is skipped if the stored `source_version` is ≥ the incoming one
+  - deletes are tombstones
+  - Qdrant outages are retried and rewound, never sent to the DLQ (same rule as W3-D5)
+- Backfill: `python -m app.reindex` pages through a new restaurant-service internal export
+  endpoint (`/internal/catalog/export`) and order-service history. It's used after first
+  deploy and when the embedding model changes (the collection name includes the model version
+  so swapping is a clean cut-over).
+
+### Step 4 — Retrieval API
+- `GET /v1/ai/search?q=&kind=item|restaurant|review|cuisine&lat=&lng=&radius_km=&max_price=&dietary=&restaurant_id=&limit=`
+  runs a hybrid query with RRF fusion and payload filters (geo radius, `is_available=true`,
+  restaurant status active).
+- `GET /v1/ai/search/history` searches the calling customer's own order history, always filtered
+  by `customer_id`.
+- `app/retrieval.py` holds the reusable `retrieve(query, filters) -> list[Hit]` that Week 5's graph calls.
+
+### Step 5 — Verification, metrics, docs
+- Prometheus: embed latency, index lag (event time → indexed), Qdrant query latency, and
+  indexer DLQ/retry counters. Add an "AI / Retrieval" Grafana dashboard.
+- **Retrieval eval:** `scripts/eval_retrieval.py` runs a golden set of ~30 queries ("something
+  spicy under 800", "light vegetarian lunch", "biryani near F-7") against expected IDs and reports
+  recall@5 and MRR. Run it in `check.sh --with-ai`.
+- Add `smoke_test.py --ai`: change a menu item → it shows up in search within N seconds.
+  Mark it unavailable → it drops out.
+- Drills: Qdrant down (the indexer catches up with 0 DLQ), and a full reindex while serving.
+- Docs: architecture (AI layer), technical-documentation (chunking/embedding/consistency
+  trade-offs), PRD Part B sections, PROGRESS Week 4 table.
+
+### Follow-up — retrieval quality (after step 5)
+- **Grow the eval** (B4-D17): 106 tagged queries, dev/test split, `--split` and `--json`.
+- **Compare embedding models** (B4-D18): `scripts/compare_models.sh` with the dev-only
+  `docker-compose.models.yml` override; `DENSE_DOCUMENT_PREFIX` for models that want one.
+  bge-small, bge-base-en-v1.5, snowflake-arctic-embed-s, paraphrase-multilingual-MiniLM-L12-v2,
+  embeddinggemma-300m. bge-base won; the switch is its own commit.
+- **Cheaper updates** (B4-D19): payload-only writes when the text is unchanged; the
+  customer summary capped to the latest 50 orders.
+- **Eval gaps closed** (B4-D20): order-history, filtered and not-on-the-menu queries;
+  filter-violation check; bootstrap ranges, `--compare`, latency.
+- **RRF k** (B4-D21): `FUSION_K`, tested 2–60 with `--compare`, no real difference, kept 2.
+
+## 3. Week 4 deliverables (Part B PDF)
+
+| Deliverable | Step |
+|---|---|
+| Embedding pipeline | 2–3 |
+| Vector DB populated | 3 (backfill) |
+| Semantic search | 4 |
+| Retrieval API | 4 |

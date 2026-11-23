@@ -45,9 +45,18 @@ class OrderPlacedPayload(EventPayload):
     items: list[OrderItemRef]
 
 
+class OrderLine(EventPayload):
+    menu_item_id: str
+    name: str
+    quantity: int
+    unit_price: Decimal
+
+
 class OrderTransitionPayload(EventPayload):
     """Every order status event after OrderPlaced. `reason` is set on
-    rejections and cancellations (e.g. `restaurant_rejected`)."""
+    rejections and cancellations (e.g. `restaurant_rejected`). `items` only
+    on OrderDelivered (week4-plan step 3): what was ordered, by name, for
+    ai-service's order history — None on older events."""
 
     order_id: str
     order_number: int
@@ -58,6 +67,7 @@ class OrderTransitionPayload(EventPayload):
     from_status: str
     to_status: str
     reason: str | None = None
+    items: list[OrderLine] | None = None
 
 
 class PaymentSuccessfulPayload(EventPayload):
@@ -142,6 +152,89 @@ class RiderShiftChangedPayload(EventPayload):
     reason: str
 
 
+# --- restaurant-events (week4-plan step 2) ---
+# Full snapshots, not diffs: ai-service's indexer builds its documents from
+# the event alone. `source_version` is the restaurant's catalog_version at the
+# write — it rises with every event of that restaurant (items and reviews
+# included), so a consumer can drop anything not newer than what it has.
+
+
+class RestaurantUpsertedPayload(EventPayload):
+    restaurant_id: str
+    name: str
+    description: str
+    city: str
+    address: str
+    lat: float
+    lng: float
+    cuisine_type: str | None
+    status: str
+    is_accepting_orders: bool
+    avg_prep_time_minutes: int
+    avg_rating: float | None
+    review_count: int
+    source_version: int
+
+
+class RestaurantStatusChangedPayload(EventPayload):
+    """`reason` is the admin's note, if any."""
+
+    restaurant_id: str
+    from_status: str
+    to_status: str
+    reason: str | None = None
+    source_version: int
+
+
+class MenuItemUpsertedPayload(EventPayload):
+    """Re-sent for every item of a restaurant when its name, cuisine or
+    location changes, and for a category's items when it's renamed — they
+    are part of the item's search text and filters. `in_stock`: unlimited
+    stock or some left; re-sent when that flips, not on every sale."""
+
+    menu_item_id: str
+    restaurant_id: str
+    restaurant_name: str
+    restaurant_status: str
+    cuisine_type: str | None
+    city: str
+    lat: float
+    lng: float
+    category_id: str
+    category_name: str
+    name: str
+    description: str
+    price: Decimal
+    dietary_tags: list[str]
+    spice_level: int
+    calories: int | None
+    is_available: bool
+    in_stock: bool
+    source_version: int
+
+
+class MenuItemDeletedPayload(EventPayload):
+    menu_item_id: str
+    restaurant_id: str
+    source_version: int
+
+
+class ReviewSubmittedPayload(EventPayload):
+    """A review and the restaurant's rating after it. No customer_id: the
+    review is published, its author isn't."""
+
+    order_id: str
+    restaurant_id: str
+    restaurant_name: str
+    rating: int
+    text: str
+    item_ids: list[str]
+    created_at: datetime
+    avg_rating: float
+    review_count: int
+    source_version: int
+
+
 PAYLOAD_MODELS: dict[EventType, type[EventPayload]] = {
     EventType.ORDER_PLACED: OrderPlacedPayload,
     EventType.ORDER_AWAITING_RESTAURANT: OrderTransitionPayload,
@@ -157,6 +250,11 @@ PAYLOAD_MODELS: dict[EventType, type[EventPayload]] = {
     EventType.DELIVERY_ETA_UPDATED: DeliveryEtaUpdatedPayload,
     EventType.DELIVERY_FOOD_READY: DeliveryFoodReadyPayload,
     EventType.RIDER_SHIFT_CHANGED: RiderShiftChangedPayload,
+    EventType.RESTAURANT_UPSERTED: RestaurantUpsertedPayload,
+    EventType.RESTAURANT_STATUS_CHANGED: RestaurantStatusChangedPayload,
+    EventType.MENU_ITEM_UPSERTED: MenuItemUpsertedPayload,
+    EventType.MENU_ITEM_DELETED: MenuItemDeletedPayload,
+    EventType.REVIEW_SUBMITTED: ReviewSubmittedPayload,
 }
 
 

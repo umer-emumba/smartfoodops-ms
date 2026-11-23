@@ -8,6 +8,7 @@ from sfo_common.health import add_health_routes
 from sfo_common.temporal import embedded_workers
 from sfo_observability import configure_logging, instrument_fastapi, instrument_metrics
 
+from app import order_client
 from app.api import internal
 from app.api.routes import router
 from app.config import settings
@@ -24,6 +25,7 @@ async def _lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
     # stock, kitchen-slot and promo steps from Temporal and runs them here.
     async with embedded_workers(WORKERS, settings, service_name=settings.service_name):
         yield
+    await order_client.client.aclose()
     await redis.aclose()
 
 

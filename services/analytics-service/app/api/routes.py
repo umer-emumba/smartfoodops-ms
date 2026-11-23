@@ -4,7 +4,8 @@ in the window they were placed in.
 
 - `GET /v1/analytics/summary` — system admin: every metric.
 - `GET /v1/analytics/restaurants/{id}` — system admin, or the admin of that
-  restaurant (ownership from `restaurant_admin_id` on its orders' facts).
+  restaurant (ownership from `restaurant_admin_id` on its orders' facts, else
+  from restaurant-service, app/owners.py).
 - `GET /v1/analytics/peak-hours` — system admin: orders per hour of day.
 
 Failed notification sends aren't here: they live only in
@@ -15,9 +16,9 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query
 from sfo_auth import CurrentUser, Role
-from sfo_common.errors import ForbiddenError, ValidationAppError
+from sfo_common.errors import ForbiddenError, NotFoundError, ValidationAppError
 
-from app import mongo, queries
+from app import mongo, owners, queries
 from app.auth_deps import require_roles
 from app.config import settings
 from app.queries import Window
@@ -90,7 +91,13 @@ async def restaurant(
             {"restaurant_id": restaurant_id, "restaurant_admin_id": current.id}, {"_id": 1}
         )
         if owns is None:
-            raise ForbiddenError("Not your restaurant")
+            # No order of theirs to go by (a new restaurant has none): ask
+            # restaurant-service, which knows the real owner.
+            owner = await owners.restaurant_owner(restaurant_id)
+            if owner is None:
+                raise NotFoundError("Restaurant not found")
+            if owner != current.id:
+                raise ForbiddenError("Not your restaurant")
     orders, hours = await asyncio.gather(
         queries.order_stats(db, window, restaurant_id),
         queries.peak_hours(db, window, settings.analytics_timezone, restaurant_id),
